@@ -4,6 +4,64 @@ import { query, queryMany, queryOne } from '../db/connection';
 const router = Router();
 
 /**
+ * 查詢司機的收入排行榜（所有司機對比）
+ * GET /api/earnings/leaderboard?period=today|week|month
+ * 注意：此路由必須在 /:driverId 之前，避免被攔截
+ */
+router.get('/leaderboard', async (req, res) => {
+  const { period = 'today' } = req.query;
+
+  try {
+    let startDate: Date;
+    const now = new Date();
+
+    if (period === 'today') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } else if (period === 'week') {
+      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (period === 'month') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    } else {
+      return res.status(400).json({ error: '無效的期間參數' });
+    }
+
+    const leaderboard = await queryMany(`
+      SELECT
+        d.driver_id,
+        d.name,
+        d.plate,
+        COUNT(o.order_id) as order_count,
+        COALESCE(SUM(o.meter_amount), 0) as total_earnings
+      FROM drivers d
+      LEFT JOIN orders o ON d.driver_id = o.driver_id
+        AND o.status = 'DONE'
+        AND o.completed_at >= $1
+        AND o.completed_at < $2
+      GROUP BY d.driver_id, d.name, d.plate
+      ORDER BY total_earnings DESC
+      LIMIT 10
+    `, [startDate, now]);
+
+    res.json({
+      success: true,
+      period,
+      leaderboard: leaderboard.map((driver, index) => ({
+        rank: index + 1,
+        driverId: driver.driver_id,
+        name: driver.name,
+        plate: driver.plate,
+        orderCount: parseInt(String(driver.order_count)),
+        totalEarnings: parseInt(String(driver.total_earnings))
+      }))
+    });
+
+  } catch (error) {
+    console.error('[Earnings Leaderboard] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
  * 查詢司機收入統計
  * GET /api/earnings/:driverId?period=today|week|month
  */
@@ -45,11 +103,11 @@ router.get('/:driverId', async (req, res) => {
 
     const earnings: any = {
       period,
-      totalAmount: parseInt(stats?.total_amount || 0),
-      orderCount: parseInt(stats?.order_count || 0),
-      totalDistance: parseFloat(stats?.total_distance || 0),
-      totalDuration: parseFloat((stats?.total_duration || 0) / 60), // 轉換為小時
-      averageFare: parseFloat(stats?.average_fare || 0)
+      totalAmount: parseInt(String(stats?.total_amount || 0)),
+      orderCount: parseInt(String(stats?.order_count || 0)),
+      totalDistance: parseFloat(String(stats?.total_distance || 0)),
+      totalDuration: Number((stats?.total_duration || 0)) / 60, // 轉換為小時
+      averageFare: parseFloat(String(stats?.average_fare || 0))
     };
 
     // 根據期間類型查詢詳細數據
@@ -73,8 +131,8 @@ router.get('/:driverId', async (req, res) => {
       earnings.orders = orders.map(o => ({
         orderId: o.order_id,
         fare: o.fare,
-        distance: parseFloat(o.distance),
-        duration: parseFloat((o.duration / 60).toFixed(2)), // 小時
+        distance: parseFloat(String(o.distance)),
+        duration: parseFloat((Number(o.duration) / 60).toFixed(2)), // 小時
         completedAt: o.completed_at.getTime()
       }));
 
@@ -96,8 +154,8 @@ router.get('/:driverId', async (req, res) => {
 
       earnings.dailyBreakdown = daily.map(d => ({
         date: d.date.toISOString().split('T')[0],
-        amount: parseInt(d.amount),
-        orders: parseInt(d.orders)
+        amount: parseInt(String(d.amount)),
+        orders: parseInt(String(d.orders))
       }));
 
     } else if (period === 'month') {
@@ -118,8 +176,8 @@ router.get('/:driverId', async (req, res) => {
 
       earnings.weeklyBreakdown = weekly.map((w, index) => ({
         week: `第${index + 1}週`,
-        amount: parseInt(w.amount),
-        orders: parseInt(w.orders)
+        amount: parseInt(String(w.amount)),
+        orders: parseInt(String(w.orders))
       }));
     }
 
@@ -204,19 +262,19 @@ router.get('/:driverId/orders', async (req, res) => {
       passengerPhone: o.passenger_phone,
       driverId,
       pickup: {
-        lat: parseFloat(o.pickup_lat),
-        lng: parseFloat(o.pickup_lng),
+        lat: parseFloat(String(o.pickup_lat)),
+        lng: parseFloat(String(o.pickup_lng)),
         address: o.pickup_address
       },
       destination: o.dest_lat ? {
-        lat: parseFloat(o.dest_lat),
-        lng: parseFloat(o.dest_lng),
+        lat: parseFloat(String(o.dest_lat)),
+        lng: parseFloat(String(o.dest_lng)),
         address: o.dest_address
       } : null,
       status: o.status,
       paymentType: o.payment_type,
       fare: o.fare,
-      distance: parseFloat(o.distance || 0),
+      distance: parseFloat(String(o.distance || 0)),
       duration: o.duration,
       createdAt: o.created_at,
       acceptedAt: o.accepted_at,
@@ -235,63 +293,6 @@ router.get('/:driverId/orders', async (req, res) => {
 
   } catch (error) {
     console.error('[Earnings Orders] 錯誤:', error);
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
-  }
-});
-
-/**
- * 查詢司機的收入排行榜（所有司機對比）
- * GET /api/earnings/leaderboard?period=today|week|month
- */
-router.get('/leaderboard', async (req, res) => {
-  const { period = 'today' } = req.query;
-
-  try {
-    let startDate: Date;
-    const now = new Date();
-
-    if (period === 'today') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    } else if (period === 'week') {
-      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    } else if (period === 'month') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-    } else {
-      return res.status(400).json({ error: '無效的期間參數' });
-    }
-
-    const leaderboard = await queryMany(`
-      SELECT
-        d.driver_id,
-        d.name,
-        d.plate,
-        COUNT(o.order_id) as order_count,
-        COALESCE(SUM(o.meter_amount), 0) as total_earnings
-      FROM drivers d
-      LEFT JOIN orders o ON d.driver_id = o.driver_id
-        AND o.status = 'DONE'
-        AND o.completed_at >= $1
-        AND o.completed_at < $2
-      GROUP BY d.driver_id, d.name, d.plate
-      ORDER BY total_earnings DESC
-      LIMIT 10
-    `, [startDate, now]);
-
-    res.json({
-      success: true,
-      period,
-      leaderboard: leaderboard.map((driver, index) => ({
-        rank: index + 1,
-        driverId: driver.driver_id,
-        name: driver.name,
-        plate: driver.plate,
-        orderCount: parseInt(driver.order_count),
-        totalEarnings: parseInt(driver.total_earnings)
-      }))
-    });
-
-  } catch (error) {
-    console.error('[Earnings Leaderboard] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
