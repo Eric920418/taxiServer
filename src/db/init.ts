@@ -45,13 +45,13 @@ async function seedTestData() {
     return;
   }
 
-  // 插入測試司機
+  // 插入測試司機（已移除 password，改用 Firebase Phone Auth）
   await query(`
-    INSERT INTO drivers (driver_id, phone, password, name, plate, availability)
+    INSERT INTO drivers (driver_id, phone, name, plate, availability)
     VALUES
-      ('D001', '0912345678', '123456', '王大明', 'ABC-1234', 'OFFLINE'),
-      ('D002', '0987654321', '123456', '李小華', 'XYZ-5678', 'OFFLINE'),
-      ('D003', '0965432100', '123456', '陳建國', 'DEF-9012', 'OFFLINE')
+      ('D001', '0912345678', '王大明', 'ABC-1234', 'OFFLINE'),
+      ('D002', '0987654321', '李小華', 'XYZ-5678', 'OFFLINE'),
+      ('D003', '0965432100', '陳建國', 'DEF-9012', 'OFFLINE')
   `);
 
   console.log('[DB Seed] ✓ 測試司機已建立');

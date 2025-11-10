@@ -4,70 +4,15 @@ import { query, queryOne } from '../db/connection';
 const router = Router();
 
 /**
- * 司機登入
- * POST /api/drivers/login
+ * 【已棄用】舊的帳號密碼登入 API
+ * 請改用 POST /api/auth/phone-verify-driver
  */
 router.post('/login', async (req: Request, res: Response) => {
-  const { phone, password } = req.body;
-
-  console.log('[Login] 嘗試登入:', { phone });
-
-  try {
-    // 驗證輸入
-    if (!phone || !password) {
-      return res.status(400).json({
-        error: 'MISSING_FIELDS',
-        message: '請輸入手機號碼和密碼'
-      });
-    }
-
-    // 從資料庫查找司機
-    const driver = await queryOne(
-      'SELECT * FROM drivers WHERE phone = $1',
-      [phone]
-    );
-
-    if (!driver) {
-      return res.status(404).json({
-        error: 'DRIVER_NOT_FOUND',
-        message: '找不到此司機帳號'
-      });
-    }
-
-    // 驗證密碼（實際應該用 bcrypt 比對）
-    if (driver.password !== password) {
-      return res.status(401).json({
-        error: 'INVALID_PASSWORD',
-        message: '密碼錯誤'
-      });
-    }
-
-    // 更新最後心跳時間
-    await query(
-      'UPDATE drivers SET last_heartbeat = CURRENT_TIMESTAMP WHERE driver_id = $1',
-      [driver.driver_id]
-    );
-
-    // 登入成功
-    console.log('[Login] 登入成功:', driver.name);
-
-    res.json({
-      token: `token_${driver.driver_id}_${Date.now()}`, // 簡易 token（實際應用 JWT）
-      driverId: driver.driver_id,
-      name: driver.name,
-      phone: driver.phone,
-      plate: driver.plate,
-      availability: driver.availability,
-      rating: parseFloat(driver.rating),
-      totalTrips: driver.total_trips
-    });
-  } catch (error) {
-    console.error('[Login] 錯誤:', error);
-    res.status(500).json({
-      error: 'INTERNAL_ERROR',
-      message: '伺服器錯誤，請稍後再試'
-    });
-  }
+  return res.status(410).json({
+    error: 'DEPRECATED',
+    message: '此 API 已停用，請改用 Firebase Phone Authentication',
+    migrateTo: '/api/auth/phone-verify-driver'
+  });
 });
 
 /**

@@ -8,6 +8,7 @@ import ordersRouter from './api/orders';
 import passengersRouter from './api/passengers';
 import earningsRouter from './api/earnings';
 import dispatchRouter from './api/dispatch';
+import authRouter from './api/auth';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 
 // 載入環境變數
@@ -47,6 +48,7 @@ app.get('/health', (req, res) => {
 setSocketIO(io);
 
 // API路由
+app.use('/api/auth', authRouter);
 app.use('/api/drivers', driversRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/dispatch', dispatchRouter);
