@@ -28,6 +28,13 @@ export function setSocketIO(ioInstance: Server) {
 }
 
 /**
+ * 獲取Socket.io實例
+ */
+export function getIO() {
+  return io;
+}
+
+/**
  * 取得Socket.io實例
  */
 export function getSocketIO(): Server {

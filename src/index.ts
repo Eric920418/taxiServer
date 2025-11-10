@@ -7,6 +7,7 @@ import driversRouter from './api/drivers';
 import ordersRouter from './api/orders';
 import passengersRouter from './api/passengers';
 import earningsRouter from './api/earnings';
+import dispatchRouter from './api/dispatch';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 
 // 載入環境變數
@@ -48,6 +49,7 @@ setSocketIO(io);
 // API路由
 app.use('/api/drivers', driversRouter);
 app.use('/api/orders', ordersRouter);
+app.use('/api/dispatch', dispatchRouter);
 app.use('/api/passengers', passengersRouter);
 app.use('/api/earnings', earningsRouter);
 
