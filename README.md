@@ -108,11 +108,13 @@ http://54.180.244.231
 
 ### 司機帳號（測試用）
 
-| 司機ID | 手機號碼 | 密碼 | 姓名 | 車牌 |
-|--------|----------|------|------|------|
-| D001 | 0912345678 | 123456 | 王大明 | ABC-1234 |
-| D002 | 0987654321 | 123456 | 李小華 | XYZ-5678 |
-| D003 | 0965432100 | 123456 | 陳建國 | DEF-9012 |
+**註：已改用 Firebase Phone Authentication，不再使用密碼登入**
+
+| 司機ID | 手機號碼 | 姓名 | 車牌 |
+|--------|----------|------|------|
+| D001 | 0912345678 | 王大明 | ABC-1234 |
+| D002 | 0987654321 | 李小華 | XYZ-5678 |
+| D003 | 0965432100 | 陳建國 | DEF-9012 |
 
 ### 乘客帳號（測試用）
 
@@ -123,16 +125,19 @@ http://54.180.244.231
 
 ### 測試登入範例
 
-**司機登入**：
+**司機登入（Firebase Phone Auth）**：
 ```bash
-curl -X POST http://54.180.244.231/api/drivers/login \
+# 第一步：前端使用 Firebase Phone Auth 驗證手機號碼，獲得 firebaseUid
+# 第二步：將 phone 和 firebaseUid 發送到後端
+curl -X POST http://54.180.244.231/api/auth/phone-verify-driver \
   -H "Content-Type: application/json" \
-  -d '{"phone":"0912345678","password":"123456"}'
+  -d '{"phone":"0912345678","firebaseUid":"firebase_uid_from_client"}'
 ```
 
 成功回應：
 ```json
 {
+  "success": true,
   "token": "token_D001_1762768193719",
   "driverId": "D001",
   "name": "王大明",
@@ -142,6 +147,13 @@ curl -X POST http://54.180.244.231/api/drivers/login \
   "rating": 5,
   "totalTrips": 0
 }
+```
+
+**乘客登入（Firebase Phone Auth）**：
+```bash
+curl -X POST http://54.180.244.231/api/auth/phone-verify-passenger \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"0911111111","firebaseUid":"firebase_uid_from_client","name":"測試乘客A"}'
 ```
 
 ---
@@ -246,10 +258,17 @@ GET    /api/orders/:id          # 取得單一訂單
 PATCH  /api/orders/:id/status   # 更新訂單狀態
 ```
 
+#### 認證（Firebase Phone Auth）
+```http
+POST   /api/auth/phone-verify-driver     # 司機手機驗證登入
+POST   /api/auth/phone-verify-passenger  # 乘客手機驗證登入/註冊
+```
+
 #### 司機管理
 ```http
-POST   /api/drivers/login       # 司機登入
+GET    /api/drivers/:id         # 取得司機資訊
 PATCH  /api/drivers/:id/status  # 更新上線狀態
+PATCH  /api/drivers/:id/location # 更新司機位置
 GET    /api/drivers/:id/earnings # 取得收入統計
 ```
 
@@ -332,7 +351,7 @@ socket.on('order:status', (data) => {
 #### drivers (司機表)
 ```sql
 - driver_id (PK)
-- phone, password, name, plate
+- phone, firebase_uid, name, plate
 - availability (OFFLINE | REST | AVAILABLE | ON_TRIP)
 - current_lat, current_lng
 - total_trips, total_earnings
@@ -371,7 +390,7 @@ socket.on('order:status', (data) => {
 ## 🔐 安全性
 
 ### MVP階段
-- 簡易JWT驗證（司機登入）
+- Firebase Phone Authentication（手機號碼簡訊驗證）
 - CORS設定（僅允許App來源）
 - 環境變數保護API Key
 

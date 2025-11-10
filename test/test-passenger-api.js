@@ -22,21 +22,32 @@ function log(message, color = 'reset') {
 }
 
 async function testPassengerLogin() {
-  log('\n[測試 1] 乘客登錄/註冊', 'blue');
+  log('\n[測試 1] 乘客登錄/註冊 (Firebase Phone Auth)', 'blue');
   try {
-    const response = await axios.post(`${BASE_URL}/api/passengers/login`, {
+    // 模擬 Firebase UID（實際應用中，這個 UID 由 Firebase SDK 在前端生成）
+    const mockFirebaseUid = `test_firebase_uid_${Date.now()}`;
+
+    const response = await axios.post(`${BASE_URL}/api/auth/phone-verify-passenger`, {
       phone: '0922222222',
-      password: null
+      firebaseUid: mockFirebaseUid,
+      name: '測試乘客B'
     });
 
-    if (response.data.success && response.data.passenger) {
-      log(`✓ 登錄成功: ${response.data.passenger.passengerId} - ${response.data.passenger.name}`, 'green');
-      return response.data.passenger;
+    if (response.data.success && response.data.passengerId) {
+      const passenger = {
+        passengerId: response.data.passengerId,
+        phone: response.data.phone,
+        name: response.data.name,
+        totalRides: response.data.totalRides,
+        rating: response.data.rating
+      };
+      log(`✓ 登錄成功: ${passenger.passengerId} - ${passenger.name}`, 'green');
+      return passenger;
     } else {
       throw new Error('登錄失敗');
     }
   } catch (error) {
-    log(`✗ 登錄失敗: ${error.message}`, 'red');
+    log(`✗ 登錄失敗: ${error.response?.data?.message || error.message}`, 'red');
     return null;
   }
 }

@@ -4,52 +4,15 @@ import { query, queryOne, queryMany } from '../db/connection';
 const router = Router();
 
 /**
- * 乘客登入/註冊
- * POST /api/passengers/login
+ * 【已棄用】舊的手機號碼登入 API
+ * 請改用 POST /api/auth/phone-verify-passenger
  */
 router.post('/login', async (req, res) => {
-  const { phone } = req.body;
-
-  console.log('[Passenger Login] 嘗試登入:', { phone });
-
-  try {
-    if (!phone) {
-      return res.status(400).json({ error: '缺少手機號碼' });
-    }
-
-    // 檢查是否已存在
-    let passenger = await queryOne(
-      'SELECT * FROM passengers WHERE phone = $1',
-      [phone]
-    );
-
-    // 如果不存在，自動註冊
-    if (!passenger) {
-      const passengerId = `PASS${Date.now().toString().slice(-6)}`;
-
-      const result = await query(
-        'INSERT INTO passengers (passenger_id, phone, name) VALUES ($1, $2, $3) RETURNING *',
-        [passengerId, phone, `乘客 ${phone.slice(-4)}`]
-      );
-
-      passenger = result.rows[0];
-      console.log('[Passenger] 自動註冊新乘客:', passenger);
-    }
-
-    res.json({
-      success: true,
-      passenger: {
-        passengerId: passenger.passenger_id,
-        phone: passenger.phone,
-        name: passenger.name,
-        totalRides: passenger.total_rides,
-        rating: parseFloat(passenger.rating)
-      }
-    });
-  } catch (error) {
-    console.error('[Passenger Login] 錯誤:', error);
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
-  }
+  return res.status(410).json({
+    error: 'DEPRECATED',
+    message: '此 API 已停用，請改用 Firebase Phone Authentication',
+    migrateTo: '/api/auth/phone-verify-passenger'
+  });
 });
 
 /**

@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS drivers (
   driver_id VARCHAR(50) PRIMARY KEY,
   phone VARCHAR(20) UNIQUE NOT NULL,
-  password VARCHAR(255) NOT NULL,  -- 實際應該使用 bcrypt 加密
+  firebase_uid VARCHAR(255) UNIQUE,  -- Firebase Authentication UID
   name VARCHAR(100) NOT NULL,
   plate VARCHAR(20) NOT NULL,
 
@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS drivers (
 CREATE TABLE IF NOT EXISTS passengers (
   passenger_id VARCHAR(50) PRIMARY KEY,
   phone VARCHAR(20) UNIQUE NOT NULL,
+  firebase_uid VARCHAR(255) UNIQUE,  -- Firebase Authentication UID
   name VARCHAR(100) NOT NULL,
 
   -- 統計數據
@@ -164,7 +165,11 @@ CREATE INDEX IF NOT EXISTS idx_passengers_phone ON passengers(phone);
 
 -- 司機查詢優化
 CREATE INDEX IF NOT EXISTS idx_drivers_phone ON drivers(phone);
+CREATE INDEX IF NOT EXISTS idx_drivers_firebase_uid ON drivers(firebase_uid);
 CREATE INDEX IF NOT EXISTS idx_drivers_availability ON drivers(availability);
+
+-- 乘客 Firebase UID 查詢優化
+CREATE INDEX IF NOT EXISTS idx_passengers_firebase_uid ON passengers(firebase_uid);
 
 -- ============================================================
 -- 觸發器：自動更新 updated_at
