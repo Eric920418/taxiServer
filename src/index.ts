@@ -215,7 +215,7 @@ io.on('connection', (socket) => {
 });
 
 // 管理後台 SPA 路由處理（必須放在最後）
-app.get('/admin/*', (req, res) => {
+app.get('/admin{/*path}', (req, res) => {
   res.sendFile(path.join(adminPanelPath, 'index.html'));
 });
 

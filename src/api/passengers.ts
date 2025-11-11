@@ -85,6 +85,9 @@ router.get('/nearby-drivers', async (req, res) => {
  * POST /api/passengers/request-ride
  */
 router.post('/request-ride', async (req, res) => {
+  console.log('🚖🚖🚖 [Request Ride] 收到叫車請求！');
+  console.log('[Request Ride] 請求內容:', JSON.stringify(req.body, null, 2));
+
   const {
     passengerId,
     passengerName,
@@ -105,7 +108,33 @@ router.post('/request-ride', async (req, res) => {
       return res.status(400).json({ error: '缺少必要欄位' });
     }
 
-    // 建立訂單
+    // 優先使用電話號碼查找乘客（因為 phone 有唯一約束）
+    let actualPassengerId = passengerId;
+    const existingPassengerByPhone = await queryOne(`
+      SELECT passenger_id, name FROM passengers WHERE phone = $1
+    `, [passengerPhone]);
+
+    if (existingPassengerByPhone) {
+      // 電話號碼已存在，使用數據庫中的 passenger_id
+      actualPassengerId = existingPassengerByPhone.passenger_id;
+      console.log(`[Passenger] 電話號碼 ${passengerPhone} 已存在，使用 passenger_id: ${actualPassengerId}`);
+
+      // 更新乘客資訊
+      await query(`
+        UPDATE passengers
+        SET name = $2
+        WHERE passenger_id = $1
+      `, [actualPassengerId, passengerName]);
+    } else {
+      // 新乘客，創建記錄
+      console.log(`[Passenger] 創建新乘客記錄: ${passengerId}, 電話: ${passengerPhone}`);
+      await query(`
+        INSERT INTO passengers (passenger_id, name, phone, created_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+      `, [passengerId, passengerName, passengerPhone]);
+    }
+
+    // 建立訂單（使用實際的 passenger_id）
     const orderId = `ORD${Date.now()}`;
     const now = new Date();
 
@@ -126,7 +155,7 @@ router.post('/request-ride', async (req, res) => {
         $10, $11
       ) RETURNING *
     `, [
-      orderId, passengerId,
+      orderId, actualPassengerId,
       pickupLat, pickupLng, pickupAddress,
       destLat || null, destLng || null, destAddress || null,
       paymentType,
@@ -145,6 +174,8 @@ router.post('/request-ride', async (req, res) => {
       order: {
         orderId: order.order_id,
         passengerId: order.passenger_id,
+        passengerName: passengerName, // 添加乘客名稱
+        passengerPhone: passengerPhone, // 添加乘客電話
         status: order.status,
         pickup: {
           lat: parseFloat(order.pickup_lat),
@@ -157,8 +188,9 @@ router.post('/request-ride', async (req, res) => {
           address: order.dest_address
         } : null,
         paymentType: order.payment_type,
-        createdAt: order.created_at
+        createdAt: new Date(order.created_at).getTime() // 返回 Unix 時間戳（毫秒）
       },
+      offeredToDrivers: [], // 推送給司機的列表（TODO: 實現派單邏輯）
       message: '叫車請求已發送，等待司機接單'
     });
   } catch (error) {
@@ -258,9 +290,9 @@ router.get('/:passengerId/orders', async (req, res) => {
       status: o.status,
       paymentType: o.payment_type,
       meterAmount: o.meter_amount,
-      createdAt: o.created_at,
-      acceptedAt: o.accepted_at,
-      completedAt: o.completed_at
+      createdAt: o.created_at ? new Date(o.created_at).getTime() : null,
+      acceptedAt: o.accepted_at ? new Date(o.accepted_at).getTime() : null,
+      completedAt: o.completed_at ? new Date(o.completed_at).getTime() : null
     }));
 
     console.log(`[Passenger] 查詢乘客 ${passengerId} 的訂單歷史，找到 ${formattedOrders.length} 筆`);
