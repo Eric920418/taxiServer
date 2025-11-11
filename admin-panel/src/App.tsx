@@ -22,7 +22,7 @@ const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 function AppContent() {
   return (
-    <Router>
+    <Router basename="/admin">
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
