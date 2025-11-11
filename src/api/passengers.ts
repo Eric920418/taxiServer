@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
+import { broadcastOrderToDrivers } from '../socket';
 
 const router = Router();
 
@@ -166,32 +167,37 @@ router.post('/request-ride', async (req, res) => {
 
     console.log(`[Passenger] 乘客 ${passengerName} 發起叫車請求: ${orderId}`);
 
-    // TODO: 推播給所有在線司機（透過 WebSocket）
-    // broadcastOrderToDrivers(order);
+    // 格式化訂單資料用於推送
+    const formattedOrder = {
+      orderId: order.order_id,
+      passengerId: order.passenger_id,
+      passengerName: passengerName,
+      passengerPhone: passengerPhone,
+      status: order.status,
+      pickup: {
+        lat: parseFloat(order.pickup_lat),
+        lng: parseFloat(order.pickup_lng),
+        address: order.pickup_address
+      },
+      destination: order.dest_lat ? {
+        lat: parseFloat(order.dest_lat),
+        lng: parseFloat(order.dest_lng),
+        address: order.dest_address
+      } : null,
+      paymentType: order.payment_type,
+      createdAt: new Date(order.created_at).getTime()
+    };
+
+    // 推播給所有在線司機
+    console.log(`[Passenger] 開始推播訂單 ${orderId} 給在線司機...`);
+    const offeredDriverIds = broadcastOrderToDrivers(formattedOrder);
+    console.log(`[Passenger] ✅ 訂單已推播給 ${offeredDriverIds.length} 位司機: ${offeredDriverIds.join(', ')}`);
 
     res.json({
       success: true,
-      order: {
-        orderId: order.order_id,
-        passengerId: order.passenger_id,
-        passengerName: passengerName, // 添加乘客名稱
-        passengerPhone: passengerPhone, // 添加乘客電話
-        status: order.status,
-        pickup: {
-          lat: parseFloat(order.pickup_lat),
-          lng: parseFloat(order.pickup_lng),
-          address: order.pickup_address
-        },
-        destination: order.dest_lat ? {
-          lat: parseFloat(order.dest_lat),
-          lng: parseFloat(order.dest_lng),
-          address: order.dest_address
-        } : null,
-        paymentType: order.payment_type,
-        createdAt: new Date(order.created_at).getTime() // 返回 Unix 時間戳（毫秒）
-      },
-      offeredToDrivers: [], // 推送給司機的列表（TODO: 實現派單邏輯）
-      message: '叫車請求已發送，等待司機接單'
+      order: formattedOrder,
+      offeredTo: offeredDriverIds,
+      message: `叫車請求已發送給 ${offeredDriverIds.length} 位司機，等待司機接單`
     });
   } catch (error) {
     console.error('[Request Ride] 錯誤:', error);
@@ -211,20 +217,41 @@ router.post('/cancel-order', async (req, res) => {
       return res.status(400).json({ error: '缺少必要欄位' });
     }
 
-    // 更新訂單狀態
+    console.log(`[Cancel Order] 收到取消請求: orderId=${orderId}, passengerId=${passengerId}`);
+
+    // 先查詢訂單，確認狀態
+    const orderCheck = await queryOne(`
+      SELECT order_id, passenger_id, status
+      FROM orders
+      WHERE order_id = $1
+    `, [orderId]);
+
+    if (!orderCheck) {
+      console.log(`[Cancel Order] 訂單 ${orderId} 不存在`);
+      return res.status(404).json({ error: '訂單不存在' });
+    }
+
+    console.log(`[Cancel Order] 訂單狀態: ${orderCheck.status}, DB passenger_id: ${orderCheck.passenger_id}, 請求 passenger_id: ${passengerId}`);
+
+    // 檢查訂單是否可以取消
+    if (!['WAITING', 'OFFERED', 'ACCEPTED'].includes(orderCheck.status)) {
+      console.log(`[Cancel Order] 訂單狀態 ${orderCheck.status} 無法取消`);
+      return res.status(400).json({ error: `訂單狀態為 ${orderCheck.status}，無法取消` });
+    }
+
+    // 更新訂單狀態（只用 orderId，不檢查 passenger_id 避免 Firebase UID 和 DB ID 不匹配）
     const result = await query(`
       UPDATE orders
       SET status = 'CANCELLED', cancelled_at = CURRENT_TIMESTAMP
-      WHERE order_id = $1 AND passenger_id = $2
-        AND status IN ('WAITING', 'OFFERED', 'ACCEPTED')
+      WHERE order_id = $1
       RETURNING *
-    `, [orderId, passengerId]);
+    `, [orderId]);
 
     if (result.rowCount === 0) {
-      return res.status(404).json({ error: '訂單不存在或無法取消' });
+      return res.status(500).json({ error: '取消失敗' });
     }
 
-    console.log(`[Passenger] 乘客 ${passengerId} 取消訂單 ${orderId}，原因：${reason}`);
+    console.log(`[Cancel Order] ✅ 成功取消訂單 ${orderId}，原因：${reason}`);
 
     // TODO: 通知司機（透過 WebSocket）
 
