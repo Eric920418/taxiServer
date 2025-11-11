@@ -2,7 +2,7 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.0.0-MVP
-> 更新日期：2025-10-21
+> 更新日期：2025-11-11
 
 ---
 
@@ -461,6 +461,28 @@ pm2 startup  # 開機自啟
 - 快取Directions結果30秒
 - 優先用直線距離預篩司機，再呼叫Matrix API
 - 自己實作簡易路徑估算（Haversine + 路網係數1.3）
+
+---
+
+## 🔧 最近更新
+
+### 2025-11-11 - 修復實時位置系統
+**問題**：乘客端無法看到司機位置，顯示「附近沒有司機」
+**根本原因**：
+1. ❌ WebSocket URL 缺少端口號（`ws://54.180.244.231` → 應為 `http://54.180.244.231:3000`）
+2. ❌ 司機位置只存內存，沒有寫入數據庫
+3. ❌ 司機上線/離線狀態沒有同步到數據庫
+
+**修復內容**：
+- ✅ 修正 Android App 的 `WS_URL` 配置（`build.gradle.kts:25`）
+- ✅ `driver:location` 事件現在同時更新數據庫的 `current_lat`、`current_lng` 和 `last_heartbeat`（`index.ts:93-105`）
+- ✅ `driver:online` 事件現在將司機狀態設為 `AVAILABLE`（`index.ts:73-86`）
+- ✅ `disconnect` 事件現在將司機狀態設為 `OFFLINE`（`index.ts:160-173`）
+- ✅ 司機位置更新時立即廣播給所有在線乘客（`index.ts:108`）
+
+**部署注意事項**：
+- 🔥 **必須打開 TCP 3000 端口**（防火牆配置）
+- 🔄 Android App 需要重新編譯並安裝
 
 ---
 

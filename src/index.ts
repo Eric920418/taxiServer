@@ -60,7 +60,7 @@ io.on('connection', (socket) => {
   console.log(`[Socket] 新連接: ${socket.id}`);
 
   // 司機上線
-  socket.on('driver:online', (data) => {
+  socket.on('driver:online', async (data) => {
     console.log('[Driver] 上線:', data);
     const { driverId } = data;
 
@@ -70,16 +70,29 @@ io.on('connection', (socket) => {
     // 記錄司機socket
     driverSockets.set(driverId, socket.id);
 
-    console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}`);
+    // 更新數據庫：設置司機為可接單狀態
+    try {
+      const { query } = require('./db/connection');
+      await query(`
+        UPDATE drivers
+        SET availability = 'AVAILABLE',
+            last_heartbeat = CURRENT_TIMESTAMP
+        WHERE driver_id = $1
+      `, [driverId]);
+      console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}，數據庫已更新`);
+    } catch (error) {
+      console.error('[Driver] 更新上線狀態失敗:', error);
+      console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}`);
+    }
   });
 
   // 司機定位更新
-  socket.on('driver:location', (data) => {
+  socket.on('driver:location', async (data) => {
     console.log('[Location]', data);
 
     const { driverId, lat, lng, speed, bearing } = data;
 
-    // 儲存司機位置
+    // 儲存司機位置到內存
     const { driverLocations, broadcastNearbyDrivers } = require('./socket');
     driverLocations.set(driverId, {
       driverId,
@@ -90,8 +103,22 @@ io.on('connection', (socket) => {
       timestamp: Date.now()
     });
 
-    // 定期廣播附近司機給所有乘客（每5秒一次）
-    // 實際應該用更智能的方式，這裡先簡單實作
+    // 同時更新數據庫（重要！讓 API 查詢能找到司機）
+    try {
+      const { query } = require('./db/connection');
+      await query(`
+        UPDATE drivers
+        SET current_lat = $1,
+            current_lng = $2,
+            last_heartbeat = CURRENT_TIMESTAMP
+        WHERE driver_id = $3
+      `, [lat, lng, driverId]);
+    } catch (error) {
+      console.error('[Location] 更新數據庫失敗:', error);
+    }
+
+    // 立即廣播給所有在線乘客
+    broadcastNearbyDrivers();
   });
 
   // 乘客上線
@@ -122,14 +149,27 @@ io.on('connection', (socket) => {
   });
 
   // 斷線處理
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`[Socket] 斷線: ${socket.id}`);
 
-    // 移除司機socket映射
+    // 移除司機socket映射並更新數據庫
     for (const [driverId, socketId] of driverSockets.entries()) {
       if (socketId === socket.id) {
         driverSockets.delete(driverId);
-        console.log(`[Driver] ${driverId} 已離線`);
+
+        // 更新數據庫：設置司機為離線
+        try {
+          const { query } = require('./db/connection');
+          await query(`
+            UPDATE drivers
+            SET availability = 'OFFLINE'
+            WHERE driver_id = $1
+          `, [driverId]);
+          console.log(`[Driver] ${driverId} 已離線，數據庫已更新`);
+        } catch (error) {
+          console.error('[Driver] 更新離線狀態失敗:', error);
+          console.log(`[Driver] ${driverId} 已離線`);
+        }
         break;
       }
     }
