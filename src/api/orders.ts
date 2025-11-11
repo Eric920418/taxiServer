@@ -271,15 +271,38 @@ router.patch('/:orderId/accept', async (req, res) => {
 
     // TODO: 透過 WebSocket 通知乘客
 
+    // 查詢完整訂單資訊（包含乘客資訊）
+    const fullOrder = await queryOne(`
+      SELECT o.*, p.name as passenger_name, p.phone as passenger_phone
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      WHERE o.order_id = $1
+    `, [orderId]);
+
     res.json({
       success: true,
       message: '接單成功',
       order: {
-        orderId: updatedOrder.order_id,
-        passengerId: updatedOrder.passenger_id,
-        driverId: updatedOrder.driver_id,
-        status: updatedOrder.status,
-        acceptedAt: updatedOrder.accepted_at
+        orderId: fullOrder.order_id,
+        passengerId: fullOrder.passenger_id,
+        passengerName: fullOrder.passenger_name,
+        passengerPhone: fullOrder.passenger_phone,
+        driverId: fullOrder.driver_id,
+        driverName: driverName,
+        status: fullOrder.status,
+        pickup: {
+          lat: parseFloat(fullOrder.pickup_lat),
+          lng: parseFloat(fullOrder.pickup_lng),
+          address: fullOrder.pickup_address
+        },
+        destination: fullOrder.dest_lat ? {
+          lat: parseFloat(fullOrder.dest_lat),
+          lng: parseFloat(fullOrder.dest_lng),
+          address: fullOrder.dest_address
+        } : null,
+        paymentType: fullOrder.payment_type,
+        createdAt: new Date(fullOrder.created_at).getTime(),
+        acceptedAt: new Date(fullOrder.accepted_at).getTime()
       }
     });
   } catch (error) {
