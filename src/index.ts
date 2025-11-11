@@ -3,12 +3,14 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
 import driversRouter from './api/drivers';
 import ordersRouter from './api/orders';
 import passengersRouter from './api/passengers';
 import earningsRouter from './api/earnings';
 import dispatchRouter from './api/dispatch';
 import authRouter from './api/auth';
+import adminRouter from './api/admin';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 
 // 載入環境變數
@@ -28,6 +30,10 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// 提供管理後台靜態檔案
+const adminPanelPath = path.join(__dirname, '../admin-panel/dist');
+app.use('/admin', express.static(adminPanelPath));
 
 // 基礎路由
 app.get('/', (req, res) => {
@@ -71,6 +77,7 @@ setSocketIO(io);
 
 // API路由
 app.use('/api/auth', authRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/drivers', driversRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/dispatch', dispatchRouter);
@@ -207,6 +214,11 @@ io.on('connection', (socket) => {
   });
 });
 
+// 管理後台 SPA 路由處理（必須放在最後）
+app.get('/admin/*', (req, res) => {
+  res.sendFile(path.join(adminPanelPath, 'index.html'));
+});
+
 // 啟動伺服器
 httpServer.listen(PORT, () => {
   console.log(`
@@ -215,6 +227,7 @@ httpServer.listen(PORT, () => {
 ║                                            ║
 ║   HTTP: http://localhost:${PORT}            ║
 ║   WebSocket: ws://localhost:${PORT}         ║
+║   管理後台: http://localhost:${PORT}/admin  ║
 ║   環境: ${process.env.NODE_ENV || 'development'}                ║
 ╚════════════════════════════════════════════╝
   `);
