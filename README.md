@@ -467,21 +467,40 @@ pm2 startup  # 開機自啟
 ## 🔧 最近更新
 
 ### 2025-11-11 - 修復實時位置系統
-**問題**：乘客端無法看到司機位置，顯示「附近沒有司機」
+
+#### **問題 1：乘客端無法看到司機位置**
 **根本原因**：
-1. ❌ WebSocket URL 缺少端口號（`ws://54.180.244.231` → 應為 `http://54.180.244.231:3000`）
+1. ❌ **司機端 App 沒有建立 WebSocket 連接** - 登入後從未調用 `connectWebSocket()`
 2. ❌ 司機位置只存內存，沒有寫入數據庫
 3. ❌ 司機上線/離線狀態沒有同步到數據庫
 
 **修復內容**：
-- ✅ 修正 Android App 的 `WS_URL` 配置（`build.gradle.kts:25`）
-- ✅ `driver:location` 事件現在同時更新數據庫的 `current_lat`、`current_lng` 和 `last_heartbeat`（`index.ts:93-105`）
-- ✅ `driver:online` 事件現在將司機狀態設為 `AVAILABLE`（`index.ts:73-86`）
-- ✅ `disconnect` 事件現在將司機狀態設為 `OFFLINE`（`index.ts:160-173`）
-- ✅ 司機位置更新時立即廣播給所有在線乘客（`index.ts:108`）
+- ✅ **Android App（司機端）**：
+  - `HomeScreen.kt:76-84` - 添加 `connectWebSocket()` 調用
+  - `SeniorFriendlyHomeScreen.kt:91-99` - 添加 `connectWebSocket()` 調用
+  - `SimplifiedDriverScreen.kt:99-107` - 添加 `connectWebSocket()` 調用
+  - `WS_URL` 修正為 `http://54.180.244.231`（透過 Nginx 反向代理）
+
+- ✅ **服務器端**：
+  - `driver:online` → 更新數據庫狀態為 `AVAILABLE`（`index.ts:73-86`）
+  - `driver:location` → 寫入 `current_lat`、`current_lng`、`last_heartbeat`（`index.ts:93-108`）
+  - `disconnect` → 更新數據庫狀態為 `OFFLINE`（`index.ts:160-173`）
+  - 實時廣播司機位置給所有在線乘客（`index.ts:108`）
+
+#### **問題 2：司機標記不清楚（像 Uber）**
+**根本原因**：
+1. ❌ 使用默認藍色標記，不夠明顯
+2. ❌ 實時位置沒有更新到地圖標記
+
+**修復內容**：
+- ✅ **Android App（乘客端）**：
+  - 創建自定義計程車圖標 `ic_taxi.xml`（黃色車身 + 橘色車頂標誌）
+  - `PassengerViewModel.kt:159-193` - 實現實時位置更新邏輯
+  - `PassengerHomeScreen.kt` - 使用自定義圖標替換默認標記
+  - 添加 `vectorToBitmap()` 輔助函數
 
 **部署注意事項**：
-- 🔥 **必須打開 TCP 3000 端口**（防火牆配置）
+- ✅ 服務器已通過 Nginx 反向代理，WebSocket 正常工作
 - 🔄 Android App 需要重新編譯並安裝
 
 ---
