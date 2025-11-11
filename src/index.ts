@@ -44,6 +44,28 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
 });
 
+// Socket 健康檢查
+app.get('/socket/health', (req, res) => {
+  const { driverLocations } = require('./socket');
+
+  res.json({
+    status: 'ok',
+    socketio: {
+      running: true,
+      engine: io.engine ? 'active' : 'inactive'
+    },
+    connections: {
+      total: io.engine.clientsCount || 0,
+      drivers: driverSockets.size,
+      passengers: passengerSockets.size
+    },
+    locations: {
+      tracked_drivers: driverLocations.size
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // 初始化Socket.io模組
 setSocketIO(io);
 
