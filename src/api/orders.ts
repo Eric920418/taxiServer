@@ -530,7 +530,7 @@ async function handleSubmitFare(req: any, res: any) {
       return res.status(400).json({ error: '只能在行程中或結算中提交車資' });
     }
 
-    // 更新訂單
+    // 更新訂單（提交車資後訂單直接完成）
     const result = await query(`
       UPDATE orders
       SET
@@ -538,7 +538,8 @@ async function handleSubmitFare(req: any, res: any) {
         actual_distance_km = $2,
         actual_duration_min = $3,
         photo_url = $4,
-        status = 'SETTLING'
+        status = 'DONE',
+        completed_at = CURRENT_TIMESTAMP
       WHERE order_id = $5
       RETURNING *
     `, [meterAmount, distance, duration, photoUrl || null, orderId]);
@@ -599,7 +600,7 @@ async function handleSubmitFare(req: any, res: any) {
 
     const notified = notifyPassengerOrderUpdate(fullOrder.passenger_id, orderUpdate);
     if (notified) {
-      console.log(`[Order] ✅ 已通知乘客 ${fullOrder.passenger_id} 訂單進入結算階段，車資 NT$ ${meterAmount}`);
+      console.log(`[Order] ✅ 已通知乘客 ${fullOrder.passenger_id} 訂單已完成，車資 NT$ ${meterAmount}`);
     } else {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
     }
