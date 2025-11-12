@@ -4,6 +4,13 @@
 > 版本：v1.0.0-MVP
 > 更新日期：2025-11-11
 
+## 📝 最新修改（2025-11-11）
+- ✅ 實作乘客叫車推送給司機端（broadcastOrderToDrivers）
+- ✅ 修復接單 API 返回完整訂單資料（含時間戳轉換）
+- ✅ 修復 updateOrderStatus API 返回完整訂單資料
+- ✅ 修復 submitFare API 返回完整訂單資料
+- ✅ 新增 POST /api/orders/:orderId/fare 路由支援（Android 客戶端使用）
+
 ---
 
 ## 📋 專案概述

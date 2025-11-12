@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
-import { broadcastOrderToDrivers } from '../socket';
+import { broadcastOrderToDrivers, notifyPassengerOrderUpdate } from '../socket';
 
 const router = Router();
 
@@ -269,8 +269,6 @@ router.patch('/:orderId/accept', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 已被司機 ${driverName}(${driverId}) 接受`);
 
-    // TODO: 透過 WebSocket 通知乘客
-
     // 查詢完整訂單資訊（包含乘客資訊）
     const fullOrder = await queryOne(`
       SELECT o.*, p.name as passenger_name, p.phone as passenger_phone
@@ -278,6 +276,37 @@ router.patch('/:orderId/accept', async (req, res) => {
       LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
       WHERE o.order_id = $1
     `, [orderId]);
+
+    // 透過 WebSocket 通知乘客訂單狀態更新
+    const orderUpdate = {
+      orderId: fullOrder.order_id,
+      passengerId: fullOrder.passenger_id,
+      passengerName: fullOrder.passenger_name,
+      passengerPhone: fullOrder.passenger_phone,
+      driverId: fullOrder.driver_id,
+      driverName: driverName,
+      status: fullOrder.status,
+      pickup: {
+        lat: parseFloat(fullOrder.pickup_lat),
+        lng: parseFloat(fullOrder.pickup_lng),
+        address: fullOrder.pickup_address
+      },
+      destination: fullOrder.dest_lat ? {
+        lat: parseFloat(fullOrder.dest_lat),
+        lng: parseFloat(fullOrder.dest_lng),
+        address: fullOrder.dest_address
+      } : null,
+      paymentType: fullOrder.payment_type,
+      createdAt: new Date(fullOrder.created_at).getTime(),
+      acceptedAt: new Date(fullOrder.accepted_at).getTime()
+    };
+
+    const notified = notifyPassengerOrderUpdate(fullOrder.passenger_id, orderUpdate);
+    if (notified) {
+      console.log(`[Order] ✅ 已通知乘客 ${fullOrder.passenger_id} 訂單被接受`);
+    } else {
+      console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
+    }
 
     res.json({
       success: true,
@@ -397,12 +426,45 @@ router.patch('/:orderId/status', async (req, res) => {
 
     // TODO: 透過 WebSocket 通知相關用戶
 
+    // 查詢完整訂單資訊（包含乘客和司機資訊）
+    const fullOrder = await queryOne(`
+      SELECT o.*, p.name as passenger_name, p.phone as passenger_phone,
+             d.name as driver_name, d.phone as driver_phone
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.order_id = $1
+    `, [orderId]);
+
     res.json({
-      success: true,
-      order: {
-        orderId: updatedOrder.order_id,
-        status: updatedOrder.status
-      }
+      orderId: fullOrder.order_id,
+      passengerId: fullOrder.passenger_id,
+      passengerName: fullOrder.passenger_name || '乘客',
+      passengerPhone: fullOrder.passenger_phone,
+      driverId: fullOrder.driver_id,
+      driverName: fullOrder.driver_name,
+      driverPhone: fullOrder.driver_phone,
+      status: fullOrder.status,
+      pickup: {
+        lat: parseFloat(fullOrder.pickup_lat),
+        lng: parseFloat(fullOrder.pickup_lng),
+        address: fullOrder.pickup_address
+      },
+      destination: fullOrder.dest_lat ? {
+        lat: parseFloat(fullOrder.dest_lat),
+        lng: parseFloat(fullOrder.dest_lng),
+        address: fullOrder.dest_address
+      } : null,
+      paymentType: fullOrder.payment_type,
+      fare: fullOrder.meter_amount ? {
+        meterAmount: fullOrder.meter_amount,
+        appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0
+      } : null,
+      createdAt: new Date(fullOrder.created_at).getTime(),
+      acceptedAt: fullOrder.accepted_at ? new Date(fullOrder.accepted_at).getTime() : null,
+      arrivedAt: fullOrder.arrived_at ? new Date(fullOrder.arrived_at).getTime() : null,
+      startedAt: fullOrder.started_at ? new Date(fullOrder.started_at).getTime() : null,
+      completedAt: fullOrder.completed_at ? new Date(fullOrder.completed_at).getTime() : null
     });
   } catch (error) {
     console.error('[Update Status] 錯誤:', error);
@@ -411,10 +473,9 @@ router.patch('/:orderId/status', async (req, res) => {
 });
 
 /**
- * 提交車資
- * PATCH /api/orders/:orderId/fare
+ * 提交車資處理邏輯（共用函數）
  */
-router.patch('/:orderId/fare', async (req, res) => {
+async function handleSubmitFare(req: any, res: any) {
   const { orderId } = req.params;
   const { meterAmount, distance, duration, photoUrl } = req.body;
 
@@ -457,18 +518,62 @@ router.patch('/:orderId/fare', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 提交車資：NT$ ${meterAmount}`);
 
+    // 查詢完整訂單資訊（包含乘客和司機資訊）
+    const fullOrder = await queryOne(`
+      SELECT o.*, p.name as passenger_name, p.phone as passenger_phone,
+             d.name as driver_name, d.phone as driver_phone
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.order_id = $1
+    `, [orderId]);
+
     res.json({
-      success: true,
-      order: {
-        orderId: updatedOrder.order_id,
-        status: updatedOrder.status,
-        meterAmount: updatedOrder.meter_amount
-      }
+      orderId: fullOrder.order_id,
+      passengerId: fullOrder.passenger_id,
+      passengerName: fullOrder.passenger_name || '乘客',
+      passengerPhone: fullOrder.passenger_phone,
+      driverId: fullOrder.driver_id,
+      driverName: fullOrder.driver_name,
+      driverPhone: fullOrder.driver_phone,
+      status: fullOrder.status,
+      pickup: {
+        lat: parseFloat(fullOrder.pickup_lat),
+        lng: parseFloat(fullOrder.pickup_lng),
+        address: fullOrder.pickup_address
+      },
+      destination: fullOrder.dest_lat ? {
+        lat: parseFloat(fullOrder.dest_lat),
+        lng: parseFloat(fullOrder.dest_lng),
+        address: fullOrder.dest_address
+      } : null,
+      paymentType: fullOrder.payment_type,
+      fare: {
+        meterAmount: fullOrder.meter_amount,
+        appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0
+      },
+      createdAt: new Date(fullOrder.created_at).getTime(),
+      acceptedAt: fullOrder.accepted_at ? new Date(fullOrder.accepted_at).getTime() : null,
+      arrivedAt: fullOrder.arrived_at ? new Date(fullOrder.arrived_at).getTime() : null,
+      startedAt: fullOrder.started_at ? new Date(fullOrder.started_at).getTime() : null,
+      completedAt: fullOrder.completed_at ? new Date(fullOrder.completed_at).getTime() : null
     });
   } catch (error) {
     console.error('[Submit Fare] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
-});
+}
+
+/**
+ * 提交車資
+ * POST /api/orders/:orderId/fare (Android 客戶端使用)
+ */
+router.post('/:orderId/fare', handleSubmitFare);
+
+/**
+ * 提交車資
+ * PATCH /api/orders/:orderId/fare (備用)
+ */
+router.patch('/:orderId/fare', handleSubmitFare);
 
 export default router;
