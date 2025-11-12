@@ -5,10 +5,11 @@
 > 更新日期：2025-11-11
 
 ## 📝 最新修改（2025-11-12）
-- ✅ **新增 WebSocket 即時通知機制**
+- ✅ **新增 WebSocket 即時通知機制（完整實作）**
   - 司機接單時即時通知乘客（PATCH /api/orders/:orderId/accept）
   - 訂單狀態更新時即時通知乘客（PATCH /api/orders/:orderId/status）
-  - 支援所有狀態：ARRIVED（已抵達）、ON_TRIP（行程中）、SETTLING（結算中）、DONE（完成）
+  - 提交車資時即時通知乘客（POST /api/orders/:orderId/fare）
+  - 支援所有狀態：ACCEPTED（已接單）、ARRIVED（已抵達）、ON_TRIP（行程中）、SETTLING（結算中）、DONE（完成）
 - ✅ 實作乘客叫車推送給司機端（broadcastOrderToDrivers）
 - ✅ 修復接單 API 返回完整訂單資料（含時間戳轉換）
 - ✅ 修復 updateOrderStatus API 返回完整訂單資料
