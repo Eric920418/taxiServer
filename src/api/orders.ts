@@ -424,8 +424,6 @@ router.patch('/:orderId/status', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 狀態更新為：${status}`);
 
-    // TODO: 透過 WebSocket 通知相關用戶
-
     // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`
       SELECT o.*, p.name as passenger_name, p.phone as passenger_phone,
@@ -435,6 +433,45 @@ router.patch('/:orderId/status', async (req, res) => {
       LEFT JOIN drivers d ON o.driver_id = d.driver_id
       WHERE o.order_id = $1
     `, [orderId]);
+
+    // 透過 WebSocket 通知乘客訂單狀態更新
+    const orderUpdate = {
+      orderId: fullOrder.order_id,
+      passengerId: fullOrder.passenger_id,
+      passengerName: fullOrder.passenger_name || '乘客',
+      passengerPhone: fullOrder.passenger_phone,
+      driverId: fullOrder.driver_id,
+      driverName: fullOrder.driver_name,
+      driverPhone: fullOrder.driver_phone,
+      status: fullOrder.status,
+      pickup: {
+        lat: parseFloat(fullOrder.pickup_lat),
+        lng: parseFloat(fullOrder.pickup_lng),
+        address: fullOrder.pickup_address
+      },
+      destination: fullOrder.dest_lat ? {
+        lat: parseFloat(fullOrder.dest_lat),
+        lng: parseFloat(fullOrder.dest_lng),
+        address: fullOrder.dest_address
+      } : null,
+      paymentType: fullOrder.payment_type,
+      fare: fullOrder.meter_amount ? {
+        meterAmount: fullOrder.meter_amount,
+        appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0
+      } : null,
+      createdAt: new Date(fullOrder.created_at).getTime(),
+      acceptedAt: fullOrder.accepted_at ? new Date(fullOrder.accepted_at).getTime() : null,
+      arrivedAt: fullOrder.arrived_at ? new Date(fullOrder.arrived_at).getTime() : null,
+      startedAt: fullOrder.started_at ? new Date(fullOrder.started_at).getTime() : null,
+      completedAt: fullOrder.completed_at ? new Date(fullOrder.completed_at).getTime() : null
+    };
+
+    const notified = notifyPassengerOrderUpdate(fullOrder.passenger_id, orderUpdate);
+    if (notified) {
+      console.log(`[Order] ✅ 已通知乘客 ${fullOrder.passenger_id} 訂單狀態更新為 ${status}`);
+    } else {
+      console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
+    }
 
     res.json({
       orderId: fullOrder.order_id,
