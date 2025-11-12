@@ -115,6 +115,39 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 【新增】司機狀態更新（關鍵修復：實時通知乘客端）
+  socket.on('driver:status', async (data) => {
+    console.log('[Driver] 狀態更新:', data);
+
+    const { driverId, status } = data;
+
+    // 更新數據庫中的司機狀態
+    try {
+      const { query } = require('./db/connection');
+      await query(`
+        UPDATE drivers
+        SET availability = $1,
+            last_heartbeat = CURRENT_TIMESTAMP
+        WHERE driver_id = $2
+      `, [status, driverId]);
+      console.log(`[Driver] ${driverId} 狀態已更新為 ${status}`);
+    } catch (error) {
+      console.error('[Driver] 更新狀態失敗:', error);
+    }
+
+    // 【關鍵】如果司機離線，從位置列表中移除
+    if (status === 'OFFLINE') {
+      const { driverLocations } = require('./socket');
+      driverLocations.delete(driverId);
+      console.log(`[Driver] ${driverId} 已從位置列表移除`);
+    }
+
+    // 【關鍵】立即廣播給所有在線乘客，讓他們實時更新司機列表
+    const { broadcastNearbyDrivers } = require('./socket');
+    broadcastNearbyDrivers();
+    console.log(`[Driver] 已廣播狀態變化給所有乘客`);
+  });
+
   // 司機定位更新
   socket.on('driver:location', async (data) => {
     console.log('[Location]', data);
