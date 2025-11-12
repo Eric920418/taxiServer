@@ -109,33 +109,33 @@ router.post('/request-ride', async (req, res) => {
       return res.status(400).json({ error: '缺少必要欄位' });
     }
 
-    // 優先使用電話號碼查找乘客（因為 phone 有唯一約束）
+    // 檢查電話號碼是否已存在（因為有唯一約束）
     let actualPassengerId = passengerId;
     const existingPassengerByPhone = await queryOne(`
       SELECT passenger_id, name FROM passengers WHERE phone = $1
     `, [passengerPhone]);
 
     if (existingPassengerByPhone) {
-      // 電話號碼已存在，使用數據庫中的 passenger_id
+      // 電話號碼已存在，使用現有的 passenger_id 但更新名稱
       actualPassengerId = existingPassengerByPhone.passenger_id;
-      console.log(`[Passenger] 電話號碼 ${passengerPhone} 已存在，使用 passenger_id: ${actualPassengerId}`);
+      console.log(`[Passenger] 電話 ${passengerPhone} 已存在，使用現有 ID: ${actualPassengerId}`);
 
-      // 更新乘客資訊
       await query(`
         UPDATE passengers
         SET name = $2
         WHERE passenger_id = $1
       `, [actualPassengerId, passengerName]);
     } else {
-      // 新乘客，創建記錄
-      console.log(`[Passenger] 創建新乘客記錄: ${passengerId}, 電話: ${passengerPhone}`);
+      // 新電話號碼，創建新乘客
+      console.log(`[Passenger] 創建新乘客: ${passengerId}, 電話: ${passengerPhone}`);
       await query(`
         INSERT INTO passengers (passenger_id, name, phone, created_at)
         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
       `, [passengerId, passengerName, passengerPhone]);
+      actualPassengerId = passengerId;
     }
 
-    // 建立訂單（使用實際的 passenger_id）
+    // 建立訂單（使用 actualPassengerId）
     const orderId = `ORD${Date.now()}`;
     const now = new Date();
 
@@ -166,6 +166,17 @@ router.post('/request-ride', async (req, res) => {
     const order = result.rows[0];
 
     console.log(`[Passenger] 乘客 ${passengerName} 發起叫車請求: ${orderId}`);
+
+    // 如果 App 的 passengerId 與實際 passenger_id 不同，建立映射
+    if (passengerId !== actualPassengerId) {
+      const { passengerSockets } = require('../socket');
+      const appSocketId = passengerSockets.get(passengerId);
+      if (appSocketId) {
+        // 將 App 的 socket 同時映射到實際的 passenger_id
+        passengerSockets.set(actualPassengerId, appSocketId);
+        console.log(`[Passenger] 建立 ID 映射: ${passengerId} -> ${actualPassengerId}, Socket: ${appSocketId}`);
+      }
+    }
 
     // 格式化訂單資料用於推送
     const formattedOrder = {
