@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
 import { broadcastOrderToDrivers } from '../socket';
+import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
 
 const router = Router();
 
@@ -199,16 +200,18 @@ router.post('/request-ride', async (req, res) => {
       createdAt: new Date(order.created_at).getTime()
     };
 
-    // 推播給所有在線司機
-    console.log(`[Passenger] 開始推播訂單 ${orderId} 給在線司機...`);
-    const offeredDriverIds = broadcastOrderToDrivers(formattedOrder);
+    // 使用 OrderDispatcher 管理訂單派發（包含自動超時、重新派單）
+    console.log(`[Passenger] 開始派發訂單 ${orderId}...`);
+    const offeredDriverIds = registerOrder(formattedOrder);
     console.log(`[Passenger] ✅ 訂單已推播給 ${offeredDriverIds.length} 位司機: ${offeredDriverIds.join(', ')}`);
 
     res.json({
       success: true,
       order: formattedOrder,
       offeredTo: offeredDriverIds,
-      message: `叫車請求已發送給 ${offeredDriverIds.length} 位司機，等待司機接單`
+      message: offeredDriverIds.length > 0
+        ? `叫車請求已發送給 ${offeredDriverIds.length} 位司機，等待司機接單（5 分鐘內有效）`
+        : '目前沒有在線司機，系統會在有司機上線時自動派單'
     });
   } catch (error) {
     console.error('[Request Ride] 錯誤:', error);
@@ -264,6 +267,9 @@ router.post('/cancel-order', async (req, res) => {
 
     console.log(`[Cancel Order] ✅ 成功取消訂單 ${orderId}，原因：${reason}`);
 
+    // 從 OrderDispatcher 中移除訂單追蹤
+    cancelOrderTracking(orderId);
+
     // TODO: 通知司機（透過 WebSocket）
 
     res.json({
@@ -272,6 +278,116 @@ router.post('/cancel-order', async (req, res) => {
     });
   } catch (error) {
     console.error('[Cancel Order] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 查詢乘客個人資料
+ * GET /api/passengers/:passengerId
+ */
+router.get('/:passengerId', async (req, res) => {
+  const { passengerId } = req.params;
+
+  try {
+    const passenger = await queryOne(`
+      SELECT
+        passenger_id,
+        name,
+        phone,
+        email,
+        rating,
+        total_trips,
+        created_at
+      FROM passengers
+      WHERE passenger_id = $1
+    `, [passengerId]);
+
+    if (!passenger) {
+      return res.status(404).json({ error: '乘客不存在' });
+    }
+
+    res.json({
+      success: true,
+      passenger: {
+        passengerId: passenger.passenger_id,
+        name: passenger.name,
+        phone: passenger.phone,
+        email: passenger.email,
+        rating: parseFloat(passenger.rating || '5.0'),
+        totalTrips: parseInt(passenger.total_trips || '0'),
+        createdAt: passenger.created_at ? new Date(passenger.created_at).getTime() : null
+      }
+    });
+  } catch (error) {
+    console.error('[Get Passenger] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 更新乘客個人資料
+ * PATCH /api/passengers/:passengerId
+ */
+router.patch('/:passengerId', async (req, res) => {
+  const { passengerId } = req.params;
+  const { name, email } = req.body;
+
+  try {
+    // 檢查乘客是否存在
+    const existing = await queryOne(
+      'SELECT * FROM passengers WHERE passenger_id = $1',
+      [passengerId]
+    );
+
+    if (!existing) {
+      return res.status(404).json({ error: '乘客不存在' });
+    }
+
+    // 更新資料
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (name) {
+      updates.push(`name = $${paramIndex++}`);
+      params.push(name);
+    }
+    if (email !== undefined) {
+      updates.push(`email = $${paramIndex++}`);
+      params.push(email || null);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: '沒有要更新的欄位' });
+    }
+
+    params.push(passengerId);
+    const sql = `
+      UPDATE passengers
+      SET ${updates.join(', ')}
+      WHERE passenger_id = $${paramIndex}
+      RETURNING *
+    `;
+
+    const result = await query(sql, params);
+    const updated = result.rows[0];
+
+    console.log(`[Passenger] 更新乘客資料: ${passengerId}`);
+
+    res.json({
+      success: true,
+      passenger: {
+        passengerId: updated.passenger_id,
+        name: updated.name,
+        phone: updated.phone,
+        email: updated.email,
+        rating: parseFloat(updated.rating || '5.0'),
+        totalTrips: parseInt(updated.total_trips || '0')
+      }
+    });
+  } catch (error) {
+    console.error('[Update Passenger] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });

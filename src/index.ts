@@ -11,7 +11,9 @@ import earningsRouter from './api/earnings';
 import dispatchRouter from './api/dispatch';
 import authRouter from './api/auth';
 import adminRouter from './api/admin';
+import ratingsRouter from './api/ratings';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
+import { onDriverOnline } from './services/OrderDispatcher';
 
 // 載入環境變數
 dotenv.config();
@@ -83,6 +85,7 @@ app.use('/api/orders', ordersRouter);
 app.use('/api/dispatch', dispatchRouter);
 app.use('/api/passengers', passengersRouter);
 app.use('/api/earnings', earningsRouter);
+app.use('/api/ratings', ratingsRouter);
 
 // Socket.io 連接處理
 io.on('connection', (socket) => {
@@ -109,6 +112,9 @@ io.on('connection', (socket) => {
         WHERE driver_id = $1
       `, [driverId]);
       console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}，數據庫已更新`);
+
+      // 通知 OrderDispatcher 有新司機上線，推送待派發訂單
+      onDriverOnline(driverId);
     } catch (error) {
       console.error('[Driver] 更新上線狀態失敗:', error);
       console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}`);

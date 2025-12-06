@@ -1,6 +1,14 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
 import { broadcastOrderToDrivers, notifyPassengerOrderUpdate } from '../socket';
+import {
+  registerOrder,
+  handleDriverReject,
+  handleDriverAccept,
+  cancelOrderTracking,
+  getOrderDispatchStatus,
+  getAllActiveOrders
+} from '../services/OrderDispatcher';
 
 const router = Router();
 
@@ -76,8 +84,8 @@ router.post('/', async (req, res) => {
 
     console.log(`[Order] 新訂單建立: ${orderId}`);
 
-    // 透過 WebSocket 推送給所有上線的司機
-    const offeredTo = broadcastOrderToDrivers({
+    // 使用 OrderDispatcher 管理訂單派發（包含自動超時、重新派單）
+    const orderData = {
       orderId: order.order_id,
       passengerId: order.passenger_id,
       passengerName: passengerName,
@@ -95,7 +103,10 @@ router.post('/', async (req, res) => {
       status: 'OFFERED',
       paymentType: order.payment_type,
       createdAt: order.created_at.getTime()
-    });
+    };
+
+    // 註冊到派發管理器（會自動推送給所有司機、設置超時）
+    const offeredTo = registerOrder(orderData);
 
     res.json({
       success: true,
@@ -249,6 +260,16 @@ router.patch('/:orderId/accept', async (req, res) => {
       return res.status(400).json({ error: `訂單狀態不允許接單：${order.status}` });
     }
 
+    // 通知 OrderDispatcher 訂單已被接受（會通知其他司機訂單已被接走）
+    const accepted = handleDriverAccept(orderId, driverId);
+    if (!accepted) {
+      // 可能已被其他司機接走
+      return res.status(409).json({
+        error: 'ORDER_ALREADY_TAKEN',
+        message: '此訂單已被其他司機接走'
+      });
+    }
+
     // 更新訂單狀態
     const result = await query(`
       UPDATE orders
@@ -358,24 +379,53 @@ router.patch('/:orderId/reject', async (req, res) => {
       return res.status(404).json({ error: '訂單不存在' });
     }
 
-    // 記錄拒單次數
-    await query(
-      'UPDATE orders SET reject_count = reject_count + 1 WHERE order_id = $1',
-      [orderId]
-    );
-
     console.log(`[Order] 訂單 ${orderId} 被司機 ${driverId} 拒絕，原因：${reason}`);
 
-    // TODO: 重新派給其他司機
+    // 使用 OrderDispatcher 處理拒單（自動重新派給其他司機）
+    const result = await handleDriverReject(orderId, driverId, reason);
 
     res.json({
-      success: true,
-      message: '已拒絕訂單'
+      success: result.success,
+      message: result.message,
+      reDispatchedTo: result.reDispatchedTo,
+      reDispatchedCount: result.reDispatchedTo.length
     });
   } catch (error) {
     console.error('[Reject Order] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
+});
+
+/**
+ * 取得訂單派發狀態
+ * GET /api/orders/:orderId/dispatch-status
+ */
+router.get('/:orderId/dispatch-status', (req, res) => {
+  const { orderId } = req.params;
+
+  const status = getOrderDispatchStatus(orderId);
+
+  if (!status || !status.exists) {
+    return res.json({
+      exists: false,
+      message: '訂單不在派發佇列中（可能已被接受或取消）'
+    });
+  }
+
+  res.json(status);
+});
+
+/**
+ * 取得所有活動訂單狀態（除錯用）
+ * GET /api/orders/dispatch/active
+ */
+router.get('/dispatch/active', (req, res) => {
+  const activeOrders = getAllActiveOrders();
+
+  res.json({
+    count: activeOrders.length,
+    orders: activeOrders
+  });
 });
 
 /**

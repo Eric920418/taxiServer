@@ -121,4 +121,105 @@ router.patch('/:driverId/location', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * 更新司機 FCM Token
+ * PUT /api/drivers/:driverId/fcm-token
+ */
+router.put('/:driverId/fcm-token', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+  const { fcmToken, deviceInfo } = req.body;
+
+  console.log('[FCM Token] 更新:', { driverId, tokenLength: fcmToken?.length });
+
+  if (!fcmToken) {
+    return res.status(400).json({
+      success: false,
+      error: 'FCM_TOKEN_REQUIRED',
+      message: 'FCM Token 是必需的'
+    });
+  }
+
+  try {
+    // 更新司機的 FCM Token
+    const result = await query(
+      `UPDATE drivers
+       SET fcm_token = $1,
+           device_info = $2,
+           fcm_updated_at = CURRENT_TIMESTAMP,
+           last_heartbeat = CURRENT_TIMESTAMP
+       WHERE driver_id = $3
+       RETURNING driver_id, name, fcm_updated_at`,
+      [fcmToken, deviceInfo || null, driverId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'DRIVER_NOT_FOUND',
+        message: '找不到此司機'
+      });
+    }
+
+    const driver = result.rows[0];
+
+    console.log('[FCM Token] ✅ 更新成功:', driver.driver_id);
+
+    res.json({
+      success: true,
+      message: 'FCM Token 更新成功',
+      driverId: driver.driver_id,
+      updatedAt: driver.fcm_updated_at
+    });
+  } catch (error) {
+    console.error('[FCM Token] 錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '伺服器錯誤'
+    });
+  }
+});
+
+/**
+ * 刪除司機 FCM Token（登出時使用）
+ * DELETE /api/drivers/:driverId/fcm-token
+ */
+router.delete('/:driverId/fcm-token', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+
+  console.log('[FCM Token] 刪除:', { driverId });
+
+  try {
+    const result = await query(
+      `UPDATE drivers
+       SET fcm_token = NULL,
+           device_info = NULL,
+           fcm_updated_at = NULL
+       WHERE driver_id = $1
+       RETURNING driver_id`,
+      [driverId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'DRIVER_NOT_FOUND'
+      });
+    }
+
+    console.log('[FCM Token] ✅ 刪除成功:', driverId);
+
+    res.json({
+      success: true,
+      message: 'FCM Token 已刪除'
+    });
+  } catch (error) {
+    console.error('[FCM Token] 刪除錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR'
+    });
+  }
+});
+
 export default router;
