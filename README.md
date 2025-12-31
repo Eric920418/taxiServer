@@ -652,7 +652,7 @@ feature/*   # 新功能分支
 - [x] Android App整合（完整訂單流程）
 
 ### Phase 2 (Month 4-6) ⬅️ 當前
-- [ ] Whisper語音助理
+- [x] Whisper語音助理
 - [ ] OCR跳表辨識
 - [x] **改進派單演算法 (ETA + 拒單率)** - SmartDispatcherV2 ✅
 
@@ -662,8 +662,6 @@ feature/*   # 新功能分支
 - [ ] 聊天式UI
 
 ### Phase 4 (Month 10-12)
-- [ ] 乘客端App (React Native)
-- [ ] 生產環境部署
 - [ ] 壓力測試與優化
 
 ---
