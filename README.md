@@ -659,7 +659,6 @@ feature/*   # 新功能分支
 ### Phase 3 (Month 7-9)
 - [ ] AI自動接單（基於 RejectionPredictor 擴展）
 - [ ] 熱區配額
-- [ ] 聊天式UI
 
 ### Phase 4 (Month 10-12)
 - [ ] 壓力測試與優化
