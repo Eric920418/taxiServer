@@ -1,42 +1,418 @@
+/* 全局樣式 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  width: 100%;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* 覆蓋 Ant Design 默認樣式 */
+.ant-layout {
+  background: #f0f2f5;
 }
 
-@keyframes logo-spin {
+.ant-layout-sider {
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+}
+
+/* 卡片樣式 */
+.ant-card {
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px rgba(0, 0, 0, 0.02);
+  transition: box-shadow 0.3s ease;
+}
+
+.ant-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.ant-card-head {
+  border-bottom: 1px solid #f0f0f0;
+  font-weight: 600;
+}
+
+/* 表格樣式 */
+.ant-table {
+  background: #fff;
+  border-radius: 8px;
+}
+
+.ant-table-thead > tr > th {
+  background: #fafafa;
+  font-weight: 600;
+  border-bottom: 2px solid #f0f0f0;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #f5f7fa;
+}
+
+.ant-table-tbody > tr > td {
+  transition: background 0.3s ease;
+}
+
+/* 按鈕樣式 */
+.ant-btn {
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.ant-btn-primary {
+  box-shadow: 0 2px 0 rgba(5, 145, 255, 0.1);
+}
+
+.ant-btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.3);
+}
+
+.ant-btn-danger:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 77, 79, 0.3);
+}
+
+/* 輸入框樣式 */
+.ant-input,
+.ant-input-number,
+.ant-select-selector,
+.ant-picker {
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+.ant-input:focus,
+.ant-input-number:focus,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+}
+
+/* 模態框樣式 */
+.ant-modal-content {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ant-modal-header {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.ant-modal-footer {
+  border-top: 1px solid #f0f0f0;
+}
+
+/* 抽屜樣式 */
+.ant-drawer-content {
+  background: #fafafa;
+}
+
+.ant-drawer-header {
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.ant-drawer-body {
+  padding: 24px;
+}
+
+/* 標籤樣式 */
+.ant-tag {
+  border-radius: 4px;
+  font-weight: 500;
+  padding: 2px 8px;
+}
+
+/* 統計卡片樣式 */
+.ant-statistic {
+  .ant-statistic-title {
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.65);
+    margin-bottom: 4px;
+  }
+
+  .ant-statistic-content {
+    font-size: 24px;
+    font-weight: 600;
+  }
+}
+
+/* 菜單樣式 */
+.ant-menu-dark.ant-menu-inline .ant-menu-item-selected {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  margin: 4px 8px;
+  width: calc(100% - 16px);
+}
+
+.ant-menu-dark .ant-menu-item {
+  border-radius: 8px;
+  margin: 4px 8px;
+  width: calc(100% - 16px);
+}
+
+.ant-menu-dark .ant-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 頭像樣式 */
+.ant-avatar {
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* 進度條樣式 */
+.ant-progress-success-bg,
+.ant-progress-bg {
+  border-radius: 10px;
+}
+
+/* 消息通知樣式 */
+.ant-message-notice-content {
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Badge 樣式 */
+.ant-badge-count {
+  box-shadow: 0 0 0 1px #fff;
+  border-radius: 10px;
+}
+
+/* 分頁樣式 */
+.ant-pagination-item {
+  border-radius: 6px;
+}
+
+.ant-pagination-item-active {
+  border-color: #1890ff;
+  font-weight: 600;
+}
+
+/* 標籤頁樣式 */
+.ant-tabs-nav {
+  margin-bottom: 24px;
+}
+
+.ant-tabs-tab {
+  border-radius: 8px 8px 0 0;
+  font-weight: 500;
+}
+
+.ant-tabs-tab-active {
+  background: #fff;
+}
+
+/* 描述列表樣式 */
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+/* 時間軸樣式 */
+.ant-timeline-item {
+  padding-bottom: 20px;
+}
+
+.ant-timeline-item-head {
+  border-width: 3px;
+}
+
+/* 開關樣式 */
+.ant-switch {
+  border-radius: 100px;
+}
+
+.ant-switch-checked {
+  background: #52c41a;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+  .ant-card {
+    margin-bottom: 16px;
+  }
+
+  .ant-table {
+    font-size: 12px;
+  }
+
+  .ant-btn {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+}
+
+/* 自定義滾動條 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* 動畫效果 */
+@keyframes fadeIn {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: translateY(20px);
   }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.fade-in {
+  animation: fadeIn 0.3s ease-in;
 }
 
-.card {
-  padding: 2em;
+/* 圖表容器樣式 */
+.chart-container {
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
 }
 
-.read-the-docs {
-  color: #888;
+/* Loading 樣式 */
+.ant-spin-container {
+  transition: opacity 0.3s;
+}
+
+.ant-spin-blur {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* 表單樣式增強 */
+.ant-form-item-label > label {
+  font-weight: 500;
+}
+
+.ant-form-item-explain-error {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* 通知中心特殊樣式 */
+.notification-item {
+  transition: all 0.3s ease;
+}
+
+.notification-item:hover {
+  transform: translateX(4px);
+}
+
+/* 工具提示樣式 */
+.ant-tooltip-inner {
+  border-radius: 6px;
+}
+
+/* 彈出確認框樣式 */
+.ant-popover-inner {
+  border-radius: 8px;
+}
+
+/* 選擇器下拉菜單樣式 */
+.ant-select-dropdown {
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* 日期選擇器面板樣式 */
+.ant-picker-panel {
+  border-radius: 8px;
+}
+
+/* 空狀態樣式 */
+.ant-empty {
+  margin: 40px 0;
+}
+
+/* 結果頁面樣式 */
+.ant-result {
+  padding: 48px 32px;
+}
+
+/* 圖標按鈕樣式 */
+.ant-btn-icon-only {
+  border-radius: 50%;
+}
+
+/* 特殊效果類 */
+.glass-effect {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.shadow-sm {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.shadow-md {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.shadow-lg {
+  box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* 文字樣式工具類 */
+.text-primary {
+  color: #1890ff !important;
+}
+
+.text-success {
+  color: #52c41a !important;
+}
+
+.text-warning {
+  color: #faad14 !important;
+}
+
+.text-danger {
+  color: #ff4d4f !important;
+}
+
+.text-muted {
+  color: rgba(0, 0, 0, 0.45) !important;
+}
+
+/* 背景色工具類 */
+.bg-primary {
+  background-color: #e6f7ff !important;
+}
+
+.bg-success {
+  background-color: #f6ffed !important;
+}
+
+.bg-warning {
+  background-color: #fffbe6 !important;
+}
+
+.bg-danger {
+  background-color: #fff2f0 !important;
 }

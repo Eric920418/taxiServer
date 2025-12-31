@@ -17,12 +17,14 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { logout } from '../store/slices/authSlice';
 import { type RootState, type AppDispatch } from '../store';
+import NotificationCenter from '../components/NotificationCenter';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
 const MainLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
+  const [notificationVisible, setNotificationVisible] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch<AppDispatch>();
@@ -64,17 +66,22 @@ const MainLayout: React.FC = () => {
       icon: <TeamOutlined />,
       label: '管理員設定',
     },
+    {
+      key: '/settings',
+      icon: <SettingOutlined />,
+      label: '系統設定',
+    },
   ];
 
   const userMenu = (
     <Menu>
-      <Menu.Item key="profile">
+      <Menu.Item key="profile" onClick={() => navigate('/profile')}>
         <Space>
           <UserOutlined />
           個人資料
         </Space>
       </Menu.Item>
-      <Menu.Item key="settings">
+      <Menu.Item key="settings" onClick={() => navigate('/settings')}>
         <Space>
           <SettingOutlined />
           系統設定
@@ -158,7 +165,10 @@ const MainLayout: React.FC = () => {
 
           <div style={{ paddingRight: 24, display: 'flex', alignItems: 'center', gap: 16 }}>
             <Badge count={5} size="small">
-              <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
+              <BellOutlined
+                style={{ fontSize: 18, cursor: 'pointer' }}
+                onClick={() => setNotificationVisible(true)}
+              />
             </Badge>
 
             <Dropdown overlay={userMenu} placement="bottomRight" arrow>
@@ -179,6 +189,11 @@ const MainLayout: React.FC = () => {
           <Outlet />
         </Content>
       </Layout>
+
+      <NotificationCenter
+        visible={notificationVisible}
+        onClose={() => setNotificationVisible(false)}
+      />
     </Layout>
   );
 };

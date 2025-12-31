@@ -3,16 +3,21 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// PostgreSQL 連接池
+// PostgreSQL 連接池（優化版）
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'hualien_taxi',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || '',
-  max: 20, // 最大連接數
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  // 連線池優化設定
+  max: parseInt(process.env.DB_POOL_MAX || '50'), // 增加最大連接數
+  min: parseInt(process.env.DB_POOL_MIN || '10'), // 設定最小連接數
+  idleTimeoutMillis: 60000, // 增加到 60 秒
+  connectionTimeoutMillis: 5000, // 增加連線超時
+  statement_timeout: 30000, // SQL 語句超時
+  query_timeout: 30000, // 查詢超時
+  application_name: 'hualien_taxi_server', // 應用程式名稱（用於監控）
 });
 
 // 測試連接
@@ -55,5 +60,38 @@ export const closePool = async () => {
   await pool.end();
   console.log('[DB] PostgreSQL 連接池已關閉');
 };
+
+// 連線池健康檢查
+export const checkPoolHealth = async () => {
+  try {
+    const result = await pool.query('SELECT 1');
+    const stats = {
+      totalCount: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount,
+      healthy: result.rowCount === 1
+    };
+    return stats;
+  } catch (error) {
+    console.error('[DB] 健康檢查失敗:', error);
+    return {
+      totalCount: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount,
+      healthy: false,
+      error: error
+    };
+  }
+};
+
+// 定期健康檢查（每30秒）
+setInterval(async () => {
+  const health = await checkPoolHealth();
+  if (!health.healthy) {
+    console.error('[DB Pool] 健康檢查失敗，嘗試重新連線');
+  } else if (health.waitingCount > 5) {
+    console.warn(`[DB Pool] 等待連線數過高: ${health.waitingCount}`);
+  }
+}, 30000);
 
 export default pool;

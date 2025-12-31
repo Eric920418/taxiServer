@@ -12,6 +12,7 @@ import Passengers from './pages/Passengers';
 import Orders from './pages/Orders';
 import Analytics from './pages/Analytics';
 import AdminManagement from './pages/AdminManagement';
+import Settings from './pages/Settings';
 import './App.css';
 
 // 私有路由組件
@@ -40,6 +41,7 @@ function AppContent() {
           <Route path="orders" element={<Orders />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="admins" element={<AdminManagement />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </Router>

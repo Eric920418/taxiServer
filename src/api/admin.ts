@@ -680,6 +680,339 @@ router.post('/drivers/:driverId/unblock', authenticateAdmin, requireRole([AdminR
 });
 
 /**
+ * 取得乘客列表（管理員功能）
+ * GET /api/admin/passengers
+ */
+router.get('/passengers', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { search, page = 1, pageSize = 20 } = req.query;
+  const offset = (Number(page) - 1) * Number(pageSize);
+
+  try {
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // 搜尋條件
+    if (search) {
+      whereClause += ` AND (name ILIKE $${paramIndex} OR phone ILIKE $${paramIndex} OR passenger_id ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // 取得總數
+    const countResult = await queryOne(
+      `SELECT COUNT(*) as total FROM passengers ${whereClause}`,
+      params
+    );
+
+    // 取得乘客列表
+    params.push(Number(pageSize), offset);
+    const passengers = await query(
+      `SELECT
+        passenger_id,
+        name,
+        phone as "phoneNumber",
+        email,
+        created_at as "createdAt",
+        last_login as "lastLogin"
+      FROM passengers
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      params
+    );
+
+    res.json({
+      success: true,
+      data: {
+        items: passengers.rows,
+        pagination: {
+          page: Number(page),
+          pageSize: Number(pageSize),
+          total: parseInt(countResult.total),
+          totalPages: Math.ceil(parseInt(countResult.total) / Number(pageSize))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[Admin API] Get passengers error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得單一乘客詳情
+ * GET /api/admin/passengers/:passengerId
+ */
+router.get('/passengers/:passengerId', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { passengerId } = req.params;
+
+  try {
+    const passenger = await queryOne(
+      `SELECT
+        passenger_id,
+        name,
+        phone as "phoneNumber",
+        email,
+        created_at as "createdAt",
+        last_login as "lastLogin"
+      FROM passengers WHERE passenger_id = $1`,
+      [passengerId]
+    );
+
+    if (!passenger) {
+      return res.status(404).json({
+        success: false,
+        error: 'Passenger not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: passenger
+    });
+  } catch (error) {
+    console.error('[Admin API] Get passenger error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得訂單列表（管理員功能）
+ * GET /api/admin/orders
+ */
+router.get('/orders', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { search, status, startDate, endDate, page = 1, pageSize = 20 } = req.query;
+  const offset = (Number(page) - 1) * Number(pageSize);
+
+  try {
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // 搜尋條件
+    if (search) {
+      whereClause += ` AND (o.order_id ILIKE $${paramIndex} OR o.passenger_id ILIKE $${paramIndex} OR o.driver_id ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // 狀態篩選
+    if (status && status !== 'all') {
+      whereClause += ` AND o.status = $${paramIndex}`;
+      params.push(status.toString().toUpperCase());
+      paramIndex++;
+    }
+
+    // 日期範圍篩選
+    if (startDate) {
+      whereClause += ` AND DATE(o.created_at) >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      whereClause += ` AND DATE(o.created_at) <= $${paramIndex}`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    // 取得總數
+    const countResult = await queryOne(
+      `SELECT COUNT(*) as total FROM orders o ${whereClause}`,
+      params
+    );
+
+    // 取得訂單列表
+    params.push(Number(pageSize), offset);
+    const orders = await query(
+      `SELECT
+        o.order_id,
+        o.passenger_id,
+        o.driver_id,
+        o.status,
+        o.pickup_lat,
+        o.pickup_lng,
+        o.pickup_address,
+        o.dest_lat,
+        o.dest_lng,
+        o.dest_address,
+        o.payment_type as "paymentMethod",
+        CASE
+          WHEN o.status = 'DONE' THEN 'completed'
+          WHEN o.status = 'CANCELLED' THEN 'failed'
+          ELSE 'pending'
+        END as "paymentStatus",
+        o.meter_amount as fare,
+        o.actual_distance_km as distance,
+        o.actual_duration_min as duration,
+        o.created_at as "createdAt",
+        o.accepted_at as "acceptedAt",
+        o.arrived_at as "arrivedAt",
+        o.started_at as "startedAt",
+        o.completed_at as "completedAt",
+        o.cancelled_at as "cancelledAt",
+        p.name as passenger_name,
+        d.name as driver_name
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      ${whereClause}
+      ORDER BY o.created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      params
+    );
+
+    // 處理訂單資料格式
+    const processedOrders = orders.rows.map((order: any) => ({
+      order_id: order.order_id,
+      passenger_id: order.passenger_id,
+      driver_id: order.driver_id,
+      status: order.status.toLowerCase(),
+      pickupLocation: {
+        lat: order.pickup_lat ? parseFloat(order.pickup_lat) : null,
+        lng: order.pickup_lng ? parseFloat(order.pickup_lng) : null,
+        address: order.pickup_address
+      },
+      dropoffLocation: order.dest_address ? {
+        lat: order.dest_lat ? parseFloat(order.dest_lat) : null,
+        lng: order.dest_lng ? parseFloat(order.dest_lng) : null,
+        address: order.dest_address
+      } : null,
+      paymentMethod: order.paymentMethod?.toLowerCase() || 'cash',
+      paymentStatus: order.paymentStatus,
+      fare: order.fare ? parseFloat(order.fare) : 0,
+      distance: order.distance ? parseFloat(order.distance) : null,
+      duration: order.duration ? parseInt(order.duration) : null,
+      createdAt: order.createdAt,
+      acceptedAt: order.acceptedAt,
+      arrivedAt: order.arrivedAt,
+      startedAt: order.startedAt,
+      completedAt: order.completedAt,
+      cancelledAt: order.cancelledAt
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        items: processedOrders,
+        pagination: {
+          page: Number(page),
+          pageSize: Number(pageSize),
+          total: parseInt(countResult.total),
+          totalPages: Math.ceil(parseInt(countResult.total) / Number(pageSize))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[Admin API] Get orders error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得單一訂單詳情
+ * GET /api/admin/orders/:orderId
+ */
+router.get('/orders/:orderId', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { orderId } = req.params;
+
+  try {
+    const order = await queryOne(
+      `SELECT
+        o.order_id,
+        o.passenger_id,
+        o.driver_id,
+        o.status,
+        o.pickup_lat,
+        o.pickup_lng,
+        o.pickup_address,
+        o.dest_lat,
+        o.dest_lng,
+        o.dest_address,
+        o.payment_type as "paymentMethod",
+        CASE
+          WHEN o.status = 'DONE' THEN 'completed'
+          WHEN o.status = 'CANCELLED' THEN 'failed'
+          ELSE 'pending'
+        END as "paymentStatus",
+        o.meter_amount as fare,
+        o.actual_distance_km as distance,
+        o.actual_duration_min as duration,
+        o.created_at as "createdAt",
+        o.accepted_at as "acceptedAt",
+        o.arrived_at as "arrivedAt",
+        o.started_at as "startedAt",
+        o.completed_at as "completedAt",
+        o.cancelled_at as "cancelledAt",
+        p.name as passenger_name,
+        d.name as driver_name
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.order_id = $1`,
+      [orderId]
+    );
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    // 處理訂單資料格式
+    const processedOrder = {
+      order_id: order.order_id,
+      passenger_id: order.passenger_id,
+      driver_id: order.driver_id,
+      status: order.status.toLowerCase(),
+      pickupLocation: {
+        lat: order.pickup_lat ? parseFloat(order.pickup_lat) : null,
+        lng: order.pickup_lng ? parseFloat(order.pickup_lng) : null,
+        address: order.pickup_address
+      },
+      dropoffLocation: order.dest_address ? {
+        lat: order.dest_lat ? parseFloat(order.dest_lat) : null,
+        lng: order.dest_lng ? parseFloat(order.dest_lng) : null,
+        address: order.dest_address
+      } : null,
+      paymentMethod: order.paymentMethod?.toLowerCase() || 'cash',
+      paymentStatus: order.paymentStatus,
+      fare: order.fare ? parseFloat(order.fare) : 0,
+      distance: order.distance ? parseFloat(order.distance) : null,
+      duration: order.duration ? parseInt(order.duration) : null,
+      createdAt: order.createdAt,
+      acceptedAt: order.acceptedAt,
+      arrivedAt: order.arrivedAt,
+      startedAt: order.startedAt,
+      completedAt: order.completedAt,
+      cancelledAt: order.cancelledAt
+    };
+
+    res.json({
+      success: true,
+      data: processedOrder
+    });
+  } catch (error) {
+    console.error('[Admin API] Get order error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
  * 取得統計資料
  * GET /api/admin/statistics/dashboard
  */
@@ -692,17 +1025,17 @@ router.get('/statistics/dashboard', authenticateAdmin, async (req: Authenticated
       queryOne('SELECT COUNT(*) as count FROM passengers'),
       queryOne('SELECT COUNT(*) as count FROM orders'),
       queryOne(
-        `SELECT COALESCE(SUM(actual_fare), 0) as revenue
+        `SELECT COALESCE(SUM(meter_amount), 0) as revenue
          FROM orders
-         WHERE DATE(created_at) = CURRENT_DATE AND status = 'completed'`
+         WHERE DATE(created_at) = CURRENT_DATE AND status = 'DONE'`
       )
     ]);
 
     // 取得總收入
     const totalRevenue = await queryOne(
-      `SELECT COALESCE(SUM(actual_fare), 0) as revenue
+      `SELECT COALESCE(SUM(meter_amount), 0) as revenue
        FROM orders
-       WHERE status = 'completed'`
+       WHERE status = 'DONE'`
     );
 
     // 取得平均評分
