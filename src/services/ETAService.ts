@@ -15,6 +15,18 @@ import { Pool } from 'pg';
 // 類型定義
 // ============================================
 
+interface GoogleDistanceMatrixResponse {
+  status: string;
+  rows?: Array<{
+    elements: Array<{
+      status: string;
+      distance?: { value: number; text: string };
+      duration?: { value: number; text: string };
+      duration_in_traffic?: { value: number; text: string };
+    }>;
+  }>;
+}
+
 export interface Location {
   lat: number;
   lng: number;
@@ -362,14 +374,14 @@ export class ETAService {
     this.incrementApiCalls();
 
     const response = await fetch(url.toString());
-    const data = await response.json();
+    const data = await response.json() as GoogleDistanceMatrixResponse;
 
     if (data.status !== 'OK' || !data.rows?.[0]?.elements?.[0]) {
       throw new Error(`Google API 錯誤: ${data.status}`);
     }
 
     const element = data.rows[0].elements[0];
-    if (element.status !== 'OK') {
+    if (element.status !== 'OK' || !element.distance || !element.duration) {
       throw new Error(`路線計算失敗: ${element.status}`);
     }
 
@@ -401,17 +413,17 @@ export class ETAService {
     this.incrementApiCalls();
 
     const response = await fetch(url.toString());
-    const data = await response.json();
+    const data = await response.json() as GoogleDistanceMatrixResponse;
 
-    if (data.status !== 'OK') {
+    if (data.status !== 'OK' || !data.rows) {
       throw new Error(`Google API 錯誤: ${data.status}`);
     }
 
     console.log(`[ETAService] Google Batch API: ${origins.length} 個起點`);
 
-    return data.rows.map((row: any) => {
+    return data.rows.map((row): ETAResult | null => {
       const element = row.elements[0];
-      if (element.status !== 'OK') {
+      if (element.status !== 'OK' || !element.distance || !element.duration) {
         return null;
       }
       return {
@@ -419,7 +431,7 @@ export class ETAService {
         distanceMeters: element.distance.value,
         source: 'GOOGLE_API' as const,
       };
-    });
+    }).filter((result): result is ETAResult => result !== null);
   }
 
   /**

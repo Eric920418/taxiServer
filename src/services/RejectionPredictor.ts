@@ -12,9 +12,16 @@
  */
 
 import { Pool } from 'pg';
-import * as tf from '@tensorflow/tfjs-node';
 import * as fs from 'fs';
 import * as path from 'path';
+
+// TensorFlow 動態載入（可選）
+let tf: any = null;
+try {
+  tf = require('@tensorflow/tfjs-node');
+} catch (e) {
+  console.log('[RejectionPredictor] TensorFlow 未安裝，將使用規則引擎模式');
+}
 
 // ============================================
 // 類型定義
@@ -97,10 +104,11 @@ const CONFIG = {
 
 export class RejectionPredictor {
   private pool: Pool;
-  private model: tf.Sequential | null = null;
+  private model: any = null;
   private isTraining: boolean = false;
   private lastTrainedAt: Date | null = null;
   private patternCache: Map<string, DriverPattern> = new Map();
+  private tfAvailable: boolean = tf !== null;
 
   constructor(pool: Pool) {
     this.pool = pool;
@@ -111,6 +119,11 @@ export class RejectionPredictor {
    */
   async initialize(): Promise<void> {
     console.log('[RejectionPredictor] 初始化中...');
+
+    if (!this.tfAvailable) {
+      console.log('[RejectionPredictor] TensorFlow 不可用，將使用規則引擎模式');
+      return;
+    }
 
     // 嘗試載入現有模型
     const loaded = await this.loadModel();
@@ -128,8 +141,8 @@ export class RejectionPredictor {
    * 預測拒單機率
    */
   async predict(driverId: string, features: PredictionFeatures): Promise<number> {
-    // 如果模型不存在，使用規則引擎
-    if (!this.model) {
+    // 如果模型不存在或 TensorFlow 不可用，使用規則引擎
+    if (!this.model || !this.tfAvailable) {
       return this.predictWithRules(driverId, features);
     }
 
@@ -139,7 +152,7 @@ export class RejectionPredictor {
 
       // 預測
       const inputTensor = tf.tensor2d([normalizedFeatures]);
-      const prediction = this.model.predict(inputTensor) as tf.Tensor;
+      const prediction = this.model.predict(inputTensor);
       const probability = (await prediction.data())[0];
 
       // 清理
@@ -161,7 +174,7 @@ export class RejectionPredictor {
   ): Promise<Map<string, number>> {
     const results = new Map<string, number>();
 
-    if (!this.model) {
+    if (!this.model || !this.tfAvailable) {
       // 使用規則引擎
       for (const { driverId, features } of predictions) {
         results.set(driverId, await this.predictWithRules(driverId, features));
@@ -175,7 +188,7 @@ export class RejectionPredictor {
 
       // 批量預測
       const inputTensor = tf.tensor2d(normalizedBatch);
-      const predictionTensor = this.model.predict(inputTensor) as tf.Tensor;
+      const predictionTensor = this.model.predict(inputTensor);
       const probabilities = await predictionTensor.data();
 
       // 組裝結果
@@ -265,6 +278,11 @@ export class RejectionPredictor {
    * 訓練模型
    */
   async trainModel(): Promise<boolean> {
+    if (!this.tfAvailable) {
+      console.log('[RejectionPredictor] TensorFlow 不可用，跳過訓練');
+      return false;
+    }
+
     if (this.isTraining) {
       console.log('[RejectionPredictor] 已在訓練中，跳過');
       return false;
@@ -301,7 +319,7 @@ export class RejectionPredictor {
         validationSplit: CONFIG.VALIDATION_SPLIT,
         shuffle: true,
         callbacks: {
-          onEpochEnd: (epoch, logs) => {
+          onEpochEnd: (epoch: number, logs: { loss?: number; acc?: number } | undefined) => {
             if ((epoch + 1) % 10 === 0) {
               console.log(`  Epoch ${epoch + 1}: loss=${logs?.loss?.toFixed(4)}, accuracy=${logs?.acc?.toFixed(4)}`);
             }
@@ -331,7 +349,7 @@ export class RejectionPredictor {
   /**
    * 建立模型架構
    */
-  private buildModel(): tf.Sequential {
+  private buildModel(): any {
     const model = tf.sequential();
 
     // 輸入層 + 隱藏層 1
@@ -501,6 +519,10 @@ export class RejectionPredictor {
    * 載入模型
    */
   private async loadModel(): Promise<boolean> {
+    if (!this.tfAvailable) {
+      return false;
+    }
+
     try {
       const modelPath = path.resolve(CONFIG.MODEL_SAVE_PATH);
       const modelJsonPath = path.join(modelPath, 'model.json');
@@ -510,7 +532,7 @@ export class RejectionPredictor {
         return false;
       }
 
-      this.model = await tf.loadLayersModel(`file://${modelJsonPath}`) as tf.Sequential;
+      this.model = await tf.loadLayersModel(`file://${modelJsonPath}`);
 
       // 重新編譯
       this.model.compile({
@@ -720,12 +742,16 @@ export class RejectionPredictor {
     lastTrainedAt: Date | null;
     isTraining: boolean;
     patternCacheSize: number;
+    tfAvailable: boolean;
+    mode: string;
   } {
     return {
       modelLoaded: this.model !== null,
       lastTrainedAt: this.lastTrainedAt,
       isTraining: this.isTraining,
       patternCacheSize: this.patternCache.size,
+      tfAvailable: this.tfAvailable,
+      mode: this.tfAvailable && this.model ? 'ML' : 'RULES',
     };
   }
 }

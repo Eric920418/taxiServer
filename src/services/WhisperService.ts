@@ -31,6 +31,8 @@ export type PassengerVoiceAction =
   | 'CANCEL_ORDER'     // 取消訂單
   | 'CALL_DRIVER'      // 聯絡司機
   | 'CHECK_STATUS'     // 查詢訂單狀態
+  | 'CONFIRM'          // 確認操作（語音自動流程）
+  | 'REJECT'           // 拒絕/否定操作（語音自動流程）
   | 'UNKNOWN';
 
 export type VoiceAction = DriverVoiceAction | PassengerVoiceAction;
@@ -377,7 +379,7 @@ class WhisperService {
       statusDescription = '目前沒有進行中的訂單，可以叫車';
     }
 
-    return `你是花蓮計程車乘客語音助理。解析乘客的台灣口語指令並轉換為結構化 JSON。
+    return `你是計程車乘客語音助理。解析乘客的台灣口語指令並轉換為結構化 JSON。
 
 ## 當前狀態
 乘客ID：${context.passengerId}
@@ -387,17 +389,18 @@ ${statusDescription}
 
 1. BOOK_RIDE - 叫車（包含目的地）
    觸發詞：「去xxx」「到xxx」「我要去xxx」「叫車到xxx」「載我去xxx」
-   params.destinationQuery：目的地關鍵字（如「火車站」「太魯閣」「七星潭」）
+   params.destinationQuery：目的地名稱（任何地點都可以，如「中原大學」「台北車站」「火車站」）
    適用狀態：沒有進行中的訂單
+   **重要**：只要用戶表達「去某地」的意圖，不論是什麼地點，都應識別為 BOOK_RIDE
 
 2. SET_DESTINATION - 單獨設置目的地
    觸發詞：「目的地xxx」「終點是xxx」「要去xxx」
-   params.destinationQuery：目的地關鍵字
+   params.destinationQuery：目的地名稱
    適用狀態：沒有進行中的訂單
 
 3. SET_PICKUP - 設置上車點
    觸發詞：「在xxx上車」「上車點是xxx」「來xxx接我」「我在xxx」
-   params.pickupQuery：上車點關鍵字
+   params.pickupQuery：上車點名稱
    適用狀態：沒有進行中的訂單
 
 4. CANCEL_ORDER - 取消訂單
@@ -412,23 +415,26 @@ ${statusDescription}
    觸發詞：「司機在哪」「多久到」「訂單狀態」「現在什麼情況」
    適用狀態：有進行中的訂單
 
-7. UNKNOWN - 無法識別
-   當無法明確識別意圖時使用
+7. CONFIRM - 確認操作
+   觸發詞：「對」「是」「好」「確認」「沒錯」「OK」「可以」「嗯」「對的」「是的」「好的」
+   適用狀態：系統詢問確認時
+   **重要**：只要是肯定、同意的回應，都應識別為 CONFIRM
 
-## 花蓮常見地點參考
-- 火車站：花蓮火車站、新城火車站
-- 景點：太魯閣、七星潭、鯉魚潭、東大門夜市、松園別館
-- 醫院：慈濟醫院、花蓮醫院
-- 學校：東華大學、慈濟大學、花蓮高中
-- 商圈：中山路、中正路、遠百
+8. REJECT - 拒絕/否定當前操作
+   觸發詞：「不對」「錯了」「不是」「重選」「換一個」「不要」「錯」「再說一次」
+   適用狀態：系統詢問確認時
+   **重要**：只要是否定、拒絕的回應，都應識別為 REJECT
+
+9. UNKNOWN - 無法識別
+   僅當完全無法識別意圖時使用（如：「今天天氣如何」）
 
 ## 輸出格式
 必須回傳有效的 JSON：
 {
   "action": "指令類型",
   "params": {
-    "destinationQuery": "目的地關鍵字（如有）",
-    "pickupQuery": "上車點關鍵字（如有）"
+    "destinationQuery": "目的地名稱（如有）",
+    "pickupQuery": "上車點名稱（如有）"
   },
   "confidence": 0.0-1.0
 }
@@ -436,8 +442,11 @@ ${statusDescription}
 ## 注意事項
 - 台灣口語常省略「我要」「請」等詞
 - 「去火車站」= BOOK_RIDE + destinationQuery: "火車站"
-- 提取地點名稱時保留完整名稱（如「花蓮火車站」不要縮寫）
-- 信心度低於 0.6 時，建議設為 UNKNOWN`;
+- 「我要去中原大學」= BOOK_RIDE + destinationQuery: "中原大學"
+- 「載我去台北101」= BOOK_RIDE + destinationQuery: "台北101"
+- 提取地點名稱時保留完整名稱
+- 任何表達「去某地」意圖的語句都應識別為 BOOK_RIDE，不論目的地是否為常見地點
+- 只有完全無法理解的語句才設為 UNKNOWN`;
   }
 
   /**
@@ -446,7 +455,8 @@ ${statusDescription}
   private validatePassengerAction(action: string): PassengerVoiceAction {
     const validActions: PassengerVoiceAction[] = [
       'BOOK_RIDE', 'SET_DESTINATION', 'SET_PICKUP',
-      'CANCEL_ORDER', 'CALL_DRIVER', 'CHECK_STATUS', 'UNKNOWN'
+      'CANCEL_ORDER', 'CALL_DRIVER', 'CHECK_STATUS',
+      'CONFIRM', 'REJECT', 'UNKNOWN'
     ];
 
     if (validActions.includes(action as PassengerVoiceAction)) {

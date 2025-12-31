@@ -21,6 +21,7 @@ import { initSmartDispatcherV2, getSmartDispatcherV2 } from './services/SmartDis
 import { initETAService } from './services/ETAService';
 import { initRejectionPredictor } from './services/RejectionPredictor';
 import { initWhisperService } from './services/WhisperService';
+import pool from './db/connection';
 
 // 載入環境變數
 dotenv.config();
@@ -48,10 +49,13 @@ app.use(helmet({
       connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
       frameSrc: ["'self'"],
       objectSrc: ["'none'"],
-      upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null
+      // 不使用 upgradeInsecureRequests，因為目前沒有 HTTPS
+      upgradeInsecureRequests: null
     }
   },
-  crossOriginEmbedderPolicy: false
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false
 }));
 
 // Middleware
@@ -109,9 +113,9 @@ if (!GOOGLE_MAPS_API_KEY) {
 }
 
 // 初始化服務（順序重要：ETAService -> RejectionPredictor -> SmartDispatcherV2）
-initETAService(GOOGLE_MAPS_API_KEY);
-initRejectionPredictor();
-initSmartDispatcherV2(io);
+initETAService(pool, GOOGLE_MAPS_API_KEY);
+initRejectionPredictor(pool);
+initSmartDispatcherV2(pool);
 initWhisperService();
 
 console.log('[系統] 智能派單系統 V2 已初始化');
@@ -158,13 +162,7 @@ io.on('connection', (socket) => {
       // 通知 OrderDispatcher 有新司機上線，推送待派發訂單（舊版兼容）
       onDriverOnline(driverId);
 
-      // 通知 SmartDispatcherV2 有新司機上線
-      try {
-        const dispatcher = getSmartDispatcherV2();
-        dispatcher.onDriverOnline(driverId);
-      } catch (dispatcherError) {
-        // SmartDispatcherV2 可能未初始化，忽略錯誤
-      }
+      // SmartDispatcherV2 會在派單時動態查詢在線司機，無需額外通知
     } catch (error) {
       console.error('[Driver] 更新上線狀態失敗:', error);
       console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}`);
