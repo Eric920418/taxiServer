@@ -108,3 +108,33 @@ export function broadcastNearbyDrivers() {
     io.to(socketId).emit('nearby:drivers', nearbyDrivers);
   });
 }
+
+/**
+ * 通知特定司機訂單狀態更新
+ */
+export function notifyDriverOrderStatus(driverId: string, order: any) {
+  const socketId = driverSockets.get(driverId);
+
+  if (socketId) {
+    io.to(socketId).emit('order:status', order);
+    console.log(`[Driver] 通知司機 ${driverId} 訂單狀態更新:`, order.status);
+    return true;
+  } else {
+    console.log(`[Driver] 司機 ${driverId} 不在線，無法推播`);
+    return false;
+  }
+}
+
+/**
+ * 廣播訂單狀態更新給所有在線司機
+ * 用於乘客取消訂單等情況
+ */
+export function broadcastOrderStatusToDrivers(order: any) {
+  const onlineDriverCount = driverSockets.size;
+  console.log(`[Order] 廣播訂單狀態 ${order.status} 給 ${onlineDriverCount} 位在線司機`);
+
+  driverSockets.forEach((socketId, driverId) => {
+    io.to(socketId).emit('order:status', order);
+    console.log(`[Order] 已通知司機 ${driverId} 訂單 ${order.orderId} 狀態: ${order.status}`);
+  });
+}

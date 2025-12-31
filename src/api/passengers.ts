@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
-import { broadcastOrderToDrivers } from '../socket';
+import { broadcastOrderToDrivers, broadcastOrderStatusToDrivers, notifyDriverOrderStatus } from '../socket';
 import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 
@@ -316,7 +316,35 @@ router.post('/cancel-order', async (req, res) => {
     // 從 OrderDispatcher 中移除訂單追蹤
     cancelOrderTracking(orderId);
 
-    // TODO: 通知司機（透過 WebSocket）
+    // 通知司機訂單已取消（透過 WebSocket）
+    const cancelledOrder = result.rows[0];
+    const orderForNotification = {
+      orderId: cancelledOrder.order_id,
+      status: 'CANCELLED',
+      passengerId: cancelledOrder.passenger_id,
+      passengerName: cancelledOrder.passenger_name,
+      pickup: {
+        address: cancelledOrder.pickup_address,
+        latitude: cancelledOrder.pickup_lat,
+        longitude: cancelledOrder.pickup_lng
+      },
+      destination: cancelledOrder.destination_address ? {
+        address: cancelledOrder.destination_address,
+        latitude: cancelledOrder.destination_lat,
+        longitude: cancelledOrder.destination_lng
+      } : null,
+      cancelReason: reason
+    };
+
+    // 如果有指定司機（已被接單），通知該司機
+    if (cancelledOrder.driver_id) {
+      notifyDriverOrderStatus(cancelledOrder.driver_id, orderForNotification);
+      console.log(`[Cancel Order] 已通知司機 ${cancelledOrder.driver_id} 訂單被取消`);
+    } else {
+      // 否則廣播給所有在線司機（訂單可能還在派單中）
+      broadcastOrderStatusToDrivers(orderForNotification);
+      console.log(`[Cancel Order] 已廣播訂單取消給所有在線司機`);
+    }
 
     res.json({
       success: true,
