@@ -1,10 +1,75 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.0.0-MVP
-> 更新日期：2025-11-11
+> 版本：v1.3.0-MVP
+> 更新日期：2025-12-12
 
-## 📝 最新修改（2025-11-12）
+## 📝 最新修改（2025-12-12）- 智能派單系統 V2
+
+### 新增功能
+- ✅ **SmartDispatcherV2** - 分層派單引擎（每批 3 位司機，20 秒超時，最多 5 批）
+- ✅ **ETAService** - 混合 ETA 策略（< 3km 估算，≥ 3km Google Distance Matrix API）
+- ✅ **RejectionPredictor** - TensorFlow.js ML 拒單預測模型
+- ✅ **六維度評分系統** - 距離/ETA/收入均衡/接單預測/效率匹配/熱區加成
+- ✅ **強制拒單原因** - TOO_FAR/LOW_FARE/UNWANTED_AREA/OFF_DUTY/OTHER
+- ✅ **派單監控 API** - `/api/dispatch/v2/*`（統計/行為模式/拒單分析）
+
+### 新增檔案
+```
+src/services/SmartDispatcherV2.ts    # 核心分層派單引擎
+src/services/ETAService.ts           # 混合 ETA 服務
+src/services/RejectionPredictor.ts   # ML 拒單預測
+src/api/dispatch-v2.ts               # 監控 API
+src/db/migrations/001-smart-dispatch-tables.sql  # 資料庫遷移
+```
+
+### 資料庫變更
+- 新增 `dispatch_logs` 表（派單決策日誌）
+- 新增 `order_rejections` 表（詳細拒單記錄）
+- 新增 `driver_patterns` 表（司機行為模式/ML特徵）
+- 新增 `eta_cache` 表（ETA 快取）
+- `orders` 表新增：dispatch_batch, dispatch_method, estimated_fare, google_eta_seconds, cancel_reason
+- `drivers` 表新增：driver_type, preferred_zones, total_rejections
+
+---
+
+## ⚠️ 部署前必做（Next Steps）
+
+### 1. 安裝 TensorFlow.js
+```bash
+cd ~/Desktop/HualienTaxiServer
+pnpm add @tensorflow/tfjs-node
+```
+
+### 2. 執行資料庫遷移
+```bash
+npx ts-node src/db/migrate.ts smart-dispatch
+```
+
+### 3. 設定 Google Maps API Key
+編輯 `.env`：
+```env
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
+```
+
+### 4. Android 端整合
+在 `HomeScreen.kt` / `SimplifiedDriverScreen.kt` 中使用 `RejectOrderDialog`：
+```kotlin
+// 拒單時顯示原因選擇對話框
+RejectOrderDialog(
+    orderId = order.orderId,
+    distanceToPickup = order.distanceToPickup,
+    estimatedFare = order.estimatedFare,
+    onDismiss = { showRejectDialog = false },
+    onConfirm = { reason ->
+        viewModel.rejectOrder(order.orderId, reason.code)
+    }
+)
+```
+
+---
+
+## 📝 歷史修改（2025-11-12）
 - ✅ **新增 WebSocket 即時通知機制（完整實作）**
   - 司機接單時即時通知乘客（PATCH /api/orders/:orderId/accept）
   - 訂單狀態更新時即時通知乘客（PATCH /api/orders/:orderId/status）
@@ -579,20 +644,20 @@ feature/*   # 新功能分支
 
 ## 🗺️ Roadmap
 
-### Phase 1 (Month 1-3) - MVP ⬅️ 當前
+### Phase 1 (Month 1-3) - MVP ✅ 完成
 - [x] Server基礎架構
 - [x] 訂單CRUD API
 - [x] WebSocket派單（即時推播）
 - [x] 簡易派單演算法（廣播給所有在線司機）
 - [x] Android App整合（完整訂單流程）
 
-### Phase 2 (Month 4-6)
+### Phase 2 (Month 4-6) ⬅️ 當前
 - [ ] Whisper語音助理
 - [ ] OCR跳表辨識
-- [ ] 改進派單演算法 (ETA + 拒單率)
+- [x] **改進派單演算法 (ETA + 拒單率)** - SmartDispatcherV2 ✅
 
 ### Phase 3 (Month 7-9)
-- [ ] AI自動接單
+- [ ] AI自動接單（基於 RejectionPredictor 擴展）
 - [ ] 熱區配額
 - [ ] 聊天式UI
 

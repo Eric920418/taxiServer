@@ -9,11 +9,17 @@ import ordersRouter from './api/orders';
 import passengersRouter from './api/passengers';
 import earningsRouter from './api/earnings';
 import dispatchRouter from './api/dispatch';
+import dispatchV2Router from './api/dispatch-v2';
 import authRouter from './api/auth';
 import adminRouter from './api/admin';
 import ratingsRouter from './api/ratings';
+import whisperRouter from './api/whisper';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 import { onDriverOnline } from './services/OrderDispatcher';
+import { initSmartDispatcherV2, getSmartDispatcherV2 } from './services/SmartDispatcherV2';
+import { initETAService } from './services/ETAService';
+import { initRejectionPredictor } from './services/RejectionPredictor';
+import { initWhisperService } from './services/WhisperService';
 
 // 載入環境變數
 dotenv.config();
@@ -77,15 +83,32 @@ app.get('/socket/health', (req, res) => {
 // 初始化Socket.io模組
 setSocketIO(io);
 
+// 初始化智能派單系統 V2
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
+if (!GOOGLE_MAPS_API_KEY) {
+  console.warn('[警告] 未設置 GOOGLE_MAPS_API_KEY，ETA 服務將僅使用估算模式');
+}
+
+// 初始化服務（順序重要：ETAService -> RejectionPredictor -> SmartDispatcherV2）
+initETAService(GOOGLE_MAPS_API_KEY);
+initRejectionPredictor();
+initSmartDispatcherV2(io);
+initWhisperService();
+
+console.log('[系統] 智能派單系統 V2 已初始化');
+console.log('[系統] Whisper 語音服務已初始化');
+
 // API路由
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/drivers', driversRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/dispatch', dispatchRouter);
+app.use('/api/dispatch/v2', dispatchV2Router);
 app.use('/api/passengers', passengersRouter);
 app.use('/api/earnings', earningsRouter);
 app.use('/api/ratings', ratingsRouter);
+app.use('/api/whisper', whisperRouter);
 
 // Socket.io 連接處理
 io.on('connection', (socket) => {
@@ -113,8 +136,16 @@ io.on('connection', (socket) => {
       `, [driverId]);
       console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}，數據庫已更新`);
 
-      // 通知 OrderDispatcher 有新司機上線，推送待派發訂單
+      // 通知 OrderDispatcher 有新司機上線，推送待派發訂單（舊版兼容）
       onDriverOnline(driverId);
+
+      // 通知 SmartDispatcherV2 有新司機上線
+      try {
+        const dispatcher = getSmartDispatcherV2();
+        dispatcher.onDriverOnline(driverId);
+      } catch (dispatcherError) {
+        // SmartDispatcherV2 可能未初始化，忽略錯誤
+      }
     } catch (error) {
       console.error('[Driver] 更新上線狀態失敗:', error);
       console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}`);
@@ -267,6 +298,7 @@ httpServer.listen(PORT, () => {
 ║   HTTP: http://localhost:${PORT}            ║
 ║   WebSocket: ws://localhost:${PORT}         ║
 ║   管理後台: http://localhost:${PORT}/admin  ║
+║   派單系統: V2 (智能分層派單)               ║
 ║   環境: ${process.env.NODE_ENV || 'development'}                ║
 ╚════════════════════════════════════════════╝
   `);

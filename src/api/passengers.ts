@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
 import { broadcastOrderToDrivers } from '../socket';
 import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
+import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 
 const router = Router();
 
@@ -136,6 +137,17 @@ router.post('/request-ride', async (req, res) => {
       actualPassengerId = passengerId;
     }
 
+    // 計算預估車資（簡易版：基於距離）
+    let estimatedFare: number | null = null;
+    if (destLat && destLng) {
+      const tripDistance = calculateDistance(
+        parseFloat(pickupLat), parseFloat(pickupLng),
+        parseFloat(destLat), parseFloat(destLng)
+      ) / 1000; // 轉換為公里
+      // 花蓮計程車計費：起跳 100 元（1.25km），之後每 200 公尺 5 元
+      estimatedFare = Math.max(100, Math.round(100 + Math.max(0, tripDistance - 1.25) * 25));
+    }
+
     // 建立訂單（使用 actualPassengerId）
     const orderId = `ORD${Date.now()}`;
     const now = new Date();
@@ -147,21 +159,24 @@ router.post('/request-ride', async (req, res) => {
         dest_lat, dest_lng, dest_address,
         payment_type,
         created_at, offered_at,
-        hour_of_day, day_of_week
+        hour_of_day, day_of_week,
+        dispatch_method, estimated_fare
       ) VALUES (
         $1, $2, 'OFFERED',
         $3, $4, $5,
         $6, $7, $8,
         $9,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
-        $10, $11
+        $10, $11,
+        'LAYERED', $12
       ) RETURNING *
     `, [
       orderId, actualPassengerId,
       pickupLat, pickupLng, pickupAddress,
       destLat || null, destLng || null, destAddress || null,
       paymentType,
-      now.getHours(), now.getDay()
+      now.getHours(), now.getDay(),
+      estimatedFare
     ]);
 
     const order = result.rows[0];
@@ -179,13 +194,12 @@ router.post('/request-ride', async (req, res) => {
       }
     }
 
-    // 格式化訂單資料用於推送
-    const formattedOrder = {
+    // 格式化訂單資料用於 SmartDispatcherV2
+    const orderData: OrderData = {
       orderId: order.order_id,
       passengerId: order.passenger_id,
       passengerName: passengerName,
       passengerPhone: passengerPhone,
-      status: order.status,
       pickup: {
         lat: parseFloat(order.pickup_lat),
         lng: parseFloat(order.pickup_lng),
@@ -197,20 +211,52 @@ router.post('/request-ride', async (req, res) => {
         address: order.dest_address
       } : null,
       paymentType: order.payment_type,
+      estimatedFare: estimatedFare || undefined,
       createdAt: new Date(order.created_at).getTime()
     };
 
-    // 使用 OrderDispatcher 管理訂單派發（包含自動超時、重新派單）
-    console.log(`[Passenger] 開始派發訂單 ${orderId}...`);
-    const offeredDriverIds = registerOrder(formattedOrder);
-    console.log(`[Passenger] ✅ 訂單已推播給 ${offeredDriverIds.length} 位司機: ${offeredDriverIds.join(', ')}`);
+    // 使用 SmartDispatcherV2 智能派單（分層派單 + ML 預測）
+    console.log(`[Passenger] 開始智能派發訂單 ${orderId}...`);
+    let dispatchResult;
+    try {
+      const smartDispatcher = getSmartDispatcherV2();
+      dispatchResult = await smartDispatcher.startDispatch(orderData);
+      console.log(`[Passenger] ✅ SmartDispatcherV2: ${dispatchResult.message}`);
+    } catch (error) {
+      // 如果 SmartDispatcherV2 失敗，回退到舊的派單系統
+      console.log(`[Passenger] SmartDispatcherV2 失敗，回退到傳統派單:`, error);
+      const offeredDriverIds = registerOrder({
+        orderId: orderData.orderId,
+        passengerId: orderData.passengerId,
+        passengerName: orderData.passengerName,
+        passengerPhone: orderData.passengerPhone,
+        status: 'OFFERED',
+        pickup: orderData.pickup,
+        destination: orderData.destination,
+        paymentType: orderData.paymentType,
+        createdAt: orderData.createdAt
+      });
+      dispatchResult = {
+        success: offeredDriverIds.length > 0,
+        message: offeredDriverIds.length > 0
+          ? `已派發給 ${offeredDriverIds.length} 位司機`
+          : '無可用司機',
+        batchNumber: 1,
+        offeredTo: offeredDriverIds
+      };
+    }
 
     res.json({
       success: true,
-      order: formattedOrder,
-      offeredTo: offeredDriverIds,
-      message: offeredDriverIds.length > 0
-        ? `叫車請求已發送給 ${offeredDriverIds.length} 位司機，等待司機接單（5 分鐘內有效）`
+      order: {
+        ...orderData,
+        status: order.status,
+        estimatedFare
+      },
+      offeredTo: dispatchResult.offeredTo,
+      batchNumber: dispatchResult.batchNumber,
+      message: dispatchResult.success
+        ? `叫車請求已發送（第 ${dispatchResult.batchNumber} 批），等待司機接單（5 分鐘內有效）`
         : '目前沒有在線司機，系統會在有司機上線時自動派單'
     });
   } catch (error) {

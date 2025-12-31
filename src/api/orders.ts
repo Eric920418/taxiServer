@@ -9,6 +9,17 @@ import {
   getOrderDispatchStatus,
   getAllActiveOrders
 } from '../services/OrderDispatcher';
+import { getSmartDispatcherV2 } from '../services/SmartDispatcherV2';
+
+// 有效的拒單原因（強制選擇）
+const VALID_REJECTION_REASONS = [
+  'TOO_FAR',           // 距離太遠
+  'LOW_FARE',          // 車資太低
+  'UNWANTED_AREA',     // 不想去該區域
+  'OFF_DUTY',          // 準備下班
+  'BUSY',              // 忙碌中
+  'OTHER'              // 其他
+] as const;
 
 const router = Router();
 
@@ -260,8 +271,17 @@ router.patch('/:orderId/accept', async (req, res) => {
       return res.status(400).json({ error: `訂單狀態不允許接單：${order.status}` });
     }
 
-    // 通知 OrderDispatcher 訂單已被接受（會通知其他司機訂單已被接走）
-    const accepted = handleDriverAccept(orderId, driverId);
+    // 優先使用 SmartDispatcherV2 處理接單
+    let accepted = false;
+    try {
+      const smartDispatcher = getSmartDispatcherV2();
+      accepted = await smartDispatcher.handleDriverAccept(orderId, driverId);
+    } catch (dispatcherError) {
+      // 回退到舊的 OrderDispatcher
+      console.log(`[Accept Order] SmartDispatcherV2 失敗，回退到傳統處理:`, dispatcherError);
+      accepted = handleDriverAccept(orderId, driverId);
+    }
+
     if (!accepted) {
       // 可能已被其他司機接走
       return res.status(409).json({
@@ -364,12 +384,32 @@ router.patch('/:orderId/accept', async (req, res) => {
 /**
  * 司機拒單
  * PATCH /api/orders/:orderId/reject
+ *
+ * 必填參數：
+ * - driverId: 司機 ID
+ * - rejectionReason: 拒單原因 (TOO_FAR/LOW_FARE/UNWANTED_AREA/OFF_DUTY/BUSY/OTHER)
  */
 router.patch('/:orderId/reject', async (req, res) => {
   const { orderId } = req.params;
-  const { driverId, reason = '司機忙碌' } = req.body;
+  const { driverId, rejectionReason, reason } = req.body;
+
+  // 使用新的 rejectionReason 或舊的 reason（向後兼容）
+  const finalReason = rejectionReason || reason || 'OTHER';
 
   try {
+    // 驗證必填參數
+    if (!driverId) {
+      return res.status(400).json({
+        error: 'MISSING_DRIVER_ID',
+        message: '缺少司機 ID'
+      });
+    }
+
+    // 驗證拒單原因（警告但不阻擋，為了向後兼容）
+    if (!VALID_REJECTION_REASONS.includes(finalReason as any)) {
+      console.log(`[Reject Order] 警告：無效的拒單原因 "${finalReason}"，將使用 "OTHER"`);
+    }
+
     const order = await queryOne(
       'SELECT * FROM orders WHERE order_id = $1',
       [orderId]
@@ -379,17 +419,38 @@ router.patch('/:orderId/reject', async (req, res) => {
       return res.status(404).json({ error: '訂單不存在' });
     }
 
-    console.log(`[Order] 訂單 ${orderId} 被司機 ${driverId} 拒絕，原因：${reason}`);
+    console.log(`[Order] 訂單 ${orderId} 被司機 ${driverId} 拒絕，原因：${finalReason}`);
 
-    // 使用 OrderDispatcher 處理拒單（自動重新派給其他司機）
-    const result = await handleDriverReject(orderId, driverId, reason);
+    // 優先使用 SmartDispatcherV2 處理拒單
+    let result;
+    try {
+      const smartDispatcher = getSmartDispatcherV2();
+      result = await smartDispatcher.handleDriverReject(orderId, driverId, finalReason);
 
-    res.json({
-      success: result.success,
-      message: result.message,
-      reDispatchedTo: result.reDispatchedTo,
-      reDispatchedCount: result.reDispatchedTo.length
-    });
+      res.json({
+        success: result.success,
+        message: result.message,
+        reDispatched: result.reDispatched,
+        nextBatch: result.nextBatch,
+        // 向後兼容
+        reDispatchedTo: result.reDispatched ? [`batch_${result.nextBatch}`] : [],
+        reDispatchedCount: result.reDispatched ? 1 : 0
+      });
+    } catch (dispatcherError) {
+      // 回退到舊的 OrderDispatcher
+      console.log(`[Reject Order] SmartDispatcherV2 失敗，回退到傳統處理:`, dispatcherError);
+      result = await handleDriverReject(orderId, driverId, finalReason);
+
+      res.json({
+        success: result.success,
+        message: result.message,
+        reDispatchedTo: result.reDispatchedTo,
+        reDispatchedCount: result.reDispatchedTo.length,
+        // 新格式
+        reDispatched: result.reDispatchedTo.length > 0,
+        nextBatch: 0
+      });
+    }
   } catch (error) {
     console.error('[Reject Order] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
