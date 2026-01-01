@@ -237,6 +237,61 @@ io.on('connection', (socket) => {
     broadcastNearbyDrivers();
   });
 
+  // 語音對講：轉發語音訊息
+  socket.on('voice:message', async (data) => {
+    console.log('[VoiceChat] 收到語音訊息:', data);
+
+    const { orderId, senderId, senderType, senderName, messageText, messageId, timestamp } = data;
+
+    try {
+      // 根據訂單找到對方
+      const { query } = require('./db/connection');
+      const result = await query(`
+        SELECT driver_id, passenger_id FROM orders WHERE order_id = $1
+      `, [orderId]);
+
+      if (result.rows.length === 0) {
+        console.error('[VoiceChat] 訂單不存在:', orderId);
+        return;
+      }
+
+      const order = result.rows[0];
+      let recipientSocketId: string | undefined;
+      let recipientType: string;
+
+      // 判斷接收方
+      if (senderType === 'driver') {
+        // 發送者是司機，接收者是乘客
+        recipientSocketId = passengerSockets.get(order.passenger_id);
+        recipientType = 'passenger';
+        console.log(`[VoiceChat] 司機 ${senderName} → 乘客 ${order.passenger_id}`);
+      } else {
+        // 發送者是乘客，接收者是司機
+        recipientSocketId = driverSockets.get(order.driver_id);
+        recipientType = 'driver';
+        console.log(`[VoiceChat] 乘客 ${senderName} → 司機 ${order.driver_id}`);
+      }
+
+      if (recipientSocketId) {
+        // 轉發訊息給對方
+        io.to(recipientSocketId).emit('voice:message', {
+          messageId: messageId || Date.now().toString(),
+          orderId,
+          senderId,
+          senderType,
+          senderName,
+          messageText,
+          timestamp: timestamp || Date.now()
+        });
+        console.log(`[VoiceChat] ✅ 訊息已轉發給 ${recipientType}`);
+      } else {
+        console.log(`[VoiceChat] ⚠️ ${recipientType} 不在線，無法轉發`);
+      }
+    } catch (error) {
+      console.error('[VoiceChat] 轉發訊息失敗:', error);
+    }
+  });
+
   // 乘客上線
   socket.on('passenger:online', (data) => {
     console.log('[Passenger] 上線:', data);
