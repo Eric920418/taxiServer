@@ -234,7 +234,8 @@ router.post('/request-ride', async (req, res) => {
         pickup: orderData.pickup,
         destination: orderData.destination,
         paymentType: orderData.paymentType,
-        createdAt: orderData.createdAt
+        createdAt: orderData.createdAt,
+        estimatedFare: estimatedFare || undefined  // 新增：傳遞預估車資
       });
       dispatchResult = {
         success: offeredDriverIds.length > 0,

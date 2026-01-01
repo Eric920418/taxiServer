@@ -193,7 +193,8 @@ function dispatchToAvailableDrivers(orderId: string): string[] {
 
     console.log(`[Dispatcher] 📤 推播訂單 ${orderId} 給司機 ${driverId}` +
       ` (到客人: ${orderInfo.distanceToPickup}km/${orderInfo.etaToPickup}分鐘` +
-      (orderInfo.tripDistance ? `, 行程: ${orderInfo.tripDistance}km/${orderInfo.estimatedTripDuration}分鐘)` : ')'));
+      (orderInfo.tripDistance ? `, 行程: ${orderInfo.tripDistance}km/${orderInfo.estimatedTripDuration}分鐘` : '') +
+      (tracking.order.estimatedFare ? `, 車資: ${tracking.order.estimatedFare}元)` : ')'));
   });
 
   if (offeredDrivers.length === 0) {
