@@ -61,6 +61,9 @@ export const closePool = async () => {
   console.log('[DB] PostgreSQL 連接池已關閉');
 };
 
+// 獲取連接池實例（給需要直接使用 Pool 的服務使用）
+export const getPool = (): Pool => pool;
+
 // 連線池健康檢查
 export const checkPoolHealth = async () => {
   try {

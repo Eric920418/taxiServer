@@ -1,10 +1,104 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.3.0-MVP
-> 更新日期：2025-12-12
+> 版本：v1.4.0-MVP
+> 更新日期：2025-12-31
 
-## 📝 最新修改（2025-12-12）- 智能派單系統 V2
+## 📝 最新修改（2025-12-31）- AI 自動接單 + 熱區配額系統
+
+### 新增功能
+
+#### 1. AI 自動接單系統
+- ✅ **AutoAcceptService** - 基於 RejectionPredictor 擴展的自動接單服務
+- ✅ **五維度評分計算** - 拒單預測(40%) / 距離(20%) / 車資(15%) / 時間(15%) / 司機偏好(10%)
+- ✅ **風控機制**：
+  - 每日自動接單上限（預設 30 單）
+  - 連續自動接單冷卻時間（預設 5 分鐘）
+  - 連續自動接單上限（預設 5 單）
+  - 完成率檢查（低於 60% 自動停用）
+- ✅ **司機個人化設定**：
+  - 最大接送距離 / 最低車資 / 最短行程
+  - 啟用時段 / 黑名單區域
+
+#### 2. 熱區配額管理系統
+- ✅ **HotZoneQuotaService** - 熱區流量控管服務
+- ✅ **混合模式**：
+  - 配額使用 80% → 啟動動態加價（最高 1.5x）
+  - 配額使用 100% → 進入排隊系統
+- ✅ **即時配額追蹤** - 每小時配額自動重置
+- ✅ **排隊管理** - FIFO 排隊、預估等待時間
+- ✅ **預設熱區**：東大門夜市、花蓮火車站、遠百花蓮店、太魯閣國家公園
+
+### 新增檔案
+```
+src/services/AutoAcceptService.ts      # AI 自動接單服務
+src/services/HotZoneQuotaService.ts    # 熱區配額管理
+src/db/migrations/002-auto-accept-tables.sql    # 自動接單資料表
+src/db/migrations/003-hot-zone-quota-tables.sql # 熱區配額資料表
+```
+
+### API 變更
+
+#### 司機端 API（drivers.ts）
+```
+GET  /api/drivers/:driverId/auto-accept-settings   # 取得自動接單設定
+PUT  /api/drivers/:driverId/auto-accept-settings   # 更新自動接單設定
+GET  /api/drivers/:driverId/auto-accept-stats      # 取得自動接單統計
+```
+
+#### 管理端 API（admin.ts）
+```
+GET  /api/admin/hot-zones                 # 列出所有熱區
+GET  /api/admin/hot-zones/status          # 取得所有熱區配額狀態
+GET  /api/admin/hot-zones/:zoneId/quota   # 取得單一熱區配額
+GET  /api/admin/hot-zones/:zoneId/stats   # 取得熱區統計
+POST /api/admin/hot-zones                 # 新增熱區
+PUT  /api/admin/hot-zones/:zoneId         # 更新熱區
+GET  /api/admin/hot-zones/stats/overview  # 總覽統計
+```
+
+### WebSocket 事件變更
+
+`order:offer` 事件新增欄位：
+```typescript
+{
+  // ... 原有欄位
+  finalFare: number,          // 最終車資（含加價）
+  hotZone: {
+    zoneName: string,
+    surgeMultiplier: number   // 加價倍率
+  } | null,
+  autoAccept: {
+    score: number,            // 自動接單分數 (0-100)
+    allowed: boolean,         // 是否允許自動接單
+    blockReason: string | null
+  }
+}
+```
+
+乘客端新增 `QUEUED` 狀態：
+```typescript
+{
+  dispatchStatus: 'QUEUED',
+  queuePosition: number,
+  estimatedWait: number,      // 預估等待分鐘
+  hotZoneInfo: { ... }
+}
+```
+
+### 資料庫變更
+- 新增 `driver_auto_accept_settings` 表
+- 新增 `auto_accept_logs` 表
+- 新增 `daily_auto_accept_stats` 表
+- 新增 `hot_zone_configs` 表
+- 新增 `hot_zone_quotas` 表
+- 新增 `hot_zone_queue` 表
+- 新增 `hot_zone_orders` 表
+- 新增 SQL 函數：`calculate_surge_multiplier()`, `get_or_create_hourly_quota()`
+
+---
+
+## 📝 歷史修改（2025-12-12）- 智能派單系統 V2
 
 ### 新增功能
 - ✅ **SmartDispatcherV2** - 分層派單引擎（每批 3 位司機，20 秒超時，最多 5 批）

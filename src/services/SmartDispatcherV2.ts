@@ -23,6 +23,8 @@ import {
   getRejectionPredictor,
   PredictionFeatures,
 } from './RejectionPredictor';
+import { getAutoAcceptService, AutoAcceptService } from './AutoAcceptService';
+import { getHotZoneQuotaService, HotZoneQuotaService, QuotaCheckResult } from './HotZoneQuotaService';
 
 // ============================================
 // 類型定義
@@ -65,6 +67,10 @@ export interface DriverScore {
   distanceKm: number;
   rejectionProbability: number;
   reason: string;
+  // 自動接單擴展
+  autoAcceptScore?: number;
+  autoAcceptAllowed?: boolean;
+  autoAcceptBlockReason?: string;
 }
 
 interface BatchResult {
@@ -79,7 +85,7 @@ interface BatchResult {
 
 interface OrderDispatchState {
   order: OrderData;
-  status: 'DISPATCHING' | 'ACCEPTED' | 'CANCELLED' | 'TIMEOUT';
+  status: 'DISPATCHING' | 'ACCEPTED' | 'CANCELLED' | 'TIMEOUT' | 'QUEUED';
   currentBatch: number;
   batches: BatchResult[];
   allOfferedDriverIds: Set<string>;
@@ -89,6 +95,9 @@ interface OrderDispatchState {
   createdAt: number;
   orderTimeoutTimer?: NodeJS.Timeout;
   batchTimeoutTimer?: NodeJS.Timeout;
+  // 熱區配額擴展
+  hotZoneQuota?: QuotaCheckResult;
+  queuePosition?: number;
 }
 
 // ============================================
@@ -138,16 +147,39 @@ const CONFIG = {
 export class SmartDispatcherV2 {
   private pool: Pool;
   private activeOrders: Map<string, OrderDispatchState> = new Map();
+  private queuedOrders: Map<string, OrderDispatchState> = new Map(); // 排隊中的訂單
 
   // 快取
   private driverEarningsCache: Map<string, { earnings: number; updatedAt: number }> = new Map();
   private driverStatsCache: Map<string, { stats: any; updatedAt: number }> = new Map();
 
+  // 服務
+  private autoAcceptService: AutoAcceptService | null = null;
+  private hotZoneQuotaService: HotZoneQuotaService | null = null;
+  private rejectionPredictor: RejectionPredictor | null = null;
+
   constructor(pool: Pool) {
     this.pool = pool;
 
+    // 延遲初始化服務
+    this.initServices();
+
     // 每小時清理快取
     setInterval(() => this.cleanupCaches(), 3600000);
+
+    // 每 10 秒檢查排隊訂單
+    setInterval(() => this.processQueuedOrders(), 10000);
+  }
+
+  private initServices(): void {
+    try {
+      this.rejectionPredictor = new RejectionPredictor(this.pool);
+      this.autoAcceptService = getAutoAcceptService(this.pool, this.rejectionPredictor);
+      this.hotZoneQuotaService = getHotZoneQuotaService(this.pool);
+      console.log('[SmartDispatcherV2] 服務初始化完成 (AutoAccept + HotZoneQuota)');
+    } catch (error) {
+      console.error('[SmartDispatcherV2] 服務初始化失敗:', error);
+    }
   }
 
   // ============================================
@@ -156,14 +188,103 @@ export class SmartDispatcherV2 {
 
   /**
    * 開始派單（入口方法）
+   * 整合熱區配額檢查 - 配額滿時加入排隊
    */
   async startDispatch(order: OrderData): Promise<{
     success: boolean;
     message: string;
     batchNumber: number;
     offeredTo: string[];
+    hotZoneInfo?: {
+      isHotZone: boolean;
+      zoneName?: string;
+      surgeMultiplier?: number;
+      queuePosition?: number;
+      estimatedWait?: number;
+    };
   }> {
     console.log(`\n[SmartDispatcherV2] 開始派單 - 訂單 ${order.orderId}`);
+
+    // === 熱區配額檢查 ===
+    let hotZoneQuota: QuotaCheckResult | undefined;
+    if (this.hotZoneQuotaService) {
+      try {
+        hotZoneQuota = await this.hotZoneQuotaService.checkZoneAndQuota(
+          order.pickup.lat,
+          order.pickup.lng
+        );
+
+        if (hotZoneQuota.isHotZone) {
+          console.log(`[SmartDispatcherV2] 熱區偵測: ${hotZoneQuota.zoneName}`);
+          console.log(`  配額使用: ${hotZoneQuota.quotaUsage}/${hotZoneQuota.quotaLimit}`);
+          console.log(`  加成倍率: ${hotZoneQuota.surgeMultiplier}x`);
+
+          // 配額已滿 -> 進入排隊
+          if (!hotZoneQuota.available) {
+            console.log(`[SmartDispatcherV2] 配額已滿，訂單進入排隊`);
+
+            const queueResult = await this.hotZoneQuotaService.enqueue(
+              hotZoneQuota.zoneId!,
+              order.orderId,
+              order.passengerId
+            );
+
+            // 建立排隊狀態
+            const queuedState: OrderDispatchState = {
+              order,
+              status: 'QUEUED',
+              currentBatch: 0,
+              batches: [],
+              allOfferedDriverIds: new Set(),
+              allRejectedDriverIds: new Set(),
+              allTimedOutDriverIds: new Set(),
+              createdAt: Date.now(),
+              hotZoneQuota,
+              queuePosition: queueResult.position,
+            };
+
+            this.queuedOrders.set(order.orderId, queuedState);
+
+            // 通知乘客進入排隊
+            this.notifyPassengerDispatchProgress(order.passengerId, {
+              orderId: order.orderId,
+              dispatchStatus: 'QUEUED',
+              queuePosition: queueResult.position,
+              estimatedWait: queueResult.estimatedWaitMinutes,
+              message: `您在${hotZoneQuota.zoneName}的排隊位置: 第 ${queueResult.position} 位`,
+              hotZoneInfo: {
+                isHotZone: true,
+                zoneName: hotZoneQuota.zoneName,
+                surgeMultiplier: hotZoneQuota.surgeMultiplier,
+              },
+            });
+
+            return {
+              success: true,
+              message: `訂單已加入${hotZoneQuota.zoneName}排隊，位置: 第 ${queueResult.position} 位`,
+              batchNumber: 0,
+              offeredTo: [],
+              hotZoneInfo: {
+                isHotZone: true,
+                zoneName: hotZoneQuota.zoneName,
+                surgeMultiplier: hotZoneQuota.surgeMultiplier,
+                queuePosition: queueResult.position,
+                estimatedWait: queueResult.estimatedWaitMinutes,
+              },
+            };
+          }
+
+          // 配額可用，消費配額
+          await this.hotZoneQuotaService.consumeQuota(
+            hotZoneQuota.zoneId!,
+            order.orderId
+          );
+        }
+      } catch (error) {
+        console.error('[SmartDispatcherV2] 熱區配額檢查失敗:', error);
+        // 繼續派單，不阻斷流程
+      }
+    }
 
     // 初始化派單狀態
     const state: OrderDispatchState = {
@@ -175,6 +296,7 @@ export class SmartDispatcherV2 {
       allRejectedDriverIds: new Set(),
       allTimedOutDriverIds: new Set(),
       createdAt: Date.now(),
+      hotZoneQuota,
     };
 
     this.activeOrders.set(order.orderId, state);
@@ -195,6 +317,11 @@ export class SmartDispatcherV2 {
         : '無可用司機',
       batchNumber: result.batchNumber,
       offeredTo: result.offeredDriverIds,
+      hotZoneInfo: hotZoneQuota?.isHotZone ? {
+        isHotZone: true,
+        zoneName: hotZoneQuota.zoneName,
+        surgeMultiplier: hotZoneQuota.surgeMultiplier,
+      } : undefined,
     };
   }
 
@@ -270,6 +397,11 @@ export class SmartDispatcherV2 {
     for (const driver of selectedDrivers) {
       const socketId = driverSockets.get(driver.driverId);
       if (socketId) {
+        // 計算最終車資（含熱區加成）
+        const baseFare = state.order.estimatedFare || 200;
+        const surgeMultiplier = state.hotZoneQuota?.surgeMultiplier || 1.0;
+        const finalFare = Math.round(baseFare * surgeMultiplier);
+
         const orderOffer = {
           orderId: state.order.orderId,
           passengerId: state.order.passengerId,
@@ -278,9 +410,10 @@ export class SmartDispatcherV2 {
           pickup: state.order.pickup,
           destination: state.order.destination,
           paymentType: state.order.paymentType,
-          // 新增欄位
+          // 派單資訊
           batchNumber,
-          estimatedFare: state.order.estimatedFare,
+          estimatedFare: baseFare,
+          finalFare,
           distanceToPickup: driver.distanceKm,
           etaToPickup: Math.ceil(driver.etaSeconds / 60),
           googleEtaSeconds: driver.etaSeconds,
@@ -293,10 +426,33 @@ export class SmartDispatcherV2 {
                 state.order.destination
               )
             : null,
+          // 熱區資訊
+          hotZone: state.hotZoneQuota?.isHotZone ? {
+            zoneName: state.hotZoneQuota.zoneName,
+            surgeMultiplier: state.hotZoneQuota.surgeMultiplier,
+          } : null,
+          // 自動接單資訊
+          autoAccept: {
+            score: driver.autoAcceptScore || 0,
+            allowed: driver.autoAcceptAllowed || false,
+            blockReason: driver.autoAcceptBlockReason || null,
+          },
         };
 
         io.to(socketId).emit('order:offer', orderOffer);
-        console.log(`  -> 推送給司機 ${driver.driverId} (${driver.driverName}), 評分: ${driver.totalScore.toFixed(1)}`);
+
+        // 記錄自動接單決策
+        if (this.autoAcceptService && driver.autoAcceptScore !== undefined) {
+          this.autoAcceptService.logDecision(
+            driver.driverId,
+            state.order.orderId,
+            driver.autoAcceptScore,
+            driver.autoAcceptAllowed || false,
+            driver.autoAcceptBlockReason || null
+          ).catch(err => console.error('[SmartDispatcherV2] 記錄自動接單決策失敗:', err));
+        }
+
+        console.log(`  -> 推送給司機 ${driver.driverId} (${driver.driverName}), 評分: ${driver.totalScore.toFixed(1)}, 自動接單: ${driver.autoAcceptAllowed ? '✓' : '✗'}`);
         state.allOfferedDriverIds.add(driver.driverId);
       }
     }
@@ -471,6 +627,43 @@ export class SmartDispatcherV2 {
     // 生成派單原因
     const reason = this.generateDispatchReason(components);
 
+    // === 計算自動接單分數 ===
+    let autoAcceptScore = 0;
+    let autoAcceptAllowed = false;
+    let autoAcceptBlockReason: string | null = null;
+
+    if (this.autoAcceptService) {
+      try {
+        // 計算自動接單分數
+        autoAcceptScore = await this.autoAcceptService.calculateAutoAcceptScore(
+          driver.driverId,
+          {
+            distanceToPickup: distanceKm,
+            tripDistance: tripDistance,
+            estimatedFare: order.estimatedFare || 200,
+            hourOfDay: currentHour,
+            dayOfWeek: new Date().getDay(),
+          }
+        );
+
+        // 檢查是否允許自動接單
+        const allowCheck = await this.autoAcceptService.checkAutoAcceptAllowed(
+          driver.driverId,
+          order.orderId,
+          autoAcceptScore
+        );
+
+        autoAcceptAllowed = allowCheck.allowed;
+        autoAcceptBlockReason = allowCheck.blockReason || null;
+
+        if (autoAcceptAllowed) {
+          console.log(`    [AutoAccept] 司機 ${driver.driverId} 可自動接單，分數: ${autoAcceptScore.toFixed(1)}`);
+        }
+      } catch (error) {
+        console.error(`[SmartDispatcherV2] 計算自動接單分數失敗 (${driver.driverId}):`, error);
+      }
+    }
+
     return {
       driverId: driver.driverId,
       driverName: driver.name,
@@ -481,6 +674,10 @@ export class SmartDispatcherV2 {
       distanceKm,
       rejectionProbability,
       reason,
+      // 自動接單擴展
+      autoAcceptScore,
+      autoAcceptAllowed,
+      autoAcceptBlockReason,
     };
   }
 
@@ -1048,6 +1245,7 @@ export class SmartDispatcherV2 {
       offeredCount: number;
       rejectedCount: number;
     }>;
+    queuedCount: number;
   } {
     const orders = Array.from(this.activeOrders.entries()).map(([orderId, state]) => ({
       orderId,
@@ -1060,7 +1258,165 @@ export class SmartDispatcherV2 {
     return {
       count: orders.length,
       orders,
+      queuedCount: this.queuedOrders.size,
     };
+  }
+
+  // ============================================
+  // 排隊管理
+  // ============================================
+
+  /**
+   * 處理排隊訂單（定期執行）
+   */
+  private async processQueuedOrders(): Promise<void> {
+    if (this.queuedOrders.size === 0 || !this.hotZoneQuotaService) {
+      return;
+    }
+
+    console.log(`[SmartDispatcherV2] 檢查排隊訂單 (${this.queuedOrders.size} 筆)`);
+
+    for (const [orderId, state] of this.queuedOrders.entries()) {
+      if (!state.hotZoneQuota?.zoneId) continue;
+
+      try {
+        // 嘗試從排隊取出
+        const dequeueResult = await this.hotZoneQuotaService.dequeue(state.hotZoneQuota.zoneId);
+
+        if (dequeueResult && dequeueResult.orderId === orderId) {
+          console.log(`[SmartDispatcherV2] 排隊訂單 ${orderId} 已可派單`);
+
+          // 從排隊移除
+          this.queuedOrders.delete(orderId);
+
+          // 更新狀態並開始派單
+          state.status = 'DISPATCHING';
+          this.activeOrders.set(orderId, state);
+
+          // 設置總超時
+          state.orderTimeoutTimer = setTimeout(
+            () => this.handleOrderTimeout(orderId),
+            CONFIG.ORDER_TOTAL_TIMEOUT_MS
+          );
+
+          // 通知乘客開始派單
+          this.notifyPassengerDispatchProgress(state.order.passengerId, {
+            orderId,
+            dispatchStatus: 'SEARCHING',
+            message: '排隊結束，正在尋找司機...',
+          });
+
+          // 執行派單
+          await this.executeBatch(orderId);
+        } else {
+          // 更新排隊位置
+          const currentPosition = await this.getQueuePosition(state.hotZoneQuota.zoneId, orderId);
+          if (currentPosition !== state.queuePosition) {
+            state.queuePosition = currentPosition;
+
+            // 通知乘客位置更新
+            this.notifyPassengerDispatchProgress(state.order.passengerId, {
+              orderId,
+              dispatchStatus: 'QUEUED',
+              queuePosition: currentPosition,
+              message: `排隊位置更新: 第 ${currentPosition} 位`,
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`[SmartDispatcherV2] 處理排隊訂單失敗 (${orderId}):`, error);
+      }
+    }
+  }
+
+  /**
+   * 取得排隊位置
+   */
+  private async getQueuePosition(zoneId: string, orderId: string): Promise<number> {
+    try {
+      const result = await this.pool.query(`
+        SELECT position FROM (
+          SELECT order_id,
+                 ROW_NUMBER() OVER (ORDER BY created_at) as position
+          FROM hot_zone_queue
+          WHERE zone_id = $1 AND status = 'waiting'
+        ) sub
+        WHERE order_id = $2
+      `, [zoneId, orderId]);
+
+      return result.rows[0]?.position || 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  /**
+   * 訂單完成時釋放配額
+   */
+  async releaseOrderQuota(orderId: string): Promise<void> {
+    // 從活動訂單查找
+    const state = this.activeOrders.get(orderId);
+    if (state?.hotZoneQuota?.zoneId && this.hotZoneQuotaService) {
+      try {
+        await this.hotZoneQuotaService.releaseQuota(state.hotZoneQuota.zoneId, orderId);
+        console.log(`[SmartDispatcherV2] 已釋放訂單 ${orderId} 的熱區配額`);
+      } catch (error) {
+        console.error(`[SmartDispatcherV2] 釋放配額失敗 (${orderId}):`, error);
+      }
+    }
+  }
+
+  /**
+   * 取消排隊訂單
+   */
+  async cancelQueuedOrder(orderId: string): Promise<boolean> {
+    const state = this.queuedOrders.get(orderId);
+    if (!state) {
+      return false;
+    }
+
+    console.log(`[SmartDispatcherV2] 取消排隊訂單 ${orderId}`);
+
+    // 從排隊移除
+    if (state.hotZoneQuota?.zoneId && this.hotZoneQuotaService) {
+      try {
+        await this.pool.query(
+          `UPDATE hot_zone_queue SET status = 'cancelled' WHERE order_id = $1`,
+          [orderId]
+        );
+      } catch (error) {
+        console.error(`[SmartDispatcherV2] 更新排隊狀態失敗:`, error);
+      }
+    }
+
+    this.queuedOrders.delete(orderId);
+
+    // 更新資料庫
+    await this.pool.query(
+      `UPDATE orders SET status = 'CANCELLED', cancelled_at = CURRENT_TIMESTAMP, cancel_reason = '乘客取消排隊' WHERE order_id = $1`,
+      [orderId]
+    );
+
+    return true;
+  }
+
+  /**
+   * 取得排隊訂單統計
+   */
+  getQueuedOrdersStats(): Array<{
+    orderId: string;
+    passengerId: string;
+    zoneName: string;
+    queuePosition: number;
+    waitingTime: number;
+  }> {
+    return Array.from(this.queuedOrders.entries()).map(([orderId, state]) => ({
+      orderId,
+      passengerId: state.order.passengerId,
+      zoneName: state.hotZoneQuota?.zoneName || '未知',
+      queuePosition: state.queuePosition || 0,
+      waitingTime: Math.floor((Date.now() - state.createdAt) / 1000),
+    }));
   }
 }
 

@@ -1,9 +1,20 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { query, queryOne } from '../db/connection';
+import { query, queryOne, getPool } from '../db/connection';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { getHotZoneQuotaService, HotZoneConfig } from '../services/HotZoneQuotaService';
 
 const router = Router();
+
+// 延遲初始化 HotZoneQuotaService
+let hotZoneService: ReturnType<typeof getHotZoneQuotaService> | null = null;
+
+const getHotZoneServiceInstance = () => {
+  if (!hotZoneService) {
+    hotZoneService = getHotZoneQuotaService(getPool());
+  }
+  return hotZoneService;
+};
 
 // JWT 密鑰（實際應用中應該從環境變數讀取）
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
@@ -1062,6 +1073,353 @@ router.get('/statistics/dashboard', authenticateAdmin, async (req: Authenticated
     res.status(500).json({
       success: false,
       error: 'Internal server error'
+    });
+  }
+});
+
+// ============================================
+// 熱區配額管理 API
+// ============================================
+
+/**
+ * 獲取所有熱區列表
+ * GET /api/admin/hot-zones
+ */
+router.get('/hot-zones', async (req: Request, res: Response) => {
+  try {
+    const service = getHotZoneServiceInstance();
+    const zones = await service.getAllActiveZones();
+
+    res.json({
+      success: true,
+      zones: zones.map(zone => ({
+        zoneId: zone.zoneId,
+        zoneName: zone.zoneName,
+        centerLat: zone.centerLat,
+        centerLng: zone.centerLng,
+        radiusKm: zone.radiusKm,
+        peakHours: zone.peakHours,
+        hourlyQuotaNormal: zone.hourlyQuotaNormal,
+        hourlyQuotaPeak: zone.hourlyQuotaPeak,
+        surgeThreshold: zone.surgeThreshold,
+        surgeMultiplierMax: zone.surgeMultiplierMax,
+        queueEnabled: zone.queueEnabled,
+        maxQueueSize: zone.maxQueueSize,
+        isActive: zone.isActive,
+        priority: zone.priority,
+      }))
+    });
+  } catch (error) {
+    console.error('[HotZone] 獲取熱區列表錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取熱區列表失敗'
+    });
+  }
+});
+
+/**
+ * 獲取所有熱區當前配額狀態
+ * GET /api/admin/hot-zones/status
+ */
+router.get('/hot-zones/status', async (req: Request, res: Response) => {
+  try {
+    const service = getHotZoneServiceInstance();
+    const statuses = await service.getAllZoneStatus();
+
+    res.json({
+      success: true,
+      statuses: statuses.map(status => ({
+        zoneId: status.zoneId,
+        zoneName: status.zoneName,
+        quotaDate: status.quotaDate,
+        quotaHour: status.quotaHour,
+        quotaLimit: status.quotaLimit,
+        quotaUsed: status.quotaUsed,
+        availableQuota: status.availableQuota,
+        usagePercentage: Math.round(status.usagePercentage * 100),
+        currentSurge: status.currentSurge,
+        isPeak: status.isPeak,
+        queueLength: status.queueLength,
+      }))
+    });
+  } catch (error) {
+    console.error('[HotZone] 獲取配額狀態錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取配額狀態失敗'
+    });
+  }
+});
+
+/**
+ * 獲取單個熱區配額狀態
+ * GET /api/admin/hot-zones/:zoneId/quota
+ */
+router.get('/hot-zones/:zoneId/quota', async (req: Request, res: Response) => {
+  const zoneId = parseInt(req.params.zoneId);
+
+  if (isNaN(zoneId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_ZONE_ID'
+    });
+  }
+
+  try {
+    const service = getHotZoneServiceInstance();
+    const status = await service.checkQuota(zoneId);
+
+    res.json({
+      success: true,
+      quota: {
+        zoneId: status.zoneId,
+        zoneName: status.zoneName,
+        quotaDate: status.quotaDate,
+        quotaHour: status.quotaHour,
+        quotaLimit: status.quotaLimit,
+        quotaUsed: status.quotaUsed,
+        availableQuota: status.availableQuota,
+        usagePercentage: Math.round(status.usagePercentage * 100),
+        currentSurge: status.currentSurge,
+        isPeak: status.isPeak,
+        queueLength: status.queueLength,
+      }
+    });
+  } catch (error) {
+    console.error('[HotZone] 獲取配額狀態錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取配額狀態失敗'
+    });
+  }
+});
+
+/**
+ * 獲取熱區統計
+ * GET /api/admin/hot-zones/:zoneId/stats
+ */
+router.get('/hot-zones/:zoneId/stats', async (req: Request, res: Response) => {
+  const zoneId = parseInt(req.params.zoneId);
+  const days = parseInt(req.query.days as string) || 7;
+
+  if (isNaN(zoneId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_ZONE_ID'
+    });
+  }
+
+  try {
+    const service = getHotZoneServiceInstance();
+    const stats = await service.getZoneStats(zoneId, days);
+
+    res.json({
+      success: true,
+      stats: {
+        totalOrders: stats.totalOrders,
+        totalFare: stats.totalFare,
+        avgSurge: Math.round(stats.avgSurge * 100) / 100,
+        peakUsage: Math.round(stats.peakUsage * 100),
+        cancelRate: Math.round(stats.cancelRate * 100),
+        days,
+      }
+    });
+  } catch (error) {
+    console.error('[HotZone] 獲取統計錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取熱區統計失敗'
+    });
+  }
+});
+
+/**
+ * 新增熱區
+ * POST /api/admin/hot-zones
+ */
+router.post('/hot-zones', async (req: Request, res: Response) => {
+  const {
+    zoneName, centerLat, centerLng, radiusKm,
+    peakHours, hourlyQuotaNormal, hourlyQuotaPeak,
+    surgeThreshold, surgeMultiplierMax, surgeStep,
+    queueEnabled, maxQueueSize, queueTimeoutMinutes,
+    priority
+  } = req.body;
+
+  // 驗證必填欄位
+  if (!zoneName || !centerLat || !centerLng) {
+    return res.status(400).json({
+      success: false,
+      error: 'MISSING_REQUIRED_FIELDS',
+      message: '缺少必填欄位：zoneName, centerLat, centerLng'
+    });
+  }
+
+  try {
+    const service = getHotZoneServiceInstance();
+    const zone = await service.createZone({
+      zoneName,
+      centerLat: parseFloat(centerLat),
+      centerLng: parseFloat(centerLng),
+      radiusKm: parseFloat(radiusKm) || 1.0,
+      peakHours: peakHours || [],
+      hourlyQuotaNormal: hourlyQuotaNormal || 20,
+      hourlyQuotaPeak: hourlyQuotaPeak || 30,
+      surgeThreshold: parseFloat(surgeThreshold) || 0.80,
+      surgeMultiplierMax: parseFloat(surgeMultiplierMax) || 1.50,
+      surgeStep: parseFloat(surgeStep) || 0.10,
+      queueEnabled: queueEnabled !== false,
+      maxQueueSize: maxQueueSize || 20,
+      queueTimeoutMinutes: queueTimeoutMinutes || 15,
+      isActive: true,
+      priority: priority || 0,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: '熱區已建立',
+      zone: {
+        zoneId: zone.zoneId,
+        zoneName: zone.zoneName,
+        centerLat: zone.centerLat,
+        centerLng: zone.centerLng,
+        radiusKm: zone.radiusKm,
+      }
+    });
+  } catch (error: any) {
+    console.error('[HotZone] 新增熱區錯誤:', error);
+
+    if (error.code === '23505') {  // unique_violation
+      return res.status(409).json({
+        success: false,
+        error: 'ZONE_EXISTS',
+        message: '熱區名稱已存在'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '新增熱區失敗'
+    });
+  }
+});
+
+/**
+ * 更新熱區
+ * PUT /api/admin/hot-zones/:zoneId
+ */
+router.put('/hot-zones/:zoneId', async (req: Request, res: Response) => {
+  const zoneId = parseInt(req.params.zoneId);
+  const updates = req.body;
+
+  if (isNaN(zoneId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_ZONE_ID'
+    });
+  }
+
+  try {
+    const service = getHotZoneServiceInstance();
+
+    // 構建更新物件
+    const validUpdates: Partial<HotZoneConfig> = {};
+
+    if (updates.zoneName) validUpdates.zoneName = updates.zoneName;
+    if (typeof updates.centerLat === 'number') validUpdates.centerLat = updates.centerLat;
+    if (typeof updates.centerLng === 'number') validUpdates.centerLng = updates.centerLng;
+    if (typeof updates.radiusKm === 'number') validUpdates.radiusKm = updates.radiusKm;
+    if (Array.isArray(updates.peakHours)) validUpdates.peakHours = updates.peakHours;
+    if (typeof updates.hourlyQuotaNormal === 'number') validUpdates.hourlyQuotaNormal = updates.hourlyQuotaNormal;
+    if (typeof updates.hourlyQuotaPeak === 'number') validUpdates.hourlyQuotaPeak = updates.hourlyQuotaPeak;
+    if (typeof updates.surgeThreshold === 'number') validUpdates.surgeThreshold = updates.surgeThreshold;
+    if (typeof updates.surgeMultiplierMax === 'number') validUpdates.surgeMultiplierMax = updates.surgeMultiplierMax;
+    if (typeof updates.surgeStep === 'number') validUpdates.surgeStep = updates.surgeStep;
+    if (typeof updates.queueEnabled === 'boolean') validUpdates.queueEnabled = updates.queueEnabled;
+    if (typeof updates.maxQueueSize === 'number') validUpdates.maxQueueSize = updates.maxQueueSize;
+    if (typeof updates.queueTimeoutMinutes === 'number') validUpdates.queueTimeoutMinutes = updates.queueTimeoutMinutes;
+    if (typeof updates.isActive === 'boolean') validUpdates.isActive = updates.isActive;
+    if (typeof updates.priority === 'number') validUpdates.priority = updates.priority;
+
+    const zone = await service.updateZone(zoneId, validUpdates);
+
+    if (!zone) {
+      return res.status(404).json({
+        success: false,
+        error: 'ZONE_NOT_FOUND'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '熱區已更新',
+      zone: {
+        zoneId: zone.zoneId,
+        zoneName: zone.zoneName,
+        isActive: zone.isActive,
+      }
+    });
+  } catch (error) {
+    console.error('[HotZone] 更新熱區錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '更新熱區失敗'
+    });
+  }
+});
+
+/**
+ * 獲取所有熱區統計總覽
+ * GET /api/admin/hot-zones/stats/overview
+ */
+router.get('/hot-zones/stats/overview', async (req: Request, res: Response) => {
+  const days = parseInt(req.query.days as string) || 7;
+
+  try {
+    const service = getHotZoneServiceInstance();
+    const zones = await service.getAllActiveZones();
+
+    const overview = await Promise.all(
+      zones.map(async (zone) => {
+        const stats = await service.getZoneStats(zone.zoneId, days);
+        const status = await service.checkQuota(zone.zoneId);
+
+        return {
+          zoneId: zone.zoneId,
+          zoneName: zone.zoneName,
+          currentStatus: {
+            usagePercentage: Math.round(status.usagePercentage * 100),
+            currentSurge: status.currentSurge,
+            queueLength: status.queueLength,
+          },
+          stats: {
+            totalOrders: stats.totalOrders,
+            totalFare: stats.totalFare,
+            avgSurge: Math.round(stats.avgSurge * 100) / 100,
+            cancelRate: Math.round(stats.cancelRate * 100),
+          }
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      days,
+      overview
+    });
+  } catch (error) {
+    console.error('[HotZone] 獲取總覽錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取熱區總覽失敗'
     });
   }
 });

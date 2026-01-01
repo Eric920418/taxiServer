@@ -1,7 +1,22 @@
 import { Router, Request, Response } from 'express';
-import { query, queryOne } from '../db/connection';
+import { query, queryOne, getPool } from '../db/connection';
+import { getAutoAcceptService, AutoAcceptSettings } from '../services/AutoAcceptService';
+import { RejectionPredictor } from '../services/RejectionPredictor';
 
 const router = Router();
+
+// 延遲初始化 AutoAcceptService（等待資料庫連接）
+let autoAcceptService: ReturnType<typeof getAutoAcceptService> | null = null;
+let rejectionPredictor: RejectionPredictor | null = null;
+
+const getServiceInstance = () => {
+  if (!autoAcceptService) {
+    const pool = getPool();
+    rejectionPredictor = new RejectionPredictor(pool);
+    autoAcceptService = getAutoAcceptService(pool, rejectionPredictor);
+  }
+  return autoAcceptService;
+};
 
 /**
  * 【已棄用】舊的帳號密碼登入 API
@@ -218,6 +233,173 @@ router.delete('/:driverId/fcm-token', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+// ============================================
+// 自動接單設定 API
+// ============================================
+
+/**
+ * 獲取司機自動接單設定
+ * GET /api/drivers/:driverId/auto-accept-settings
+ */
+router.get('/:driverId/auto-accept-settings', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+
+  console.log('[AutoAccept] 獲取設定:', driverId);
+
+  try {
+    const service = getServiceInstance();
+    const settings = await service.getSettings(driverId);
+
+    res.json({
+      success: true,
+      settings: {
+        enabled: settings.enabled,
+        maxPickupDistanceKm: settings.maxPickupDistanceKm,
+        minFareAmount: settings.minFareAmount,
+        minTripDistanceKm: settings.minTripDistanceKm,
+        activeHours: settings.activeHours,
+        blacklistedZones: settings.blacklistedZones,
+        smartModeEnabled: settings.smartModeEnabled,
+        autoAcceptThreshold: settings.autoAcceptThreshold,
+        dailyAutoAcceptLimit: settings.dailyAutoAcceptLimit,
+        cooldownMinutes: settings.cooldownMinutes,
+        consecutiveLimit: settings.consecutiveLimit,
+      }
+    });
+  } catch (error) {
+    console.error('[AutoAccept] 獲取設定錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取自動接單設定失敗'
+    });
+  }
+});
+
+/**
+ * 更新司機自動接單設定
+ * PUT /api/drivers/:driverId/auto-accept-settings
+ */
+router.put('/:driverId/auto-accept-settings', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+  const updates = req.body;
+
+  console.log('[AutoAccept] 更新設定:', { driverId, updates });
+
+  try {
+    // 驗證輸入
+    const validUpdates: Partial<AutoAcceptSettings> = {};
+
+    if (typeof updates.enabled === 'boolean') {
+      validUpdates.enabled = updates.enabled;
+    }
+    if (typeof updates.maxPickupDistanceKm === 'number' && updates.maxPickupDistanceKm > 0) {
+      validUpdates.maxPickupDistanceKm = Math.min(updates.maxPickupDistanceKm, 20);
+    }
+    if (typeof updates.minFareAmount === 'number' && updates.minFareAmount >= 0) {
+      validUpdates.minFareAmount = updates.minFareAmount;
+    }
+    if (typeof updates.minTripDistanceKm === 'number' && updates.minTripDistanceKm >= 0) {
+      validUpdates.minTripDistanceKm = updates.minTripDistanceKm;
+    }
+    if (Array.isArray(updates.activeHours)) {
+      validUpdates.activeHours = updates.activeHours.filter(
+        (h: any) => typeof h === 'number' && h >= 0 && h <= 23
+      );
+    }
+    if (Array.isArray(updates.blacklistedZones)) {
+      validUpdates.blacklistedZones = updates.blacklistedZones.filter(
+        (z: any) => typeof z === 'string'
+      );
+    }
+    if (typeof updates.smartModeEnabled === 'boolean') {
+      validUpdates.smartModeEnabled = updates.smartModeEnabled;
+    }
+    if (typeof updates.autoAcceptThreshold === 'number') {
+      validUpdates.autoAcceptThreshold = Math.max(0, Math.min(100, updates.autoAcceptThreshold));
+    }
+    if (typeof updates.dailyAutoAcceptLimit === 'number' && updates.dailyAutoAcceptLimit > 0) {
+      validUpdates.dailyAutoAcceptLimit = Math.min(updates.dailyAutoAcceptLimit, 100);
+    }
+    if (typeof updates.cooldownMinutes === 'number' && updates.cooldownMinutes >= 0) {
+      validUpdates.cooldownMinutes = Math.min(updates.cooldownMinutes, 30);
+    }
+    if (typeof updates.consecutiveLimit === 'number' && updates.consecutiveLimit > 0) {
+      validUpdates.consecutiveLimit = Math.min(updates.consecutiveLimit, 20);
+    }
+
+    const service = getServiceInstance();
+    const newSettings = await service.updateSettings(driverId, validUpdates);
+
+    res.json({
+      success: true,
+      message: '自動接單設定已更新',
+      settings: {
+        enabled: newSettings.enabled,
+        maxPickupDistanceKm: newSettings.maxPickupDistanceKm,
+        minFareAmount: newSettings.minFareAmount,
+        minTripDistanceKm: newSettings.minTripDistanceKm,
+        activeHours: newSettings.activeHours,
+        blacklistedZones: newSettings.blacklistedZones,
+        smartModeEnabled: newSettings.smartModeEnabled,
+        autoAcceptThreshold: newSettings.autoAcceptThreshold,
+        dailyAutoAcceptLimit: newSettings.dailyAutoAcceptLimit,
+        cooldownMinutes: newSettings.cooldownMinutes,
+        consecutiveLimit: newSettings.consecutiveLimit,
+      }
+    });
+  } catch (error) {
+    console.error('[AutoAccept] 更新設定錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '更新自動接單設定失敗'
+    });
+  }
+});
+
+/**
+ * 獲取司機自動接單統計
+ * GET /api/drivers/:driverId/auto-accept-stats
+ */
+router.get('/:driverId/auto-accept-stats', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+
+  console.log('[AutoAccept] 獲取統計:', driverId);
+
+  try {
+    const service = getServiceInstance();
+    const stats = await service.getAutoAcceptStats(driverId);
+
+    res.json({
+      success: true,
+      stats: {
+        today: {
+          autoAcceptCount: stats.today.autoAcceptCount,
+          manualAcceptCount: stats.today.manualAcceptCount,
+          blockedCount: stats.today.blockedCount,
+          consecutiveAutoAccepts: stats.today.consecutiveAutoAccepts,
+          lastAutoAcceptAt: stats.today.lastAutoAcceptAt?.toISOString() || null,
+        },
+        last7Days: {
+          totalAutoAccepts: stats.last7Days.totalAutoAccepts,
+          totalManual: stats.last7Days.totalManual,
+          totalBlocked: stats.last7Days.totalBlocked,
+          avgScore: Math.round(stats.last7Days.avgScore * 10) / 10,
+          completionRate: Math.round(stats.last7Days.completionRate * 100),
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[AutoAccept] 獲取統計錯誤:', error);
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: '獲取自動接單統計失敗'
     });
   }
 });
