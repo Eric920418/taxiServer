@@ -133,6 +133,22 @@ app.use('/api/earnings', earningsRouter);
 app.use('/api/ratings', ratingsRouter);
 app.use('/api/whisper', whisperRouter);
 
+// Haversine 公式計算兩點間距離（公尺）
+function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000; // 地球半徑（公尺）
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lng2 - lng1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
 // Socket.io 連接處理
 io.on('connection', (socket) => {
   console.log(`[Socket] 新連接: ${socket.id}`);
@@ -229,6 +245,42 @@ io.on('connection', (socket) => {
             last_heartbeat = CURRENT_TIMESTAMP
         WHERE driver_id = $3
       `, [lat, lng, driverId]);
+
+      // 【關鍵】查找該司機是否有進行中的訂單，並轉發位置給乘客
+      const activeOrderResult = await query(`
+        SELECT order_id, passenger_id, pickup_lat, pickup_lng
+        FROM orders
+        WHERE driver_id = $1 AND status IN ('ACCEPTED', 'ARRIVED', 'PICKED_UP', 'ON_TRIP')
+        LIMIT 1
+      `, [driverId]);
+
+      if (activeOrderResult.rows.length > 0) {
+        const activeOrder = activeOrderResult.rows[0];
+        const passengerSocketId = passengerSockets.get(activeOrder.passenger_id);
+
+        if (passengerSocketId) {
+          // 計算司機到上車點的距離（公尺）
+          const pickupLat = parseFloat(activeOrder.pickup_lat);
+          const pickupLng = parseFloat(activeOrder.pickup_lng);
+          const distanceToPickup = calculateDistance(lat, lng, pickupLat, pickupLng);
+
+          // 估算 ETA（假設平均時速 30km/h）
+          const etaMinutes = Math.ceil(distanceToPickup / 1000 / 30 * 60);
+
+          io.to(passengerSocketId).emit('driver:location', {
+            orderId: activeOrder.order_id,
+            driverId,
+            lat,
+            lng,
+            speed: speed || 0,
+            bearing: bearing || 0,
+            distanceToPickup: Math.round(distanceToPickup),
+            etaMinutes,
+            timestamp: Date.now()
+          });
+          console.log(`[Location] 已轉發司機 ${driverId} 位置給乘客 ${activeOrder.passenger_id}，距離: ${Math.round(distanceToPickup)}m, ETA: ${etaMinutes}分`);
+        }
+      }
     } catch (error) {
       console.error('[Location] 更新數據庫失敗:', error);
     }
