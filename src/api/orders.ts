@@ -310,11 +310,14 @@ router.patch('/:orderId/accept', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 已被司機 ${driverName}(${driverId}) 接受`);
 
-    // 查詢完整訂單資訊（包含乘客資訊）
+    // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`
-      SELECT o.*, p.name as passenger_name, p.phone as passenger_phone
+      SELECT o.*,
+             p.name as passenger_name, p.phone as passenger_phone,
+             d.name as driver_name, d.phone as driver_phone
       FROM orders o
       LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
       WHERE o.order_id = $1
     `, [orderId]);
 
@@ -325,7 +328,8 @@ router.patch('/:orderId/accept', async (req, res) => {
       passengerName: fullOrder.passenger_name,
       passengerPhone: fullOrder.passenger_phone,
       driverId: fullOrder.driver_id,
-      driverName: driverName,
+      driverName: fullOrder.driver_name || driverName,
+      driverPhone: fullOrder.driver_phone,
       status: fullOrder.status,
       pickup: {
         lat: parseFloat(fullOrder.pickup_lat),
