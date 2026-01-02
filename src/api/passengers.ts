@@ -114,6 +114,26 @@ router.post('/request-ride', async (req, res) => {
       return res.status(400).json({ error: '缺少必要欄位' });
     }
 
+    // 【重要】檢查乘客是否已有進行中的訂單（防止重複叫車）
+    const existingOrder = await queryOne(`
+      SELECT order_id, status, pickup_address, created_at
+      FROM orders
+      WHERE passenger_id = $1
+        AND status IN ('OFFERED', 'ACCEPTED', 'ARRIVED', 'ON_TRIP', 'SETTLING')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [passengerId]);
+
+    if (existingOrder) {
+      console.log(`[Request Ride] ⚠️ 乘客 ${passengerId} 已有進行中訂單: ${existingOrder.order_id} (狀態: ${existingOrder.status})`);
+      return res.status(409).json({
+        error: 'EXISTING_ORDER',
+        message: `您已有進行中的訂單（狀態：${existingOrder.status}），請先完成或取消該訂單`,
+        existingOrderId: existingOrder.order_id,
+        existingOrderStatus: existingOrder.status
+      });
+    }
+
     // 檢查電話號碼是否已存在（因為有唯一約束）
     let actualPassengerId = passengerId;
     const existingPassengerByPhone = await queryOne(`
