@@ -101,7 +101,10 @@ router.post('/request-ride', async (req, res) => {
     destLat,
     destLng,
     destAddress,
-    paymentType = 'CASH'
+    paymentType = 'CASH',
+    // 乘客端傳入的道路距離和車資（Google Directions API 計算）
+    tripDistanceMeters,
+    estimatedFare: clientEstimatedFare
   } = req.body;
 
   try {
@@ -137,15 +140,23 @@ router.post('/request-ride', async (req, res) => {
       actualPassengerId = passengerId;
     }
 
-    // 計算預估車資（簡易版：基於距離）
+    // 計算預估車資
+    // 優先使用乘客端傳入的車資（基於 Google Directions API 的道路距離）
+    // 若無，則 fallback 到直線距離計算
     let estimatedFare: number | null = null;
-    if (destLat && destLng) {
+    if (clientEstimatedFare) {
+      // 使用乘客端計算的車資（基於實際道路距離）
+      estimatedFare = clientEstimatedFare;
+      console.log(`[Request Ride] 使用乘客端車資: ${estimatedFare} 元 (道路距離: ${tripDistanceMeters ? tripDistanceMeters/1000 : '?'} km)`);
+    } else if (destLat && destLng) {
+      // Fallback: 使用直線距離計算（較不準確）
       const tripDistance = calculateDistance(
         parseFloat(pickupLat), parseFloat(pickupLng),
         parseFloat(destLat), parseFloat(destLng)
       ) / 1000; // 轉換為公里
-      // 花蓮計程車計費：起跳 100 元（1.25km），之後每 200 公尺 5 元
+      // 花蓮計程車計費：起跳 100 元（1.25km），之後每公里 25 元
       estimatedFare = Math.max(100, Math.round(100 + Math.max(0, tripDistance - 1.25) * 25));
+      console.log(`[Request Ride] 使用直線距離計算車資: ${estimatedFare} 元 (直線距離: ${tripDistance.toFixed(2)} km)`);
     }
 
     // 建立訂單（使用 actualPassengerId）
