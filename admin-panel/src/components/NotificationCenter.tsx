@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Drawer,
   List,
@@ -8,8 +8,9 @@ import {
   Button,
   Space,
   Empty,
-  Divider,
   Tabs,
+  Spin,
+  message,
 } from 'antd';
 import {
   BellOutlined,
@@ -21,10 +22,12 @@ import {
   CarOutlined,
   UserOutlined,
   ShoppingCartOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-tw';
+import { notificationAPI } from '../services/api';
 
 dayjs.extend(relativeTime);
 dayjs.locale('zh-tw');
@@ -45,67 +48,63 @@ interface Notification {
 interface NotificationCenterProps {
   visible: boolean;
   onClose: () => void;
+  onUnreadCountChange?: (count: number) => void;
 }
 
-const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClose }) => {
-  const [notifications, setNotifications] = useState<Notification[]>([
-    {
-      id: '1',
-      type: 'warning',
-      category: 'order',
-      title: '訂單糾紛',
-      message: '訂單 #ORD123456 收到乘客投訴，請儘快處理',
-      time: '2025-11-12T10:30:00',
-      read: false,
-    },
-    {
-      id: '2',
-      type: 'info',
-      category: 'driver',
-      title: '新司機註冊',
-      message: '司機 李師傅 已提交註冊申請，等待審核',
-      time: '2025-11-12T10:15:00',
-      read: false,
-    },
-    {
-      id: '3',
-      type: 'error',
-      category: 'system',
-      title: '系統警告',
-      message: '伺服器 CPU 使用率超過 85%，請檢查系統狀態',
-      time: '2025-11-12T09:45:00',
-      read: false,
-    },
-    {
-      id: '4',
-      type: 'success',
-      category: 'passenger',
-      title: '乘客評價',
-      message: '收到 5 則新的 5 星評價',
-      time: '2025-11-12T09:30:00',
-      read: true,
-    },
-    {
-      id: '5',
-      type: 'info',
-      category: 'order',
-      title: '訂單高峰',
-      message: '當前訂單數量激增，建議增加派單效率',
-      time: '2025-11-12T08:00:00',
-      read: true,
-    },
-    {
-      id: '6',
-      type: 'warning',
-      category: 'driver',
-      title: '司機評分過低',
-      message: '司機 張師傅 近期評分降至 3.2 星，請關注',
-      time: '2025-11-11T18:20:00',
-      read: true,
-    },
-  ]);
-
+const NotificationCenter: React.FC<NotificationCenterProps> = ({
+  visible,
+  onClose,
+  onUnreadCountChange
+}) => {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // 載入通知
+  const loadNotifications = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await notificationAPI.getNotifications(
+        activeTab === 'all' || activeTab === 'unread' ? undefined : activeTab,
+        activeTab === 'unread' ? true : undefined,
+        100
+      );
+      if (response.success) {
+        setNotifications(response.data || []);
+        setUnreadCount(response.unreadCount || 0);
+        onUnreadCountChange?.(response.unreadCount || 0);
+      }
+    } catch (error) {
+      console.error('Failed to load notifications:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab, onUnreadCountChange]);
+
+  useEffect(() => {
+    if (visible) {
+      loadNotifications();
+    }
+  }, [visible, loadNotifications]);
+
+  // 定期更新未讀數量
+  useEffect(() => {
+    const checkUnread = async () => {
+      try {
+        const response = await notificationAPI.getNotifications(undefined, true, 1);
+        if (response.success) {
+          setUnreadCount(response.unreadCount || 0);
+          onUnreadCountChange?.(response.unreadCount || 0);
+        }
+      } catch (error) {
+        // 靜默失敗
+      }
+    };
+
+    const interval = setInterval(checkUnread, 30000);
+    return () => clearInterval(interval);
+  }, [onUnreadCountChange]);
 
   const getNotificationIcon = (type: string) => {
     const iconMap: { [key: string]: React.ReactNode } = {
@@ -147,22 +146,63 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
     return textMap[category] || category;
   };
 
-  const handleMarkAsRead = (id: string) => {
-    setNotifications(notifications.map(n =>
-      n.id === id ? { ...n, read: true } : n
-    ));
+  const handleMarkAsRead = async (id: string) => {
+    try {
+      const response = await notificationAPI.markAsRead(id);
+      if (response.success) {
+        setNotifications(notifications.map(n =>
+          n.id === id ? { ...n, read: true } : n
+        ));
+        setUnreadCount(prev => Math.max(0, prev - 1));
+        onUnreadCountChange?.(Math.max(0, unreadCount - 1));
+      }
+    } catch (error) {
+      message.error('標記失敗');
+    }
   };
 
-  const handleMarkAllAsRead = () => {
-    setNotifications(notifications.map(n => ({ ...n, read: true })));
+  const handleMarkAllAsRead = async () => {
+    try {
+      const response = await notificationAPI.markAllAsRead();
+      if (response.success) {
+        setNotifications(notifications.map(n => ({ ...n, read: true })));
+        setUnreadCount(0);
+        onUnreadCountChange?.(0);
+        message.success('已全部標為已讀');
+      }
+    } catch (error) {
+      message.error('操作失敗');
+    }
   };
 
-  const handleDelete = (id: string) => {
-    setNotifications(notifications.filter(n => n.id !== id));
+  const handleDelete = async (id: string) => {
+    try {
+      const response = await notificationAPI.deleteNotification(id);
+      if (response.success) {
+        const deletedNotification = notifications.find(n => n.id === id);
+        setNotifications(notifications.filter(n => n.id !== id));
+        if (deletedNotification && !deletedNotification.read) {
+          setUnreadCount(prev => Math.max(0, prev - 1));
+          onUnreadCountChange?.(Math.max(0, unreadCount - 1));
+        }
+      }
+    } catch (error) {
+      message.error('刪除失敗');
+    }
   };
 
-  const handleClearAll = () => {
-    setNotifications([]);
+  const handleClearAll = async () => {
+    try {
+      const response = await notificationAPI.clearAll();
+      if (response.success) {
+        setNotifications([]);
+        setUnreadCount(0);
+        onUnreadCountChange?.(0);
+        message.success('已清空所有通知');
+      }
+    } catch (error) {
+      message.error('操作失敗');
+    }
   };
 
   const getFilteredNotifications = () => {
@@ -175,7 +215,6 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
     }
   };
 
-  const unreadCount = notifications.filter(n => !n.read).length;
   const filteredNotifications = getFilteredNotifications();
 
   const tabItems = [
@@ -221,10 +260,18 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
         </Space>
       }
       width={500}
-      visible={visible}
+      open={visible}
       onClose={onClose}
       extra={
         <Space>
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            onClick={loadNotifications}
+            loading={loading}
+          >
+            重新整理
+          </Button>
           {unreadCount > 0 && (
             <Button size="small" onClick={handleMarkAllAsRead}>
               全部標為已讀
@@ -238,85 +285,89 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ visible, onClos
     >
       <Tabs
         activeKey={activeTab}
-        onChange={setActiveTab}
+        onChange={(key) => {
+          setActiveTab(key);
+        }}
         items={tabItems}
         style={{ marginBottom: 16 }}
       />
 
-      {filteredNotifications.length === 0 ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="暫無通知"
-          style={{ marginTop: 60 }}
-        />
-      ) : (
-        <List
-          dataSource={filteredNotifications}
-          renderItem={(item) => (
-            <List.Item
-              style={{
-                backgroundColor: item.read ? 'transparent' : '#f0f5ff',
-                padding: '16px',
-                borderRadius: '8px',
-                marginBottom: '8px',
-                border: item.read ? 'none' : '1px solid #d6e4ff',
-              }}
-              actions={[
-                !item.read && (
+      <Spin spinning={loading}>
+        {filteredNotifications.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={loading ? '載入中...' : '暫無通知'}
+            style={{ marginTop: 60 }}
+          />
+        ) : (
+          <List
+            dataSource={filteredNotifications}
+            renderItem={(item) => (
+              <List.Item
+                style={{
+                  backgroundColor: item.read ? 'transparent' : '#f0f5ff',
+                  padding: '16px',
+                  borderRadius: '8px',
+                  marginBottom: '8px',
+                  border: item.read ? 'none' : '1px solid #d6e4ff',
+                }}
+                actions={[
+                  !item.read && (
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<CheckOutlined />}
+                      onClick={() => handleMarkAsRead(item.id)}
+                    >
+                      標為已讀
+                    </Button>
+                  ),
                   <Button
                     type="link"
                     size="small"
-                    icon={<CheckOutlined />}
-                    onClick={() => handleMarkAsRead(item.id)}
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => handleDelete(item.id)}
                   >
-                    標為已讀
-                  </Button>
-                ),
-                <Button
-                  type="link"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={() => handleDelete(item.id)}
-                >
-                  刪除
-                </Button>,
-              ].filter(Boolean)}
-            >
-              <List.Item.Meta
-                avatar={
-                  <div style={{ fontSize: 24 }}>
-                    {getNotificationIcon(item.type)}
-                  </div>
-                }
-                title={
-                  <Space>
-                    <Text strong style={{ fontSize: 14 }}>
-                      {item.title}
-                    </Text>
-                    <Tag
-                      icon={getCategoryIcon(item.category)}
-                      color={getCategoryColor(item.category)}
-                    >
-                      {getCategoryText(item.category)}
-                    </Tag>
-                    {!item.read && <Badge status="processing" />}
-                  </Space>
-                }
-                description={
-                  <div>
-                    <Text>{item.message}</Text>
-                    <br />
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {dayjs(item.time).fromNow()}
-                    </Text>
-                  </div>
-                }
-              />
-            </List.Item>
-          )}
-        />
-      )}
+                    刪除
+                  </Button>,
+                ].filter(Boolean)}
+              >
+                <List.Item.Meta
+                  avatar={
+                    <div style={{ fontSize: 24 }}>
+                      {getNotificationIcon(item.type)}
+                    </div>
+                  }
+                  title={
+                    <Space>
+                      <Text strong style={{ fontSize: 14 }}>
+                        {item.title}
+                      </Text>
+                      <Tag
+                        icon={getCategoryIcon(item.category)}
+                        color={getCategoryColor(item.category)}
+                      >
+                        {getCategoryText(item.category)}
+                      </Tag>
+                      {!item.read && <Badge status="processing" />}
+                    </Space>
+                  }
+                  description={
+                    <div>
+                      <Text>{item.message}</Text>
+                      <br />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {dayjs(item.time).fromNow()}
+                      </Text>
+                    </div>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Spin>
     </Drawer>
   );
 };

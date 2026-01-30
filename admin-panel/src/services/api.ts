@@ -194,6 +194,62 @@ export const statisticsAPI = {
     const response = await api.get('/admin/statistics/realtime');
     return response.data;
   },
+
+  // 新增的統計 API
+  getRevenueTrend: async (days: number = 7): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/revenue-trend', { params: { days } });
+    return response.data;
+  },
+
+  getOrderTrend: async (days: number = 7): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/order-trend', { params: { days } });
+    return response.data;
+  },
+
+  getOrderStatus: async (): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/order-status');
+    return response.data;
+  },
+
+  getPeakHours: async (): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/peak-hours');
+    return response.data;
+  },
+
+  getRecentOrders: async (limit: number = 10): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/recent-orders', { params: { limit } });
+    return response.data;
+  },
+
+  getDriverActivity: async (): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/driver-activity');
+    return response.data;
+  },
+
+  getTopDrivers: async (limit: number = 10): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/top-drivers', { params: { limit } });
+    return response.data;
+  },
+
+  getRegions: async (): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/regions');
+    return response.data;
+  },
+
+  getPaymentMethods: async (): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/payment-methods');
+    return response.data;
+  },
+
+  getRatings: async (): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/ratings');
+    return response.data;
+  },
+
+  getAnalytics: async (days: number = 7): Promise<ApiResponse<any>> => {
+    const response = await api.get('/admin/statistics/analytics', { params: { days } });
+    return response.data;
+  },
 };
 
 // 管理員管理 API
@@ -215,6 +271,56 @@ export const adminAPI = {
 
   deleteAdmin: async (adminId: string): Promise<ApiResponse<void>> => {
     const response = await api.delete(`/admin/users/${adminId}`);
+    return response.data;
+  },
+};
+
+// 通知 API 回應類型
+interface NotificationResponse {
+  success: boolean;
+  data: any[];
+  unreadCount: number;
+  error?: string;
+}
+
+// 通知 API
+export const notificationAPI = {
+  getNotifications: async (category?: string, unreadOnly?: boolean, limit?: number): Promise<NotificationResponse> => {
+    const response = await api.get('/admin/notifications', {
+      params: { category, unreadOnly, limit }
+    });
+    return response.data;
+  },
+
+  markAsRead: async (id: string): Promise<ApiResponse<void>> => {
+    const response = await api.post(`/admin/notifications/${id}/read`);
+    return response.data;
+  },
+
+  markAllAsRead: async (): Promise<ApiResponse<void>> => {
+    const response = await api.post('/admin/notifications/read-all');
+    return response.data;
+  },
+
+  deleteNotification: async (id: string): Promise<ApiResponse<void>> => {
+    const response = await api.delete(`/admin/notifications/${id}`);
+    return response.data;
+  },
+
+  clearAll: async (): Promise<ApiResponse<void>> => {
+    const response = await api.delete('/admin/notifications');
+    return response.data;
+  },
+
+  createNotification: async (data: {
+    type: string;
+    category: string;
+    title: string;
+    message: string;
+    relatedId?: string;
+    link?: string;
+  }): Promise<ApiResponse<any>> => {
+    const response = await api.post('/admin/notifications', data);
     return response.data;
   },
 };

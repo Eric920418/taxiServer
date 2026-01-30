@@ -15,6 +15,7 @@ import authRouter from './api/auth';
 import adminRouter from './api/admin';
 import ratingsRouter from './api/ratings';
 import whisperRouter from './api/whisper';
+import configRouter from './api/config';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 import { onDriverOnline } from './services/OrderDispatcher';
 import { initSmartDispatcherV2, getSmartDispatcherV2 } from './services/SmartDispatcherV2';
@@ -132,6 +133,7 @@ app.use('/api/passengers', passengersRouter);
 app.use('/api/earnings', earningsRouter);
 app.use('/api/ratings', ratingsRouter);
 app.use('/api/whisper', whisperRouter);
+app.use('/api/config', configRouter);
 
 // Haversine 公式計算兩點間距離（公尺）
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {

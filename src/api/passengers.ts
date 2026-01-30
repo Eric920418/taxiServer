@@ -4,6 +4,7 @@ import { broadcastOrderToDrivers, broadcastOrderStatusToDrivers, notifyDriverOrd
 import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 
+import { fareConfigService } from '../services/FareConfigService';
 const router = Router();
 
 /**
@@ -174,8 +175,9 @@ router.post('/request-ride', async (req, res) => {
         parseFloat(pickupLat), parseFloat(pickupLng),
         parseFloat(destLat), parseFloat(destLng)
       ) / 1000; // 轉換為公里
-      // 花蓮計程車計費：起跳 100 元（1.25km），之後每公里 25 元
-      estimatedFare = Math.max(100, Math.round(100 + Math.max(0, tripDistance - 1.25) * 25));
+      // 使用 FareConfigService 計算車資（跳錶制，尾數只有 0 或 5）
+      const fareResult = fareConfigService.calculateFare(tripDistance * 1000);
+      estimatedFare = fareResult.totalFare;
       console.log(`[Request Ride] 使用直線距離計算車資: ${estimatedFare} 元 (直線距離: ${tripDistance.toFixed(2)} km)`);
     }
 

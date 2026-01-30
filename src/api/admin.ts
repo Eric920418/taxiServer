@@ -1376,6 +1376,599 @@ router.put('/hot-zones/:zoneId', async (req: Request, res: Response) => {
 });
 
 /**
+ * 取得即時統計資料
+ * GET /api/admin/statistics/realtime
+ */
+router.get('/statistics/realtime', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    // 取得目前在線司機數
+    const onlineDrivers = await queryOne(
+      `SELECT COUNT(*) as count FROM drivers WHERE availability IN ('available', 'AVAILABLE', 'on_trip', 'ON_TRIP')`
+    );
+
+    // 取得目前進行中的訂單數
+    const activeOrders = await queryOne(
+      `SELECT COUNT(*) as count FROM orders WHERE status IN ('WAITING', 'OFFERED', 'ACCEPTED', 'ARRIVED', 'ON_TRIP')`
+    );
+
+    // 取得今日完成訂單數
+    const todayCompleted = await queryOne(
+      `SELECT COUNT(*) as count FROM orders WHERE status = 'DONE' AND DATE(completed_at) = CURRENT_DATE`
+    );
+
+    // 取得今日取消訂單數
+    const todayCancelled = await queryOne(
+      `SELECT COUNT(*) as count FROM orders WHERE status = 'CANCELLED' AND DATE(cancelled_at) = CURRENT_DATE`
+    );
+
+    res.json({
+      success: true,
+      data: {
+        onlineDrivers: parseInt(onlineDrivers.count),
+        activeOrders: parseInt(activeOrders.count),
+        todayCompleted: parseInt(todayCompleted.count),
+        todayCancelled: parseInt(todayCancelled.count),
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('[Admin API] Get realtime stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得營收趨勢
+ * GET /api/admin/statistics/revenue-trend
+ */
+router.get('/statistics/revenue-trend', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { days = 7 } = req.query;
+  const numDays = Math.min(parseInt(days as string) || 7, 90);
+
+  try {
+    const result = await query(
+      `SELECT
+        DATE(completed_at) as date,
+        COALESCE(SUM(meter_amount), 0) as revenue,
+        COUNT(*) as orders
+      FROM orders
+      WHERE status = 'DONE'
+        AND completed_at >= CURRENT_DATE - INTERVAL '${numDays} days'
+      GROUP BY DATE(completed_at)
+      ORDER BY date ASC`
+    );
+
+    // 補齊沒有資料的日期
+    const data = [];
+    const today = new Date();
+    for (let i = numDays - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+
+      const found = result.rows.find((r: any) =>
+        new Date(r.date).toISOString().split('T')[0] === dateStr
+      );
+
+      data.push({
+        date: dateStr,
+        value: found ? parseFloat(found.revenue) : 0,
+        type: '營收'
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get revenue trend error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得訂單數量趨勢
+ * GET /api/admin/statistics/order-trend
+ */
+router.get('/statistics/order-trend', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { days = 7 } = req.query;
+  const numDays = Math.min(parseInt(days as string) || 7, 90);
+
+  try {
+    const result = await query(
+      `SELECT
+        DATE(created_at) as date,
+        COUNT(*) as orders
+      FROM orders
+      WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays} days'
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC`
+    );
+
+    // 補齊沒有資料的日期
+    const data = [];
+    const today = new Date();
+    for (let i = numDays - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+
+      const found = result.rows.find((r: any) =>
+        new Date(r.date).toISOString().split('T')[0] === dateStr
+      );
+
+      data.push({
+        date: dateStr,
+        value: found ? parseInt(found.orders) : 0,
+        type: '訂單數'
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get order trend error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得訂單狀態分布
+ * GET /api/admin/statistics/order-status
+ */
+router.get('/statistics/order-status', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT
+        CASE
+          WHEN status = 'DONE' THEN '已完成'
+          WHEN status IN ('WAITING', 'OFFERED', 'ACCEPTED', 'ARRIVED', 'ON_TRIP') THEN '進行中'
+          WHEN status = 'CANCELLED' THEN '已取消'
+          ELSE '其他'
+        END as type,
+        COUNT(*) as value
+      FROM orders
+      WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY
+        CASE
+          WHEN status = 'DONE' THEN '已完成'
+          WHEN status IN ('WAITING', 'OFFERED', 'ACCEPTED', 'ARRIVED', 'ON_TRIP') THEN '進行中'
+          WHEN status = 'CANCELLED' THEN '已取消'
+          ELSE '其他'
+        END`
+    );
+
+    res.json({
+      success: true,
+      data: result.rows.map((r: any) => ({
+        type: r.type,
+        value: parseInt(r.value)
+      }))
+    });
+  } catch (error) {
+    console.error('[Admin API] Get order status error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得熱門時段分析
+ * GET /api/admin/statistics/peak-hours
+ */
+router.get('/statistics/peak-hours', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT
+        EXTRACT(HOUR FROM created_at) as hour,
+        COUNT(*) as orders
+      FROM orders
+      WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY EXTRACT(HOUR FROM created_at)
+      ORDER BY hour ASC`
+    );
+
+    // 補齊所有時段
+    const data = [];
+    for (let h = 0; h < 24; h++) {
+      const found = result.rows.find((r: any) => parseInt(r.hour) === h);
+      data.push({
+        hour: `${h.toString().padStart(2, '0')}:00`,
+        orders: found ? parseInt(found.orders) : 0
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get peak hours error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得最近訂單
+ * GET /api/admin/statistics/recent-orders
+ */
+router.get('/statistics/recent-orders', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { limit = 10 } = req.query;
+
+  try {
+    const result = await query(
+      `SELECT
+        o.order_id,
+        p.name as passenger_name,
+        d.name as driver_name,
+        o.status,
+        o.meter_amount as fare,
+        o.created_at
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      ORDER BY o.created_at DESC
+      LIMIT $1`,
+      [parseInt(limit as string) || 10]
+    );
+
+    const now = new Date();
+    const data = result.rows.map((r: any) => {
+      const createdAt = new Date(r.created_at);
+      const diffMs = now.getTime() - createdAt.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+
+      let timeAgo;
+      if (diffMins < 1) timeAgo = '剛剛';
+      else if (diffMins < 60) timeAgo = `${diffMins}分鐘前`;
+      else if (diffMins < 1440) timeAgo = `${Math.floor(diffMins / 60)}小時前`;
+      else timeAgo = `${Math.floor(diffMins / 1440)}天前`;
+
+      return {
+        key: r.order_id,
+        orderId: r.order_id,
+        passenger: r.passenger_name || '未知',
+        driver: r.driver_name || '未指派',
+        status: r.status.toLowerCase(),
+        fare: r.fare ? parseFloat(r.fare) : 0,
+        time: timeAgo
+      };
+    });
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get recent orders error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得司機活躍度分析（24小時）
+ * GET /api/admin/statistics/driver-activity
+ */
+router.get('/statistics/driver-activity', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    // 從 driver_locations 表取得各時段的活躍司機數
+    const result = await query(
+      `SELECT
+        EXTRACT(HOUR FROM recorded_at) as hour,
+        COUNT(DISTINCT driver_id) as active_drivers,
+        COUNT(DISTINCT CASE WHEN on_trip = true THEN driver_id END) as busy_drivers
+      FROM driver_locations
+      WHERE recorded_at >= CURRENT_DATE - INTERVAL '7 days'
+      GROUP BY EXTRACT(HOUR FROM recorded_at)
+      ORDER BY hour ASC`
+    );
+
+    // 補齊所有時段 - 為 grouped column chart 格式化數據
+    const data = [];
+    for (let h = 0; h < 24; h += 3) {
+      const hourData = result.rows.filter((r: any) => {
+        const rHour = parseInt(r.hour);
+        return rHour >= h && rHour < h + 3;
+      });
+
+      const active = hourData.reduce((sum: number, r: any) => sum + parseInt(r.active_drivers || 0), 0);
+      const busy = hourData.reduce((sum: number, r: any) => sum + parseInt(r.busy_drivers || 0), 0);
+
+      const timeStr = `${h.toString().padStart(2, '0')}:00`;
+
+      // 為 grouped chart 生成兩條數據
+      data.push({
+        time: timeStr,
+        active: Math.round(active / 3) || 0,
+        type: '空閒'
+      });
+      data.push({
+        time: timeStr,
+        active: Math.round(busy / 3) || 0,
+        type: '載客中'
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get driver activity error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得頂級司機排行榜
+ * GET /api/admin/statistics/top-drivers
+ */
+router.get('/statistics/top-drivers', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { limit = 10 } = req.query;
+
+  try {
+    const result = await query(
+      `SELECT
+        d.driver_id,
+        d.name,
+        d.total_trips as trips,
+        d.total_earnings as revenue,
+        d.rating,
+        d.acceptance_rate
+      FROM drivers d
+      WHERE d.total_trips > 0
+      ORDER BY d.total_earnings DESC
+      LIMIT $1`,
+      [parseInt(limit as string) || 10]
+    );
+
+    const data = result.rows.map((r: any, index: number) => ({
+      key: r.driver_id,
+      rank: index + 1,
+      name: r.name || '未知',
+      trips: parseInt(r.trips) || 0,
+      revenue: parseInt(r.revenue) || 0,
+      rating: r.rating ? parseFloat(r.rating) : 0,
+      acceptRate: r.acceptance_rate ? parseFloat(r.acceptance_rate) : 0
+    }));
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get top drivers error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得區域熱點分析
+ * GET /api/admin/statistics/regions
+ */
+router.get('/statistics/regions', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    // 根據上車地址統計
+    const result = await query(
+      `SELECT
+        CASE
+          WHEN pickup_address ILIKE '%火車站%' OR pickup_address ILIKE '%車站%' THEN '花蓮火車站'
+          WHEN pickup_address ILIKE '%夜市%' OR pickup_address ILIKE '%東大門%' THEN '東大門夜市'
+          WHEN pickup_address ILIKE '%七星潭%' THEN '七星潭'
+          WHEN pickup_address ILIKE '%太魯閣%' THEN '太魯閣'
+          WHEN pickup_address ILIKE '%機場%' THEN '花蓮機場'
+          WHEN pickup_address ILIKE '%遠百%' OR pickup_address ILIKE '%遠東%' OR pickup_address ILIKE '%中山路%' OR pickup_address ILIKE '%中正路%' THEN '市區商圈'
+          ELSE '其他區域'
+        END as region,
+        COUNT(*) as orders,
+        COALESCE(SUM(meter_amount), 0) as revenue
+      FROM orders
+      WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+        AND pickup_address IS NOT NULL
+      GROUP BY
+        CASE
+          WHEN pickup_address ILIKE '%火車站%' OR pickup_address ILIKE '%車站%' THEN '花蓮火車站'
+          WHEN pickup_address ILIKE '%夜市%' OR pickup_address ILIKE '%東大門%' THEN '東大門夜市'
+          WHEN pickup_address ILIKE '%七星潭%' THEN '七星潭'
+          WHEN pickup_address ILIKE '%太魯閣%' THEN '太魯閣'
+          WHEN pickup_address ILIKE '%機場%' THEN '花蓮機場'
+          WHEN pickup_address ILIKE '%遠百%' OR pickup_address ILIKE '%遠東%' OR pickup_address ILIKE '%中山路%' OR pickup_address ILIKE '%中正路%' THEN '市區商圈'
+          ELSE '其他區域'
+        END
+      ORDER BY orders DESC`
+    );
+
+    res.json({
+      success: true,
+      data: result.rows.map((r: any) => ({
+        region: r.region,
+        orders: parseInt(r.orders),
+        revenue: parseFloat(r.revenue)
+      }))
+    });
+  } catch (error) {
+    console.error('[Admin API] Get regions error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得支付方式分布
+ * GET /api/admin/statistics/payment-methods
+ */
+router.get('/statistics/payment-methods', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT
+        CASE
+          WHEN payment_type = 'CASH' THEN '現金'
+          WHEN payment_type = 'LOVE_CARD_PHYSICAL' THEN '愛心卡'
+          ELSE '其他'
+        END as type,
+        COUNT(*) as value
+      FROM orders
+      WHERE status = 'DONE'
+        AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY
+        CASE
+          WHEN payment_type = 'CASH' THEN '現金'
+          WHEN payment_type = 'LOVE_CARD_PHYSICAL' THEN '愛心卡'
+          ELSE '其他'
+        END
+      ORDER BY value DESC`
+    );
+
+    const total = result.rows.reduce((sum: number, r: any) => sum + parseInt(r.value), 0);
+
+    res.json({
+      success: true,
+      data: result.rows.map((r: any) => ({
+        type: r.type,
+        value: parseInt(r.value),
+        percentage: total > 0 ? Math.round((parseInt(r.value) / total) * 100) : 0
+      })),
+      total
+    });
+  } catch (error) {
+    console.error('[Admin API] Get payment methods error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得評分分布
+ * GET /api/admin/statistics/ratings
+ */
+router.get('/statistics/ratings', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT
+        rating,
+        COUNT(*) as count
+      FROM ratings
+      WHERE to_type = 'driver'
+      GROUP BY rating
+      ORDER BY rating DESC`
+    );
+
+    // 補齊所有評分
+    const data = [];
+    for (let r = 5; r >= 1; r--) {
+      const found = result.rows.find((row: any) => parseInt(row.rating) === r);
+      data.push({
+        rating: `${r}星`,
+        count: found ? parseInt(found.count) : 0
+      });
+    }
+
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('[Admin API] Get ratings error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 取得 Analytics 頁面完整統計資料
+ * GET /api/admin/statistics/analytics
+ */
+router.get('/statistics/analytics', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { days = 7 } = req.query;
+  const numDays = Math.min(parseInt(days as string) || 7, 90);
+
+  try {
+    // 並行取得所有統計資料
+    const [
+      totalRevenue,
+      totalOrders,
+      activeDrivers,
+      activePassengers,
+      prevRevenue,
+      prevOrders,
+      prevDrivers,
+      prevPassengers
+    ] = await Promise.all([
+      // 當前週期
+      queryOne(`SELECT COALESCE(SUM(meter_amount), 0) as value FROM orders WHERE status = 'DONE' AND completed_at >= CURRENT_DATE - INTERVAL '${numDays} days'`),
+      queryOne(`SELECT COUNT(*) as value FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays} days'`),
+      queryOne(`SELECT COUNT(DISTINCT driver_id) as value FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays} days'`),
+      queryOne(`SELECT COUNT(DISTINCT passenger_id) as value FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays} days'`),
+      // 前一週期（用於計算變化百分比）
+      queryOne(`SELECT COALESCE(SUM(meter_amount), 0) as value FROM orders WHERE status = 'DONE' AND completed_at >= CURRENT_DATE - INTERVAL '${numDays * 2} days' AND completed_at < CURRENT_DATE - INTERVAL '${numDays} days'`),
+      queryOne(`SELECT COUNT(*) as value FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays * 2} days' AND created_at < CURRENT_DATE - INTERVAL '${numDays} days'`),
+      queryOne(`SELECT COUNT(DISTINCT driver_id) as value FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays * 2} days' AND created_at < CURRENT_DATE - INTERVAL '${numDays} days'`),
+      queryOne(`SELECT COUNT(DISTINCT passenger_id) as value FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '${numDays * 2} days' AND created_at < CURRENT_DATE - INTERVAL '${numDays} days'`)
+    ]);
+
+    // 計算變化百分比
+    const calcChange = (current: number, prev: number) => {
+      if (prev === 0) return current > 0 ? 100 : 0;
+      return Math.round(((current - prev) / prev) * 1000) / 10;
+    };
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalRevenue: parseFloat(totalRevenue.value),
+          revenueChange: calcChange(parseFloat(totalRevenue.value), parseFloat(prevRevenue.value)),
+          totalOrders: parseInt(totalOrders.value),
+          ordersChange: calcChange(parseInt(totalOrders.value), parseInt(prevOrders.value)),
+          activeDrivers: parseInt(activeDrivers.value),
+          driversChange: calcChange(parseInt(activeDrivers.value), parseInt(prevDrivers.value)),
+          activePassengers: parseInt(activePassengers.value),
+          passengersChange: calcChange(parseInt(activePassengers.value), parseInt(prevPassengers.value))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[Admin API] Get analytics error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
  * 獲取所有熱區統計總覽
  * GET /api/admin/hot-zones/stats/overview
  */
@@ -1420,6 +2013,203 @@ router.get('/hot-zones/stats/overview', async (req: Request, res: Response) => {
       success: false,
       error: 'INTERNAL_ERROR',
       message: '獲取熱區總覽失敗'
+    });
+  }
+});
+
+// ============================================
+// 通知管理 API
+// ============================================
+
+/**
+ * 取得通知列表
+ * GET /api/admin/notifications
+ */
+router.get('/notifications', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { category, unreadOnly, limit = 50 } = req.query;
+
+  try {
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (category && category !== 'all') {
+      whereClause += ` AND category = $${paramIndex}`;
+      params.push(category);
+      paramIndex++;
+    }
+
+    if (unreadOnly === 'true') {
+      whereClause += ` AND is_read = false`;
+    }
+
+    params.push(parseInt(limit as string) || 50);
+
+    const result = await query(
+      `SELECT
+        notification_id as id,
+        type,
+        category,
+        title,
+        message,
+        related_id,
+        link,
+        is_read as read,
+        created_at as time
+      FROM notifications
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex}`,
+      params
+    );
+
+    // 取得未讀數量
+    const unreadCount = await queryOne(
+      'SELECT COUNT(*) as count FROM notifications WHERE is_read = false'
+    );
+
+    res.json({
+      success: true,
+      data: result.rows.map((n: any) => ({
+        ...n,
+        id: n.id.toString(),
+        read: n.read
+      })),
+      unreadCount: parseInt(unreadCount.count)
+    });
+  } catch (error) {
+    console.error('[Admin API] Get notifications error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 標記通知為已讀
+ * POST /api/admin/notifications/:id/read
+ */
+router.post('/notifications/:id/read', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    await query(
+      'UPDATE notifications SET is_read = true WHERE notification_id = $1',
+      [id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('[Admin API] Mark notification as read error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 標記所有通知為已讀
+ * POST /api/admin/notifications/read-all
+ */
+router.post('/notifications/read-all', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await query('UPDATE notifications SET is_read = true WHERE is_read = false');
+
+    res.json({
+      success: true,
+      message: 'All notifications marked as read'
+    });
+  } catch (error) {
+    console.error('[Admin API] Mark all notifications as read error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 刪除通知
+ * DELETE /api/admin/notifications/:id
+ */
+router.delete('/notifications/:id', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    await query('DELETE FROM notifications WHERE notification_id = $1', [id]);
+
+    res.json({
+      success: true,
+      message: 'Notification deleted'
+    });
+  } catch (error) {
+    console.error('[Admin API] Delete notification error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 清空所有通知
+ * DELETE /api/admin/notifications
+ */
+router.delete('/notifications', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await query('DELETE FROM notifications');
+
+    res.json({
+      success: true,
+      message: 'All notifications cleared'
+    });
+  } catch (error) {
+    console.error('[Admin API] Clear notifications error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * 建立通知（內部使用或手動建立）
+ * POST /api/admin/notifications
+ */
+router.post('/notifications', authenticateAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { type, category, title, message, relatedId, link } = req.body;
+
+  try {
+    if (!type || !category || !title || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: type, category, title, message'
+      });
+    }
+
+    const result = await query(
+      `INSERT INTO notifications (type, category, title, message, related_id, link)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING notification_id`,
+      [type, category, title, message, relatedId || null, link || null]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        id: result.rows[0].notification_id
+      }
+    });
+  } catch (error) {
+    console.error('[Admin API] Create notification error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
     });
   }
 });

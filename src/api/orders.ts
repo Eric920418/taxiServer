@@ -10,6 +10,7 @@ import {
   getAllActiveOrders
 } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2 } from '../services/SmartDispatcherV2';
+import { getNotificationService } from '../services/NotificationService';
 
 // 有效的拒單原因（強制選擇）
 const VALID_REJECTION_REASONS = [
@@ -588,6 +589,12 @@ router.patch('/:orderId/status', async (req, res) => {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
     }
 
+    // 產生管理後台通知
+    const notificationService = getNotificationService();
+    if (status === 'CANCELLED') {
+      await notificationService.notifyOrderCancelled(orderId);
+    }
+
     res.json({
       orderId: fullOrder.order_id,
       passengerId: fullOrder.passenger_id,
@@ -719,6 +726,10 @@ async function handleSubmitFare(req: any, res: any) {
     } else {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
     }
+
+    // 產生管理後台通知
+    const notificationService = getNotificationService();
+    await notificationService.notifyOrderCompleted(orderId, meterAmount);
 
     res.json({
       orderId: fullOrder.order_id,
