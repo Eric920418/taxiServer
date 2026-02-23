@@ -16,12 +16,14 @@ import adminRouter from './api/admin';
 import ratingsRouter from './api/ratings';
 import whisperRouter from './api/whisper';
 import configRouter from './api/config';
+import phoneCallsRouter from './api/phone-calls';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 import { onDriverOnline } from './services/OrderDispatcher';
 import { initSmartDispatcherV2, getSmartDispatcherV2 } from './services/SmartDispatcherV2';
 import { initETAService } from './services/ETAService';
 import { initRejectionPredictor } from './services/RejectionPredictor';
 import { initWhisperService } from './services/WhisperService';
+import { initPhoneCallProcessor } from './services/PhoneCallProcessor';
 import pool from './db/connection';
 
 // 載入環境變數
@@ -119,6 +121,14 @@ initRejectionPredictor(pool);
 initSmartDispatcherV2(pool);
 initWhisperService();
 
+// 初始化電話叫車處理管線
+try {
+  initPhoneCallProcessor(pool);
+  console.log('[系統] 電話叫車處理管線已初始化');
+} catch (error) {
+  console.warn('[系統] 電話叫車處理管線初始化失敗（需要 OPENAI_API_KEY）:', (error as Error).message);
+}
+
 console.log('[系統] 智能派單系統 V2 已初始化');
 console.log('[系統] Whisper 語音服務已初始化');
 
@@ -134,6 +144,7 @@ app.use('/api/earnings', earningsRouter);
 app.use('/api/ratings', ratingsRouter);
 app.use('/api/whisper', whisperRouter);
 app.use('/api/config', configRouter);
+app.use('/api/phone-calls', phoneCallsRouter);
 
 // Haversine 公式計算兩點間距離（公尺）
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -289,6 +300,53 @@ io.on('connection', (socket) => {
 
     // 立即廣播給所有在線乘客
     broadcastNearbyDrivers();
+  });
+
+  // 電話叫車：司機確認/修改目的地
+  socket.on('order:destination-confirm', async (data) => {
+    console.log('[PhoneOrder] 司機確認目的地:', data);
+
+    const { orderId, driverId, confirmedAddress, confirmedLat, confirmedLng } = data;
+
+    try {
+      const { query } = require('./db/connection');
+
+      // 更新訂單目的地
+      if (confirmedLat && confirmedLng) {
+        await query(`
+          UPDATE orders
+          SET dropoff_final = $1,
+              dest_lat = $2,
+              dest_lng = $3,
+              dest_address = $1,
+              destination_confirmed = TRUE
+          WHERE order_id = $4
+        `, [confirmedAddress, confirmedLat, confirmedLng, orderId]);
+      } else {
+        await query(`
+          UPDATE orders
+          SET dropoff_final = $1,
+              destination_confirmed = TRUE
+          WHERE order_id = $2
+        `, [confirmedAddress || '司機已確認', orderId]);
+      }
+
+      console.log(`[PhoneOrder] 訂單 ${orderId} 目的地已確認: ${confirmedAddress || '原目的地'}`);
+
+      // 回覆確認結果給司機
+      socket.emit('order:destination-confirmed', {
+        orderId,
+        success: true,
+        confirmedAddress: confirmedAddress || '已確認'
+      });
+    } catch (error) {
+      console.error('[PhoneOrder] 確認目的地失敗:', error);
+      socket.emit('order:destination-confirmed', {
+        orderId,
+        success: false,
+        error: '確認失敗'
+      });
+    }
   });
 
   // 語音對講：轉發語音訊息

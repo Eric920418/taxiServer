@@ -1,7 +1,7 @@
 /**
  * WhisperService - 語音轉文字 + 意圖解析服務
  * 使用 OpenAI Whisper API 進行語音轉錄
- * 使用 GPT-4o-mini 進行自然語言意圖解析
+ * 使用 GPT-4.1-nano 進行自然語言意圖解析
  */
 
 import OpenAI from 'openai';
@@ -112,7 +112,7 @@ class WhisperService {
   private readonly DAILY_LIMIT_MINUTES: number;
   private readonly MONTHLY_BUDGET_USD: number;
   private readonly WHISPER_COST_PER_MINUTE = 0.006;  // USD
-  private readonly GPT_COST_PER_1K_TOKENS = 0.00015; // GPT-4o-mini
+  private readonly GPT_COST_PER_1K_TOKENS = 0.0001; // GPT-4.1-nano
 
   constructor() {
     this.DAILY_LIMIT_MINUTES = parseInt(process.env.WHISPER_DAILY_LIMIT_MINUTES || '60');
@@ -268,7 +268,7 @@ class WhisperService {
     const userPrompt = `司機說：「${transcription}」`;
 
     const response = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-nano',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
@@ -320,7 +320,7 @@ class WhisperService {
     const userPrompt = `乘客說：「${transcription}」`;
 
     const response = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-mini',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }

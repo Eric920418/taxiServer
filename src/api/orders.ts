@@ -192,7 +192,14 @@ router.get('/', async (req, res) => {
         meterAmount: o.meter_amount,
         createdAt: o.created_at,
         acceptedAt: o.accepted_at,
-        completedAt: o.completed_at
+        completedAt: o.completed_at,
+        // 電話叫車欄位
+        source: o.source || 'APP',
+        subsidyType: o.subsidy_type || 'NONE',
+        petPresent: o.pet_present || 'UNKNOWN',
+        petCarrier: o.pet_carrier || 'UNKNOWN',
+        customerPhone: o.customer_phone,
+        destinationConfirmed: o.destination_confirmed || false
       })),
       total: orders.length
     });
@@ -241,7 +248,16 @@ router.get('/:orderId', async (req, res) => {
       acceptedAt: order.accepted_at,
       arrivedAt: order.arrived_at,
       startedAt: order.started_at,
-      completedAt: order.completed_at
+      completedAt: order.completed_at,
+      // 電話叫車欄位
+      source: order.source || 'APP',
+      subsidyType: order.subsidy_type || 'NONE',
+      petPresent: order.pet_present || 'UNKNOWN',
+      petCarrier: order.pet_carrier || 'UNKNOWN',
+      petNote: order.pet_note,
+      customerPhone: order.customer_phone,
+      destinationConfirmed: order.destination_confirmed || false,
+      callId: order.call_id
     });
   } catch (error) {
     console.error('[Get Order] 錯誤:', error);

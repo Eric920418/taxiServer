@@ -48,6 +48,12 @@ export interface OrderData {
   paymentType: string;
   estimatedFare?: number;
   createdAt: number;
+  // 電話叫車擴展欄位
+  source?: string;           // PHONE/APP/LINE
+  subsidyType?: string;      // SENIOR_CARD/LOVE_CARD/PENDING/NONE
+  petPresent?: string;       // YES/NO/UNKNOWN
+  petCarrier?: string;       // YES/NO/UNKNOWN
+  customerPhone?: string;    // 來電號碼
 }
 
 export interface DriverScore {
@@ -444,6 +450,13 @@ export class SmartDispatcherV2 {
             allowed: driver.autoAcceptAllowed || false,
             blockReason: driver.autoAcceptBlockReason || null,
           },
+          // 電話叫車欄位
+          source: state.order.source || 'APP',
+          subsidyType: state.order.subsidyType || 'NONE',
+          petPresent: state.order.petPresent || 'UNKNOWN',
+          petCarrier: state.order.petCarrier || 'UNKNOWN',
+          customerPhone: state.order.customerPhone || null,
+          destinationConfirmed: false,
         };
 
         io.to(socketId).emit('order:offer', orderOffer);
@@ -503,7 +516,7 @@ export class SmartDispatcherV2 {
     count: number,
     excludeDrivers: Set<string>
   ): Promise<DriverScore[]> {
-    const availableDrivers = await this.getAvailableDrivers(excludeDrivers);
+    const availableDrivers = await this.getAvailableDrivers(excludeDrivers, order);
 
     if (availableDrivers.length === 0) {
       return [];
@@ -977,7 +990,7 @@ export class SmartDispatcherV2 {
   /**
    * 獲取可用司機
    */
-  private async getAvailableDrivers(excludeDrivers: Set<string>): Promise<any[]> {
+  private async getAvailableDrivers(excludeDrivers: Set<string>, order?: OrderData): Promise<any[]> {
     // 從內存獲取在線司機
     const onlineDriverIds = Array.from(driverSockets.keys()).filter(
       id => !excludeDrivers.has(id)
@@ -985,6 +998,17 @@ export class SmartDispatcherV2 {
 
     if (onlineDriverIds.length === 0) {
       return [];
+    }
+
+    // 建立能力過濾條件
+    let capabilityFilter = '';
+    if (order?.subsidyType === 'SENIOR_CARD') {
+      capabilityFilter += ' AND d.can_senior_card = TRUE';
+    } else if (order?.subsidyType === 'LOVE_CARD') {
+      capabilityFilter += ' AND d.can_love_card = TRUE';
+    }
+    if (order?.petPresent === 'YES') {
+      capabilityFilter += ' AND d.can_pet = TRUE';
     }
 
     // 從資料庫獲取司機詳細資訊
@@ -999,13 +1023,21 @@ export class SmartDispatcherV2 {
         d.current_lng,
         d.acceptance_rate,
         d.driver_type,
+        d.can_senior_card,
+        d.can_love_card,
+        d.can_pet,
         COALESCE(de.total_trips, 0) as today_trips,
         COALESCE(de.online_hours, 0) as online_hours
       FROM drivers d
       LEFT JOIN daily_earnings de ON d.driver_id = de.driver_id AND de.date = CURRENT_DATE
       WHERE d.driver_id = ANY($1)
         AND d.availability IN ('AVAILABLE', 'REST')
+        ${capabilityFilter}
     `, [onlineDriverIds]);
+
+    if (order?.subsidyType && order.subsidyType !== 'NONE') {
+      console.log(`[SmartDispatcherV2] 能力過濾: subsidyType=${order.subsidyType}, petPresent=${order.petPresent} → ${result.rows.length}/${onlineDriverIds.length} 位司機符合`);
+    }
 
     // 補充實時位置
     return result.rows.map(row => {

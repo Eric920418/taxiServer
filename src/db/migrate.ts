@@ -10,6 +10,7 @@ const MIGRATIONS = {
   'ratings': 'add-ratings-table.sql',
   'fcm-token': 'add-fcm-token-columns.sql',
   'smart-dispatch': '001-smart-dispatch-tables.sql',  // 智能派單系統 V2
+  'phone-order': '004-phone-order-tables.sql',        // 電話叫車系統
 };
 
 /**
