@@ -136,7 +136,7 @@ export class CallFieldExtractor {
     hasActiveOrder: boolean,
     activeOrderInfo?: { orderId: string; status: string; pickupAddress: string }
   ): Promise<EventClassification> {
-    const systemPrompt = `你是計程車電話叫車系統的意圖分類器。根據通話內容判斷來電者的意圖。
+    const systemPrompt = `你是計程車電話叫車系統的意圖分類器。根據通話內容判斷來電者的意圖。請以 json 格式回覆。
 
 ## 背景資訊
 ${hasActiveOrder
@@ -199,7 +199,7 @@ ${hasActiveOrder
    * 建立欄位提取 prompt
    */
   private buildExtractionPrompt(): string {
-    return `你是花蓮計程車電話叫車系統的欄位提取器。從客戶電話錄音的轉錄文本中提取訂單資訊。
+    return `你是花蓮計程車電話叫車系統的欄位提取器。從客戶電話錄音的轉錄文本中提取訂單資訊。請以 json 格式回覆。
 
 ## 花蓮常用地標對照
 - 火車站/車站 → 花蓮火車站
