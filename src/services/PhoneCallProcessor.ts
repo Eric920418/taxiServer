@@ -56,7 +56,7 @@ export class PhoneCallProcessor {
     this.openai = new OpenAI({ apiKey });
     this.fieldExtractor = new CallFieldExtractor(this.openai);
     this.googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY || '';
-    this.recordingsBasePath = process.env.RECORDINGS_PATH || '/var/lib/3cx/recordings';
+    this.recordingsBasePath = process.env.RECORDINGS_PATH || '/var/spool/asterisk/recording';
   }
 
   /**
