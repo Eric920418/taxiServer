@@ -417,6 +417,14 @@ export class PhoneCallProcessor {
   ): Promise<string> {
     const orderId = `ORD${Date.now()}`;
     const now = new Date();
+    const passengerId = `PHONE_${call.callerNumber}`;
+
+    // 確保電話乘客記錄存在
+    await this.pool.query(`
+      INSERT INTO passengers (passenger_id, name, phone)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (passenger_id) DO UPDATE SET phone = $3, updated_at = CURRENT_TIMESTAMP
+    `, [passengerId, fields.customer_name || `來電 ${call.callerNumber}`, call.callerNumber]);
 
     await this.pool.query(`
       INSERT INTO orders (
@@ -442,7 +450,7 @@ export class PhoneCallProcessor {
       )
     `, [
       orderId,
-      `PHONE_${call.callerNumber}`,
+      passengerId,
       pickup.lat, pickup.lng, pickup.formattedAddress,
       dest?.lat || null, dest?.lng || null, dest?.formattedAddress || null,
       fields.subsidy_type !== 'NONE' ? 'SUBSIDY' : 'CASH',
