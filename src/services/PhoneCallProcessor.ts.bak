@@ -84,23 +84,6 @@ export class PhoneCallProcessor {
       console.log(`[PhoneCallProcessor] 轉錄結果: "${transcript}"`);
       await this.updateTranscript(callId, transcript);
 
-      // 3.5 Whisper 幻覺偵測 + 錄音品質檢查
-      const HALLUCINATION_PATTERNS = [
-        '請不吝點贊', '訂閱轉發', '明鏡與點點', '感謝收看',
-        'Thank you for watching', 'Please subscribe', '字幕由',
-        '謝謝觀看', '感谢收看', '请不吝点赞', '小編'
-      ];
-      const isHallucination = HALLUCINATION_PATTERNS.some(p => transcript.includes(p));
-      const fileStat = fs.statSync(audioPath);
-      const isTooShort = fileStat.size < 48000; // < 3秒 (8kHz * 2bytes * 3s)
-
-      if (isHallucination || isTooShort) {
-        const reason = isHallucination ? `STT幻覺: ${transcript.substring(0, 50)}` : `錄音過短: ${fileStat.size} bytes`;
-        console.log(`[PhoneCallProcessor] ⚠️ 錄音品質不足: ${reason}`);
-        await this.markFailed(callId, `錄音品質不足：${reason}`);
-        return;
-      }
-
       // 4. 事件判定（新訂單 or 跟進電話）
       await this.updateStatus(callId, 'PARSING');
       const activeOrder = await this.findActiveOrderByPhone(call.callerNumber);
@@ -213,14 +196,9 @@ export class PhoneCallProcessor {
       console.log(`[PhoneCallProcessor] 派單結果:`, dispatchResult);
 
       await this.updateStatus(callId, 'COMPLETED');
-    } catch (dispatchError: any) {
+    } catch (dispatchError) {
       console.error('[PhoneCallProcessor] 派單失敗:', dispatchError);
-      // 電話訂單派單失敗時保持 PENDING，等司機上線後重新派單
-      console.log(`[PhoneCallProcessor] 電話訂單保持 PENDING，等待司機上線: ${orderId}`);
-      await this.pool.query(
-        `UPDATE orders SET status = 'PENDING', cancel_reason = NULL WHERE order_id = $1`,
-        [orderId]
-      );
+      // 派單失敗不影響訂單建立
       await this.updateStatus(callId, 'COMPLETED');
     }
   }

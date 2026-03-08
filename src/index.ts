@@ -35,7 +35,9 @@ const io = new Server(httpServer, {
   cors: {
     origin: '*', // 開發階段允許所有來源，生產環境要改
     methods: ['GET', 'POST']
-  }
+  },
+  pingInterval: 25000,   // 每 25 秒 ping
+  pingTimeout: 20000,    // 20 秒內沒回應才斷開
 });
 
 const PORT = process.env.PORT || 3000;
@@ -192,6 +194,55 @@ io.on('connection', (socket) => {
       onDriverOnline(driverId);
 
       // SmartDispatcherV2 會在派單時動態查詢在線司機，無需額外通知
+
+      // 檢查待派發的電話訂單（30分鐘內）
+      try {
+        const pendingPhoneOrders = await query(`
+          SELECT order_id FROM orders
+          WHERE status = 'PENDING' AND source = 'PHONE'
+            AND created_at > NOW() - INTERVAL '30 minutes'
+          ORDER BY created_at ASC LIMIT 1
+        `);
+        if (pendingPhoneOrders.rows.length > 0) {
+          const pendingOrderId = pendingPhoneOrders.rows[0].order_id;
+          console.log(`[Driver] 有待派發電話訂單: ${pendingOrderId}，延遲 2 秒後重新派單`);
+          setTimeout(async () => {
+            try {
+              const dispatcher = getSmartDispatcherV2();
+              const orderResult = await query(`
+                SELECT * FROM orders WHERE order_id = $1
+              `, [pendingOrderId]);
+              if (orderResult.rows.length > 0) {
+                const order = orderResult.rows[0];
+                await dispatcher.startDispatch({
+                  orderId: order.order_id,
+                  passengerId: order.passenger_id,
+                  passengerName: order.passenger_id,
+                  passengerPhone: order.customer_phone || '',
+                  pickup: {
+                    lat: parseFloat(order.pickup_lat),
+                    lng: parseFloat(order.pickup_lng),
+                    address: order.pickup_address || ''
+                  },
+                  destination: order.dest_lat ? {
+                    lat: parseFloat(order.dest_lat),
+                    lng: parseFloat(order.dest_lng),
+                    address: order.dest_address || ''
+                  } : null,
+                  paymentType: order.payment_type || 'CASH',
+                  createdAt: new Date(order.created_at).getTime(),
+                  source: 'PHONE'
+                });
+                console.log(`[Driver] 電話訂單 ${pendingOrderId} 重新派單成功`);
+              }
+            } catch (err) {
+              console.error(`[Driver] 重新派單失敗:`, err);
+            }
+          }, 2000);
+        }
+      } catch (pendingErr) {
+        console.error('[Driver] 檢查待派發電話訂單失敗:', pendingErr);
+      }
     } catch (error) {
       console.error('[Driver] 更新上線狀態失敗:', error);
       console.log(`[Driver] ${driverId} 已上線，Socket: ${socket.id}`);
