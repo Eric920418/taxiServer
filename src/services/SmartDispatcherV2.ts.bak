@@ -1022,6 +1022,7 @@ export class SmartDispatcherV2 {
         d.current_lat,
         d.current_lng,
         d.acceptance_rate,
+        d.driver_type,
         d.can_senior_card,
         d.can_love_card,
         d.can_pet,
@@ -1049,7 +1050,7 @@ export class SmartDispatcherV2 {
         currentLat: realtimeLocation?.lat || parseFloat(row.current_lat) || 23.9933,
         currentLng: realtimeLocation?.lng || parseFloat(row.current_lng) || 121.6011,
         acceptanceRate: parseFloat(row.acceptance_rate) || 80,
-        driverType: 'HIGH_VOLUME',
+        driverType: row.driver_type || 'HIGH_VOLUME',
         todayTrips: parseInt(row.today_trips) || 0,
         onlineHours: parseFloat(row.online_hours) || 0,
       };
