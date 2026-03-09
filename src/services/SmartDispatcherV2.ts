@@ -423,6 +423,8 @@ export class SmartDispatcherV2 {
           pickup: state.order.pickup,
           destination: state.order.destination,
           paymentType: state.order.paymentType,
+          // Android 端需要此欄位判斷訂單狀態，缺少時預設 WAITING 導致訂單卡不顯示
+          status: 'OFFERED',
           // 派單資訊
           batchNumber,
           estimatedFare: baseFare,
