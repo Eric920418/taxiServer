@@ -1216,9 +1216,12 @@ export class SmartDispatcherV2 {
          SET accepted_by = $1,
              accepted_at = CURRENT_TIMESTAMP,
              response_time_ms = $2
-         WHERE order_id = $3
-         ORDER BY batch_number DESC
-         LIMIT 1`,
+         WHERE log_id = (
+           SELECT log_id FROM dispatch_logs
+           WHERE order_id = $3
+           ORDER BY batch_number DESC
+           LIMIT 1
+         )`,
         [driverId, responseTime, orderId]
       );
     } catch (error) {

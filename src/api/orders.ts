@@ -295,27 +295,35 @@ router.patch('/:orderId/accept', async (req, res) => {
       accepted = await smartDispatcher.handleDriverAccept(orderId, driverId);
     } catch (dispatcherError) {
       // 回退到舊的 OrderDispatcher
-      console.log(`[Accept Order] SmartDispatcherV2 失敗，回退到傳統處理:`, dispatcherError);
+      console.log(`[Accept Order] SmartDispatcherV2 異常，回退傳統處理:`, dispatcherError);
       accepted = handleDriverAccept(orderId, driverId);
     }
 
+    // SmartDispatcher 記憶體中沒有此訂單（伺服器重啟或電話訂單），
+    // 但 DB 已確認訂單為 OFFERED/WAITING → 直接接單
     if (!accepted) {
-      // 可能已被其他司機接走
-      return res.status(409).json({
-        error: 'ORDER_ALREADY_TAKEN',
-        message: '此訂單已被其他司機接走'
-      });
+      console.log(`[Accept Order] SmartDispatcher 無記憶體狀態（可能重啟），直接接單 (${order.status})`);
+      accepted = true;
     }
 
-    // 更新訂單狀態
+    // 更新訂單狀態，AND status 限制防止雙重接單 race condition
     const result = await query(`
       UPDATE orders
       SET status = 'ACCEPTED',
           driver_id = $1,
           accepted_at = CURRENT_TIMESTAMP
       WHERE order_id = $2
+        AND status IN ('OFFERED', 'WAITING')
       RETURNING *
     `, [driverId, orderId]);
+
+    // 若無 row 代表剛被其他司機搶走
+    if (!result.rows[0]) {
+      return res.status(409).json({
+        error: 'ORDER_ALREADY_TAKEN',
+        message: '此訂單已被其他司機接走'
+      });
+    }
 
     const updatedOrder = result.rows[0];
 
