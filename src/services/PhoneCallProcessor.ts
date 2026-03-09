@@ -151,8 +151,9 @@ export class PhoneCallProcessor {
     console.log(`[PhoneCallProcessor] 處理新訂單...`);
 
     // GPT 欄位提取
+    console.log('[PhoneCall] 轉錄原文:', transcript);
     const parsedFields = await this.fieldExtractor.extractFields(transcript);
-    console.log(`[PhoneCallProcessor] 解析結果:`, JSON.stringify(parsedFields, null, 2));
+    console.log('[PhoneCall] GPT提取:', JSON.stringify(parsedFields));
     await this.updateParsedFields(callId, parsedFields);
 
     // 地址 Geocoding
@@ -161,9 +162,11 @@ export class PhoneCallProcessor {
 
     if (parsedFields.pickup_address) {
       pickupGeo = await this.geocodeAddress(parsedFields.pickup_address);
+      console.log('[PhoneCall] 上車Geocoding:', JSON.stringify(pickupGeo));
     }
     if (parsedFields.destination_address) {
       destGeo = await this.geocodeAddress(parsedFields.destination_address);
+      console.log('[PhoneCall] 目的地Geocoding:', JSON.stringify(destGeo));
     }
 
     // 如果上車點無法 geocoding，使用花蓮市中心作為預設
@@ -395,7 +398,9 @@ export class PhoneCallProcessor {
   }
 
   /**
-   * Google Places Geocoding
+   * 兩段式地址 Geocoding：
+   * 1. 街道地址 → Geocoding API（精確）
+   * 2. 地標/景點或 Geocoding 失敗 → Places Text Search（帶 location bias）
    */
   private async geocodeAddress(address: string): Promise<GeocodingResult | null> {
     if (!this.googleMapsApiKey) {
@@ -403,10 +408,66 @@ export class PhoneCallProcessor {
       return null;
     }
 
-    try {
-      const encodedAddress = encodeURIComponent(`${address} 花蓮`);
-      const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodedAddress}&key=${this.googleMapsApiKey}&language=zh-TW&region=tw`;
+    const isStreetAddress = /[路街道巷弄號]/i.test(address);
 
+    if (isStreetAddress) {
+      const result = await this.geocodeWithGeocodingAPI(address);
+      if (result) return result;
+      console.warn(`[PhoneCallProcessor] Geocoding API 無結果，改用 Places Search: ${address}`);
+    }
+
+    return await this.geocodeWithPlacesSearch(address);
+  }
+
+  /**
+   * Geocoding API - 專門處理街道門牌地址
+   */
+  private async geocodeWithGeocodingAPI(address: string): Promise<GeocodingResult | null> {
+    const HUALIEN_TOWNSHIPS = ['吉安', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
+    const hasTownship = HUALIEN_TOWNSHIPS.some(t => address.includes(t));
+    const alreadyHasPrefix = address.startsWith('花蓮');
+    const prefix = hasTownship ? '花蓮縣' : '花蓮縣花蓮市';
+    const fullAddress = alreadyHasPrefix ? address : `${prefix}${address}`;
+
+    try {
+      const url = `https://maps.googleapis.com/maps/api/geocode/json`
+        + `?address=${encodeURIComponent(fullAddress)}`
+        + `&language=zh-TW&region=tw`
+        + `&components=country:TW`
+        + `&key=${this.googleMapsApiKey}`;
+
+      console.log(`[PhoneCallProcessor] Geocoding API 查詢: ${fullAddress}`);
+      const response = await fetch(url);
+      const data = await response.json() as any;
+
+      if (data.results && data.results.length > 0) {
+        const result = data.results[0];
+        return {
+          lat: result.geometry.location.lat,
+          lng: result.geometry.location.lng,
+          formattedAddress: result.formatted_address || fullAddress
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('[PhoneCallProcessor] Geocoding API 失敗:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Places Text Search - 處理地標/景點，附帶花蓮縣 location bias
+   */
+  private async geocodeWithPlacesSearch(address: string): Promise<GeocodingResult | null> {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/place/textsearch/json`
+        + `?query=${encodeURIComponent(`${address} 花蓮`)}`
+        + `&location=23.9871,121.6015&radius=80000`
+        + `&language=zh-TW&region=tw`
+        + `&key=${this.googleMapsApiKey}`;
+
+      console.log(`[PhoneCallProcessor] Places Search 查詢: ${address} 花蓮`);
       const response = await fetch(url);
       const data = await response.json() as any;
 
@@ -419,10 +480,10 @@ export class PhoneCallProcessor {
         };
       }
 
-      console.warn(`[PhoneCallProcessor] Geocoding 無結果: ${address}`);
+      console.warn(`[PhoneCallProcessor] Places Search 無結果: ${address}`);
       return null;
     } catch (error) {
-      console.error('[PhoneCallProcessor] Geocoding 失敗:', error);
+      console.error('[PhoneCallProcessor] Places Search 失敗:', error);
       return null;
     }
   }
