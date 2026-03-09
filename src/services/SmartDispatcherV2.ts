@@ -459,6 +459,7 @@ export class SmartDispatcherV2 {
           destinationConfirmed: false,
         };
 
+        console.log(`[SmartDispatcherV2] ✅ 推送 order:offer 給司機 ${driver.driverId} (socket: ${socketId})`);
         io.to(socketId).emit('order:offer', orderOffer);
 
         // 記錄自動接單決策
@@ -486,6 +487,8 @@ export class SmartDispatcherV2 {
 
         console.log(`  -> 推送給司機 ${driver.driverId} (${driver.driverName}), 評分: ${driver.totalScore.toFixed(1)}, 自動接單: ${driver.autoAcceptAllowed ? '✓' : '✗'}`);
         state.allOfferedDriverIds.add(driver.driverId);
+      } else {
+        console.error(`[SmartDispatcherV2] ❌ 司機 ${driver.driverId} socket 不存在，無法推送`);
       }
     }
 
@@ -991,6 +994,9 @@ export class SmartDispatcherV2 {
    * 獲取可用司機
    */
   private async getAvailableDrivers(excludeDrivers: Set<string>, order?: OrderData): Promise<any[]> {
+    // 派單診斷：顯示當前在線司機
+    console.log(`[SmartDispatcherV2] driverSockets 當前有 ${driverSockets.size} 位司機: [${Array.from(driverSockets.keys()).join(', ')}]`);
+
     // 從內存獲取在線司機
     const onlineDriverIds = Array.from(driverSockets.keys()).filter(
       id => !excludeDrivers.has(id)
