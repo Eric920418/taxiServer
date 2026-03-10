@@ -949,6 +949,10 @@ export class SmartDispatcherV2 {
 
     console.log(`[SmartDispatcherV2] 訂單 ${orderId} 失敗: ${reason}`);
 
+    // ALL_REJECTED：所有司機拒絕但訂單仍有效，保持 OFFERED 讓司機可手動接單
+    // 其他原因：真正取消
+    const shouldCancel = reason !== 'ALL_REJECTED';
+
     // 更新狀態
     state.status = 'CANCELLED';
 
@@ -957,31 +961,39 @@ export class SmartDispatcherV2 {
     if (state.orderTimeoutTimer) clearTimeout(state.orderTimeoutTimer);
 
     // 更新資料庫
-    const cancelReason = {
-      NO_DRIVERS: '目前沒有可用司機',
-      ALL_REJECTED: '所有司機都已拒絕',
-      MAX_BATCHES: '超過最大派單次數',
-      TIMEOUT: '派單超時',
-    }[reason];
+    if (shouldCancel) {
+      const cancelReason = {
+        NO_DRIVERS: '目前沒有可用司機',
+        MAX_BATCHES: '超過最大派單次數',
+        TIMEOUT: '派單超時',
+      }[reason as 'NO_DRIVERS' | 'MAX_BATCHES' | 'TIMEOUT'] || '派單失敗';
 
-    await this.pool.query(
-      `UPDATE orders
-       SET status = 'CANCELLED',
-           cancelled_at = CURRENT_TIMESTAMP,
-           cancel_reason = $1
-       WHERE order_id = $2`,
-      [cancelReason, orderId]
-    );
+      await this.pool.query(
+        `UPDATE orders
+         SET status = 'CANCELLED',
+             cancelled_at = CURRENT_TIMESTAMP,
+             cancel_reason = $1
+         WHERE order_id = $2`,
+        [cancelReason, orderId]
+      );
+    } else {
+      // ALL_REJECTED：訂單回到 OFFERED，允許司機手動接單
+      await this.pool.query(
+        `UPDATE orders SET status = 'OFFERED' WHERE order_id = $1`,
+        [orderId]
+      );
+      console.log(`[SmartDispatcherV2] 訂單 ${orderId} 所有司機拒絕，保持 OFFERED 等待手動接單`);
+    }
 
     // 通知乘客
     this.notifyPassengerDispatchProgress(state.order.passengerId, {
       orderId,
-      status: 'CANCELLED',
+      status: shouldCancel ? 'CANCELLED' : 'OFFERED',
       dispatchStatus: 'FAILED',
       currentBatch: state.currentBatch,
       offeredToCount: state.allOfferedDriverIds.size,
-      message: cancelReason,
-      cancelReason,
+      message: shouldCancel ? '目前無可用司機' : '所有司機都已拒絕，等待手動接單',
+      cancelReason: shouldCancel ? '目前無可用司機' : undefined,
     });
 
     // 從活動訂單移除
