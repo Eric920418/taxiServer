@@ -27,6 +27,7 @@ import type { ColumnsType } from 'antd/es/table';
 const { Text, Paragraph } = Typography;
 const { Option } = Select;
 
+// 後端回傳 camelCase
 interface ParsedFields {
   pickup?: string;
   destination?: string;
@@ -36,16 +37,16 @@ interface ParsedFields {
 }
 
 interface PhoneCall {
-  id: string;
-  caller_number: string;
-  created_at: string;
-  duration_seconds: number | null;
+  callId: string;
+  callerNumber: string;
+  createdAt: string;
+  durationSeconds: number | null;
   transcript: string | null;
-  processing_status: string;
-  event_type: string | null;
-  order_id: string | null;
-  parsed_fields: ParsedFields | null;
-  error_message: string | null;
+  processingStatus: string;
+  eventType: string | null;
+  orderId: string | null;
+  parsedFields: ParsedFields | null;
+  errorMessage: string | null;
 }
 
 const EVENT_TYPE_MAP: Record<string, { label: string; color: string }> = {
@@ -60,6 +61,7 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   FAILED: { label: '失敗', color: 'error' },
   PROCESSING: { label: '處理中', color: 'processing' },
   PENDING: { label: '待處理', color: 'default' },
+  RECEIVED: { label: '已接收', color: 'default' },
 };
 
 const PhoneCalls: React.FC = () => {
@@ -74,17 +76,17 @@ const PhoneCalls: React.FC = () => {
   const fetchRecords = useCallback(async (page = 1, pageSize = 20) => {
     setLoading(true);
     try {
-      const res = await phoneCallAPI.list({
-        page,
-        pageSize,
-        status: statusFilter || undefined,
-        callerNumber: callerSearch || undefined,
-      });
-      const data = res.data;
-      // 後端可能回傳 { data: [...], total: N } 或 { success, data: { records, total } }
-      const items: PhoneCall[] = data?.data?.records ?? data?.data ?? data?.records ?? [];
-      const total: number = data?.data?.total ?? data?.total ?? items.length;
-      setRecords(items);
+      const res = await phoneCallAPI.list({ page, pageSize, status: statusFilter });
+      // 後端回傳 { calls: [...], total: N }
+      const calls: PhoneCall[] = res.data?.calls ?? [];
+      const total: number = res.data?.total ?? calls.length;
+
+      // 若有搜尋號碼，在前端篩選（後端不支援此參數）
+      const filtered = callerSearch
+        ? calls.filter(c => c.callerNumber?.includes(callerSearch))
+        : calls;
+
+      setRecords(filtered);
       setPagination({ current: page, pageSize, total });
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } }; message?: string };
@@ -111,18 +113,18 @@ const PhoneCalls: React.FC = () => {
   const columns: ColumnsType<PhoneCall> = [
     {
       title: '時間',
-      dataIndex: 'created_at',
+      dataIndex: 'createdAt',
       width: 120,
       render: (v: string) => v ? dayjs(v).format('MM/DD HH:mm') : '—',
     },
     {
       title: '來電號碼',
-      dataIndex: 'caller_number',
+      dataIndex: 'callerNumber',
       width: 130,
     },
     {
       title: '通話時長',
-      dataIndex: 'duration_seconds',
+      dataIndex: 'durationSeconds',
       width: 90,
       render: (v: number | null) => v != null ? `${v} 秒` : '—',
     },
@@ -141,7 +143,7 @@ const PhoneCalls: React.FC = () => {
     },
     {
       title: '事件類型',
-      dataIndex: 'event_type',
+      dataIndex: 'eventType',
       width: 100,
       render: (v: string | null) => {
         if (!v) return '—';
@@ -151,7 +153,7 @@ const PhoneCalls: React.FC = () => {
     },
     {
       title: '狀態',
-      dataIndex: 'processing_status',
+      dataIndex: 'processingStatus',
       width: 100,
       render: (v: string) => {
         const info = STATUS_MAP[v] || { label: v, color: 'default' };
@@ -160,7 +162,7 @@ const PhoneCalls: React.FC = () => {
     },
     {
       title: '關聯訂單',
-      dataIndex: 'order_id',
+      dataIndex: 'orderId',
       width: 120,
       render: (v: string | null) => v || '—',
     },
@@ -197,7 +199,6 @@ const PhoneCalls: React.FC = () => {
           </Button>
         }
       >
-        {/* 篩選列 */}
         <Row gutter={12} style={{ marginBottom: 16 }}>
           <Col>
             <Select
@@ -211,6 +212,7 @@ const PhoneCalls: React.FC = () => {
               <Option value="FAILED">失敗</Option>
               <Option value="PROCESSING">處理中</Option>
               <Option value="PENDING">待處理</Option>
+              <Option value="RECEIVED">已接收</Option>
             </Select>
           </Col>
           <Col>
@@ -232,7 +234,7 @@ const PhoneCalls: React.FC = () => {
         <Table<PhoneCall>
           columns={columns}
           dataSource={records}
-          rowKey="id"
+          rowKey="callId"
           loading={loading}
           pagination={{
             current: pagination.current,
@@ -258,38 +260,38 @@ const PhoneCalls: React.FC = () => {
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="來電號碼">
-                {selectedRecord.caller_number}
+                {selectedRecord.callerNumber}
               </Descriptions.Item>
               <Descriptions.Item label="通話時間">
-                {selectedRecord.created_at
-                  ? dayjs(selectedRecord.created_at).format('YYYY/MM/DD HH:mm:ss')
+                {selectedRecord.createdAt
+                  ? dayjs(selectedRecord.createdAt).format('YYYY/MM/DD HH:mm:ss')
                   : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="通話時長">
-                {selectedRecord.duration_seconds != null
-                  ? `${selectedRecord.duration_seconds} 秒`
+                {selectedRecord.durationSeconds != null
+                  ? `${selectedRecord.durationSeconds} 秒`
                   : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="事件類型">
-                {selectedRecord.event_type
-                  ? (EVENT_TYPE_MAP[selectedRecord.event_type]
-                    ? <Tag color={EVENT_TYPE_MAP[selectedRecord.event_type].color}>
-                        {EVENT_TYPE_MAP[selectedRecord.event_type].label}
+                {selectedRecord.eventType
+                  ? (EVENT_TYPE_MAP[selectedRecord.eventType]
+                    ? <Tag color={EVENT_TYPE_MAP[selectedRecord.eventType].color}>
+                        {EVENT_TYPE_MAP[selectedRecord.eventType].label}
                       </Tag>
-                    : selectedRecord.event_type)
+                    : selectedRecord.eventType)
                   : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="狀態">
                 {(() => {
-                  const info = STATUS_MAP[selectedRecord.processing_status] || {
-                    label: selectedRecord.processing_status,
+                  const info = STATUS_MAP[selectedRecord.processingStatus] || {
+                    label: selectedRecord.processingStatus,
                     color: 'default',
                   };
                   return <Tag color={info.color}>{info.label}</Tag>;
                 })()}
               </Descriptions.Item>
               <Descriptions.Item label="關聯訂單">
-                {selectedRecord.order_id || '—'}
+                {selectedRecord.orderId || '—'}
               </Descriptions.Item>
             </Descriptions>
 
@@ -303,36 +305,36 @@ const PhoneCalls: React.FC = () => {
               </Card>
             )}
 
-            {selectedRecord.parsed_fields && (
+            {selectedRecord.parsedFields && (
               <Card size="small" title="GPT 解析結果">
                 <Descriptions column={1} size="small">
-                  {selectedRecord.parsed_fields.pickup && (
+                  {selectedRecord.parsedFields.pickup && (
                     <Descriptions.Item label="上車地點">
-                      {selectedRecord.parsed_fields.pickup}
+                      {selectedRecord.parsedFields.pickup}
                     </Descriptions.Item>
                   )}
-                  {selectedRecord.parsed_fields.destination && (
+                  {selectedRecord.parsedFields.destination && (
                     <Descriptions.Item label="目的地">
-                      {selectedRecord.parsed_fields.destination}
+                      {selectedRecord.parsedFields.destination}
                     </Descriptions.Item>
                   )}
-                  {selectedRecord.parsed_fields.subsidy_type && (
+                  {selectedRecord.parsedFields.subsidy_type && (
                     <Descriptions.Item label="補貼類型">
-                      {selectedRecord.parsed_fields.subsidy_type}
+                      {selectedRecord.parsedFields.subsidy_type}
                     </Descriptions.Item>
                   )}
-                  {selectedRecord.parsed_fields.has_pet != null && (
+                  {selectedRecord.parsedFields.has_pet != null && (
                     <Descriptions.Item label="寵物">
-                      {selectedRecord.parsed_fields.has_pet ? '有' : '無'}
+                      {selectedRecord.parsedFields.has_pet ? '有' : '無'}
                     </Descriptions.Item>
                   )}
                 </Descriptions>
               </Card>
             )}
 
-            {selectedRecord.error_message && (
+            {selectedRecord.errorMessage && (
               <Card size="small" title="錯誤訊息" styles={{ header: { color: '#ff4d4f' } }}>
-                <Text type="danger">{selectedRecord.error_message}</Text>
+                <Text type="danger">{selectedRecord.errorMessage}</Text>
               </Card>
             )}
           </Space>

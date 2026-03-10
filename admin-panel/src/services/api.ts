@@ -327,8 +327,16 @@ export const notificationAPI = {
 
 // 電話記錄 API
 export const phoneCallAPI = {
-  list: (params: { page?: number; pageSize?: number; status?: string; callerNumber?: string }) =>
-    api.get('/phone-calls', { params }),
+  list: (params: { page?: number; pageSize?: number; status?: string }) => {
+    const { page = 1, pageSize = 20, status } = params;
+    return api.get('/phone-calls', {
+      params: {
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        ...(status ? { status } : {}),
+      },
+    });
+  },
 };
 
 export default api;
