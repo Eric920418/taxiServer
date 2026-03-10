@@ -277,9 +277,14 @@ ${hasActiveOrder
 
   /**
    * 正規化地址（套用花蓮地標映射）
+   * 注意：街道地址（含路/街/道/巷/弄/號）不做地標替換，避免破壞 Geocoding
+   * 例：「火車站附近中山路10號」不應被替換成「花蓮火車站附近中山路10號」
    */
   private normalizeAddress(address: string | null): string | null {
     if (!address) return null;
+
+    // 街道地址直接返回，不做地標替換
+    if (/[路街道巷弄號]/.test(address)) return address;
 
     for (const [shortName, fullName] of Object.entries(HUALIEN_LANDMARKS)) {
       if (address.includes(shortName) && !address.includes(fullName)) {
