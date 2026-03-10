@@ -10,10 +10,12 @@ interface AuthState {
   error: string | null;
 }
 
+const token = localStorage.getItem('admin_token');
+
 const initialState: AuthState = {
-  isAuthenticated: false,
+  isAuthenticated: !!token,
   admin: null,
-  token: localStorage.getItem('admin_token'),
+  token,
   loading: false,
   error: null,
 };
@@ -105,9 +107,12 @@ const authSlice = createSlice({
         state.admin = action.payload;
         state.isAuthenticated = true;
       })
-      .addCase(getProfile.rejected, (state, action) => {
+      .addCase(getProfile.rejected, (state) => {
         state.loading = false;
-        state.error = action.error.message || 'Failed to get profile';
+        state.isAuthenticated = false;
+        state.admin = null;
+        state.token = null;
+        localStorage.removeItem('admin_token');
       });
   },
 });
