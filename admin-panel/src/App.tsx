@@ -13,6 +13,7 @@ import Orders from './pages/Orders';
 import Analytics from './pages/Analytics';
 import AdminManagement from './pages/AdminManagement';
 import Settings from './pages/Settings';
+import PhoneCalls from './pages/PhoneCalls';
 import './App.css';
 
 // 私有路由組件
@@ -42,6 +43,7 @@ function AppContent() {
           <Route path="analytics" element={<Analytics />} />
           <Route path="admins" element={<AdminManagement />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="phonecalls" element={<PhoneCalls />} />
         </Route>
       </Routes>
     </Router>

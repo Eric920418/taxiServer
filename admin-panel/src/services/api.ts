@@ -325,4 +325,10 @@ export const notificationAPI = {
   },
 };
 
+// 電話記錄 API
+export const phoneCallAPI = {
+  list: (params: { page?: number; pageSize?: number; status?: string; callerNumber?: string }) =>
+    api.get('/phone-calls', { params }),
+};
+
 export default api;

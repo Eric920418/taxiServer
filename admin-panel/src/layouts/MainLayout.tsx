@@ -12,6 +12,7 @@ import {
   MenuUnfoldOutlined,
   BellOutlined,
   TeamOutlined,
+  PhoneOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -60,6 +61,11 @@ const MainLayout: React.FC = () => {
       key: '/analytics',
       icon: <BarChartOutlined />,
       label: '數據分析',
+    },
+    {
+      key: '/phonecalls',
+      icon: <PhoneOutlined />,
+      label: '電話記錄',
     },
     {
       key: '/admins',
