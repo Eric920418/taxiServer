@@ -578,12 +578,17 @@ export class PhoneCallProcessor {
     const now = new Date();
     const passengerId = `PHONE_${call.callerNumber}`;
 
-    // 確保電話乘客記錄存在
-    await this.pool.query(`
+    // 確保電話乘客記錄存在（以 phone 為衝突鍵，避免 phone UNIQUE 約束衝突）
+    const passengerResult = await this.pool.query(`
       INSERT INTO passengers (passenger_id, name, phone)
       VALUES ($1, $2, $3)
-      ON CONFLICT (passenger_id) DO UPDATE SET phone = $3, updated_at = CURRENT_TIMESTAMP
+      ON CONFLICT (phone) DO UPDATE SET
+        name = EXCLUDED.name,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING passenger_id
     `, [passengerId, fields.customer_name || `來電 ${call.callerNumber}`, call.callerNumber]);
+
+    const actualPassengerId = passengerResult.rows[0].passenger_id;
 
     await this.pool.query(`
       INSERT INTO orders (
@@ -609,7 +614,7 @@ export class PhoneCallProcessor {
       )
     `, [
       orderId,
-      passengerId,
+      actualPassengerId,
       pickup.lat, pickup.lng, pickup.formattedAddress,
       dest?.lat || null, dest?.lng || null, dest?.formattedAddress || null,
       fields.subsidy_type !== 'NONE' ? 'SUBSIDY' : 'CASH',
