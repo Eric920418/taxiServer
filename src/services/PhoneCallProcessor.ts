@@ -296,7 +296,12 @@ export class PhoneCallProcessor {
     console.log(`[PhoneCallProcessor] 處理取消 - 訂單: ${activeOrder?.order_id}`);
 
     if (!activeOrder) {
-      console.warn('[PhoneCallProcessor] 取消但無活動訂單');
+      // 找不到活動訂單（可能已超過 4 小時或訂單已結束），記錄後完成
+      console.warn(`[PhoneCallProcessor] 取消但無活動訂單 - 來電號碼: ${call.callerNumber}`);
+      await this.pool.query(
+        `UPDATE phone_calls SET error_message = '找不到活動訂單（訂單可能已完成或超時）', updated_at = CURRENT_TIMESTAMP WHERE call_id = $1`,
+        [callId]
+      );
       await this.updateStatus(callId, 'COMPLETED');
       return;
     }
@@ -373,10 +378,10 @@ export class PhoneCallProcessor {
 
     const response = await this.openai.audio.transcriptions.create({
       file: audioFile,
-      model: 'whisper-1',
+      model: 'gpt-4o-transcribe',
       language: 'zh',
       response_format: 'text',
-      prompt: '花蓮縣計程車叫車。常見地點：花蓮火車站、東大門夜市、慈濟醫院、門諾醫院、花蓮航空站、太魯閣、七星潭、遠東百貨、家樂福花蓮店、吉安鄉、壽豐鄉。常見路名：中山路、中正路、中華路、林森路、博愛街、民權路、自強路、府前路。'
+      prompt: '花蓮縣計程車叫車，說話者可能帶有台語腔調（ㄋ/ㄌ混淆、ㄓ/ㄗ混淆）。常見地點：花蓮火車站、東大門夜市、慈濟醫院、門諾醫院、花蓮航空站、太魯閣、七星潭、遠東百貨、家樂福花蓮店、吉安鄉、壽豐鄉。常見路名：中山路、中正路、中華路、林森路、博愛街、民權路、自強路、府前路。取消訂單常用語：不要了、取消、不叫了、不需要了。'
     });
 
     return response as unknown as string;
@@ -599,14 +604,14 @@ export class PhoneCallProcessor {
   }
 
   /**
-   * 查詢同號碼 30 分鐘內的活動訂單
+   * 查詢同號碼 4 小時內的活動訂單
    */
   private async findActiveOrderByPhone(callerNumber: string): Promise<any | null> {
     const result = await this.pool.query(`
       SELECT * FROM orders
       WHERE customer_phone = $1
         AND status IN ('OFFERED', 'WAITING', 'ACCEPTED', 'ARRIVED', 'ON_TRIP')
-        AND created_at > NOW() - INTERVAL '30 minutes'
+        AND created_at > NOW() - INTERVAL '4 hours'
       ORDER BY created_at DESC
       LIMIT 1
     `, [callerNumber]);
