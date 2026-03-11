@@ -4,6 +4,7 @@
  */
 
 import OpenAI from 'openai';
+import { hualienAddressDB } from './HualienAddressDB';
 
 // ========== 類型定義 ==========
 
@@ -29,66 +30,7 @@ export interface EventClassification {
   changeDetails?: string;
 }
 
-// 花蓮地標映射
-const HUALIEN_LANDMARKS: Record<string, string> = {
-  // 交通
-  '火車站': '花蓮火車站',
-  '車站': '花蓮火車站',
-  '機場': '花蓮航空站',
-  '航空站': '花蓮航空站',
-  '花蓮港': '花蓮港',
-  // 商圈/夜市
-  '東大門': '東大門夜市',
-  '夜市': '東大門夜市',
-  '遠百': '遠東百貨花蓮店',
-  '遠東': '遠東百貨花蓮店',
-  '百貨': '遠東百貨花蓮店',
-  '家樂福': '家樂福花蓮店',
-  '好市多': '好市多花蓮店',
-  '大潤發': '大潤發花蓮店',
-  // 醫療
-  '慈濟': '花蓮慈濟醫院',
-  '慈濟醫院': '花蓮慈濟醫院',
-  '門諾': '門諾醫院',
-  '部立': '衛生福利部花蓮醫院',
-  '花蓮醫院': '衛生福利部花蓮醫院',
-  // 景點
-  '太魯閣': '太魯閣國家公園遊客中心',
-  '七星潭': '七星潭風景區',
-  '松園': '松園別館',
-  '鯉魚潭': '鯉魚潭風景區',
-  '新天堂樂園': '花蓮新天堂樂園',
-  '南濱': '南濱公園',
-  '北濱': '北濱公園',
-  '美崙': '美崙山',
-  // 學校
-  '花蓮高中': '國立花蓮高級中學',
-  '花中': '國立花蓮高級中學',
-  '花女': '國立花蓮女子高級中學',
-  '東華': '國立東華大學',
-  '慈濟大學': '慈濟大學',
-  // 鄉鎮（讓 Geocoding API 加正確前綴）
-  '吉安鄉': '花蓮縣吉安鄉',
-  '吉安': '花蓮縣吉安鄉',
-  '壽豐鄉': '花蓮縣壽豐鄉',
-  '壽豐': '花蓮縣壽豐鄉',
-  '光復鄉': '花蓮縣光復鄉',
-  '光復': '花蓮縣光復鄉',
-  '豐濱鄉': '花蓮縣豐濱鄉',
-  '豐濱': '花蓮縣豐濱鄉',
-  '瑞穗鄉': '花蓮縣瑞穗鄉',
-  '瑞穗': '花蓮縣瑞穗鄉',
-  '富里鄉': '花蓮縣富里鄉',
-  '富里': '花蓮縣富里鄉',
-  '秀林鄉': '花蓮縣秀林鄉',
-  '秀林': '花蓮縣秀林鄉',
-  '萬榮鄉': '花蓮縣萬榮鄉',
-  '卓溪鄉': '花蓮縣卓溪鄉',
-  '玉里': '花蓮縣玉里鎮',
-  '玉里鎮': '花蓮縣玉里鎮',
-  '鳳林': '花蓮縣鳳林鎮',
-  '鳳林鎮': '花蓮縣鳳林鎮',
-};
+// HUALIEN_LANDMARKS 已移至 HualienAddressDB.ts（150+ 筆，支援台語別名）
 
 // ========== 服務類 ==========
 
@@ -267,6 +209,7 @@ ${hasActiveOrder
 - 只說路名：「中山路38號」→ 輸出「中山路38號」（系統會自動加花蓮縣花蓮市前綴）
 - 只說鄉鎮：「去吉安」→ 輸出「吉安鄉」
 - 不確定門牌：「中山路附近」→ 輸出「花蓮市中山路」（不要猜號碼）
+- 地標結合街道：若地址旁有地標上下文（例如「火車站附近中山路10號」），請保留地標與街道，輸出「花蓮火車站，中山路10號」而非只輸出「中山路10號」
 
 ## 注意事項
 - 花蓮口語可能會用簡稱，請對照地標表轉換
@@ -279,22 +222,13 @@ ${hasActiveOrder
   }
 
   /**
-   * 正規化地址（套用花蓮地標映射）
-   * 注意：街道地址（含路/街/道/巷/弄/號）不做地標替換，避免破壞 Geocoding
-   * 例：「火車站附近中山路10號」不應被替換成「花蓮火車站附近中山路10號」
+   * 正規化地址（委派給 HualienAddressDB.resolveAliases）
+   * 街道地址（含路/街/道/巷/弄/號）不做地標替換，避免破壞 Geocoding
    */
   private normalizeAddress(address: string | null): string | null {
     if (!address) return null;
-
-    // 街道地址直接返回，不做地標替換
     if (/[路街道巷弄號]/.test(address)) return address;
-
-    for (const [shortName, fullName] of Object.entries(HUALIEN_LANDMARKS)) {
-      if (address.includes(shortName) && !address.includes(fullName)) {
-        return address.replace(shortName, fullName);
-      }
-    }
-    return address;
+    return hualienAddressDB.resolveAliases(address);
   }
 
   private validateSubsidyType(val: string): ParsedFields['subsidy_type'] {

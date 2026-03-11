@@ -1,10 +1,55 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.5.0-MVP
-> 更新日期：2026-02-27
+> 版本：v1.5.1-MVP
+> 更新日期：2026-03-11
 
-## 📝 最新修改（2026-02-27）- Asterisk 語音歡迎引導升級
+## 📝 最新修改（2026-03-11）- 花蓮地址資料庫 + 台語別名支援
+
+### 背景
+Whisper STT 在台語腔調下會把「慈濟」聽成「祠際」，舊系統 16 筆靜態地標完全無法命中，直接
+fallback 到 Google API，精度不穩定且浪費配額。
+
+### 新增功能
+- **`HualienAddressDB.ts`** - 88 筆人工驗證花蓮地標資料庫
+  - 分類：交通(11)、醫療(11)、學校(11)、商業(9)、政府(10)、景點(13)、飯店(10)、鄉鎮(13)
+  - 支援台語腔調別名（祠際→慈濟、文諾→門諾、飛機場→花蓮航空站等）
+  - 啟動時預建索引，O(1) 查詢
+  - 涵蓋花蓮縣全部 13 鄉鎮市（含新城鄉）
+
+### 修改檔案
+| 檔案 | 變更 |
+|------|------|
+| `src/services/HualienAddressDB.ts` | **新建**：88 筆地標 + lookup/resolveAliases/getCoords |
+| `src/services/PhoneCallProcessor.ts` | 移除 LANDMARK_COORDS、整合 DB 四層 Geocoding、加 Redis 快取 |
+| `src/services/CallFieldExtractor.ts` | 移除 HUALIEN_LANDMARKS、委派 resolveAliases、補地標上下文 prompt |
+
+### Geocoding 四層流程（新）
+```
+① HualienAddressDB.lookup()     → 88 筆本地比對（含台語別名），命中快取 24h
+② Google Geocoding API          → 街道地址精確定位，結果快取 1h
+③ Google Places Text Search     → 景點/地標模糊搜尋
+④ 花蓮市中心預設座標            → 失敗保底
+```
+
+### 台語別名對照
+| 標準名 | 台語別名 |
+|--------|---------|
+| 花蓮慈濟醫院 | 祠際、磁際、資際、茲際 |
+| 門諾醫院 | 文諾醫院 |
+| 花蓮火車站 | 火車頭、車頭 |
+| 東大門夜市 | 暗市仔 |
+| 花蓮市場 | 菜市仔 |
+| 花蓮航空站 | 飛機場 |
+
+### 驗證方式
+1. `pm2 logs taxiserver` → 看到 `[HualienAddressDB] 命中: 慈濟 → 花蓮慈濟醫院` 表示 DB 生效
+2. 看到 `[PhoneCallProcessor] Geocoding 快取命中` 表示 Redis 快取生效
+3. 打電話說「去祠際醫院」→ 確認訂單上車地點是慈濟醫院正確座標
+
+---
+
+## 📝 歷史修改（2026-02-27）- Asterisk 語音歡迎引導升級
 
 ### 背景
 來電叫車從「嗶一聲 → 等 60 秒」升級為自然語音引導流程，客戶不再困惑。

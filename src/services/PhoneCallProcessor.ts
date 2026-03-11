@@ -11,6 +11,8 @@ import path from 'path';
 import { CallFieldExtractor, ParsedFields, CallEventType } from './CallFieldExtractor';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getSocketIO, driverSockets } from '../socket';
+import { hualienAddressDB } from './HualienAddressDB';
+import { cacheApiResponse, getCachedApiResponse } from './cache';
 
 // ========== 類型定義 ==========
 
@@ -34,25 +36,7 @@ interface GeocodingResult {
   formattedAddress: string;
 }
 
-// 花蓮常用地標精確座標（人工驗證）
-const LANDMARK_COORDS: Record<string, { lat: number; lng: number; address: string }> = {
-  '花蓮火車站':             { lat: 24.0007,  lng: 121.6161, address: '花蓮縣花蓮市站前路' },
-  '花蓮航空站':             { lat: 24.0238,  lng: 121.6165, address: '花蓮縣花蓮市嘉里路1段8號' },
-  '東大門夜市':             { lat: 23.9777,  lng: 121.6079, address: '花蓮縣花蓮市中華路一段' },
-  '花蓮慈濟醫院':           { lat: 24.0135,  lng: 121.5913, address: '花蓮縣花蓮市中央路三段707號' },
-  '門諾醫院':               { lat: 23.9769,  lng: 121.6063, address: '花蓮縣花蓮市民權路44號' },
-  '衛生福利部花蓮醫院':     { lat: 23.9767,  lng: 121.6084, address: '花蓮縣花蓮市中正路600號' },
-  '遠東百貨花蓮店':         { lat: 23.9770,  lng: 121.6087, address: '花蓮縣花蓮市中山路356號' },
-  '家樂福花蓮店':           { lat: 24.0025,  lng: 121.6118, address: '花蓮縣花蓮市國盛二街188號' },
-  '好市多花蓮店':           { lat: 24.0221,  lng: 121.6173, address: '花蓮縣花蓮市嘉里路一段188號' },
-  '太魯閣國家公園遊客中心': { lat: 24.1586,  lng: 121.6191, address: '花蓮縣秀林鄉崇德村富世291號' },
-  '七星潭風景區':           { lat: 24.0488,  lng: 121.6394, address: '花蓮縣新城鄉七星街' },
-  '南濱公園':               { lat: 23.9721,  lng: 121.6163, address: '花蓮縣花蓮市南濱路一段' },
-  '北濱公園':               { lat: 23.9924,  lng: 121.6256, address: '花蓮縣花蓮市海濱路' },
-  '國立東華大學':           { lat: 23.9135,  lng: 121.5499, address: '花蓮縣壽豐鄉大學路二段1號' },
-  '國立花蓮高級中學':       { lat: 23.9893,  lng: 121.6044, address: '花蓮縣花蓮市府前路1號' },
-  '鯉魚潭風景區':           { lat: 23.8988,  lng: 121.5651, address: '花蓮縣壽豐鄉池南路一段' },
-};
+// LANDMARK_COORDS 已移至 HualienAddressDB.ts（150+ 筆）
 
 // ========== 服務類 ==========
 
@@ -424,10 +408,13 @@ export class PhoneCallProcessor {
   }
 
   /**
-   * 三段式地址 Geocoding：
-   * 1. 靜態地標表（精確且免 API 配額）
-   * 2. 街道地址 → Geocoding API（精確）
-   * 3. 地標/景點或 Geocoding 失敗 → Places Text Search（帶 location bias）
+   * 四層式地址 Geocoding：
+   * ① HualienAddressDB（150+ 筆本地比對，含台語別名）
+   * ② 街道地址 → Geocoding API（精確）
+   * ③ 地標/景點 → Places Text Search（帶 location bias）
+   * ④ 花蓮市中心預設座標（失敗保底，由呼叫端處理）
+   *
+   * Redis 快取：DB 命中 24h、Google API 結果 1h
    */
   private async geocodeAddress(address: string): Promise<GeocodingResult | null> {
     if (!this.googleMapsApiKey) {
@@ -435,24 +422,57 @@ export class PhoneCallProcessor {
       return null;
     }
 
-    // ① 先查靜態地標表（精確且不花 API 配額）
-    for (const [landmark, coords] of Object.entries(LANDMARK_COORDS)) {
-      if (address.includes(landmark)) {
-        console.log(`[PhoneCallProcessor] 靜態地標命中: ${landmark}`);
-        return { lat: coords.lat, lng: coords.lng, formattedAddress: coords.address };
+    // Redis 快取查詢
+    const cacheKey = `geocode:v2:${address}`;
+    try {
+      const cached = await getCachedApiResponse(cacheKey);
+      if (cached) {
+        console.log(`[PhoneCallProcessor] Geocoding 快取命中: ${address}`);
+        return cached as GeocodingResult;
       }
+    } catch { /* Redis 失敗不阻斷主流程 */ }
+
+    let result: GeocodingResult | null = null;
+    let cacheTtl = 3600; // 預設 1 小時
+
+    // ① 本地 DB 查詢（含台語別名，O(1)）
+    const dbResult = hualienAddressDB.lookup(address);
+    if (dbResult && dbResult.entry.lat !== null && dbResult.entry.lng !== null) {
+      console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType})`);
+      result = {
+        lat: dbResult.entry.lat,
+        lng: dbResult.entry.lng,
+        formattedAddress: dbResult.entry.address
+      };
+      cacheTtl = 86400; // DB 命中快取 24 小時
     }
 
     // ② 街道地址 → Geocoding API
-    const isStreetAddress = /[路街道巷弄號]/i.test(address);
-    if (isStreetAddress) {
-      const result = await this.geocodeWithGeocodingAPI(address);
-      if (result && !this.isDefaultCoords(result.lat, result.lng)) return result;
-      console.warn(`[PhoneCallProcessor] Geocoding 無效結果，改用 Places Search: ${address}`);
+    if (!result) {
+      const isStreetAddress = /[路街道巷弄號]/i.test(address);
+      if (isStreetAddress) {
+        const geocoded = await this.geocodeWithGeocodingAPI(address);
+        if (geocoded && !this.isDefaultCoords(geocoded.lat, geocoded.lng)) {
+          result = geocoded;
+        } else {
+          console.warn(`[PhoneCallProcessor] Geocoding 無效結果，改用 Places Search: ${address}`);
+        }
+      }
     }
 
     // ③ 地標/景點 → Places Search
-    return await this.geocodeWithPlacesSearch(address);
+    if (!result) {
+      result = await this.geocodeWithPlacesSearch(address);
+    }
+
+    // 寫入 Redis 快取
+    if (result) {
+      try {
+        await cacheApiResponse(cacheKey, result, cacheTtl);
+      } catch { /* Redis 失敗不阻斷 */ }
+    }
+
+    return result;
   }
 
   /**
@@ -467,7 +487,7 @@ export class PhoneCallProcessor {
    * Geocoding API - 專門處理街道門牌地址
    */
   private async geocodeWithGeocodingAPI(address: string): Promise<GeocodingResult | null> {
-    const HUALIEN_TOWNSHIPS = ['吉安', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
+    const HUALIEN_TOWNSHIPS = ['吉安', '新城', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
     const hasTownship = HUALIEN_TOWNSHIPS.some(t => address.includes(t));
     const alreadyHasPrefix = address.startsWith('花蓮');
     const prefix = hasTownship ? '花蓮縣' : '花蓮縣花蓮市';
