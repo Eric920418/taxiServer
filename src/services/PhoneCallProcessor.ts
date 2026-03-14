@@ -443,15 +443,21 @@ export class PhoneCallProcessor {
     let cacheTtl = 3600; // 預設 1 小時
 
     // ① 本地 DB 查詢（含台語別名，O(1)）
+    // 街道門牌不允許 SUBSTRING 命中，避免「吉安路一段16號」誤判為「吉安鄉」
+    const isStreetAddress = /[路街道巷弄號]/.test(address);
     const dbResult = hualienAddressDB.lookup(address);
     if (dbResult && dbResult.entry.lat !== null && dbResult.entry.lng !== null) {
-      console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType})`);
-      result = {
-        lat: dbResult.entry.lat,
-        lng: dbResult.entry.lng,
-        formattedAddress: dbResult.entry.address
-      };
-      cacheTtl = 86400; // DB 命中快取 24 小時
+      if (isStreetAddress && dbResult.matchType === 'SUBSTRING') {
+        console.log(`[HualienAddressDB] 街道地址跳過 SUBSTRING 命中: ${address} → ${dbResult.entry.name}，改用 Geocoding API`);
+      } else {
+        console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType})`);
+        result = {
+          lat: dbResult.entry.lat,
+          lng: dbResult.entry.lng,
+          formattedAddress: dbResult.entry.address
+        };
+        cacheTtl = 86400; // DB 命中快取 24 小時
+      }
     }
 
     // ② 街道地址 → Geocoding API
