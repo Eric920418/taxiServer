@@ -105,6 +105,13 @@ export class PhoneCallProcessor {
         return;
       }
 
+      // 3.6 空白語音檢查（靜音來電）
+      if (!transcript?.trim()) {
+        console.log(`[PhoneCallProcessor] ⚠️ 來電無語音: ${call.callerNumber}`);
+        await this.markFailed(callId, '來電無語音輸入（靜音或通話過短）');
+        return;
+      }
+
       // 4. 事件判定（新訂單 or 跟進電話）
       await this.updateStatus(callId, 'PARSING');
       const activeOrder = await this.findActiveOrderByPhone(call.callerNumber);
@@ -365,7 +372,7 @@ export class PhoneCallProcessor {
       model: 'gpt-4o-transcribe',
       language: 'zh',
       response_format: 'text',
-      prompt: '花蓮縣計程車叫車，說話者可能帶有台語腔調（ㄋ/ㄌ混淆、ㄓ/ㄗ混淆）。常見地點：花蓮火車站、東大門夜市、慈濟醫院、門諾醫院、花蓮航空站、太魯閣、七星潭、遠東百貨、家樂福花蓮店、吉安鄉、壽豐鄉。常見路名：中山路、中正路、中華路、林森路、博愛街、民權路、自強路、府前路。取消訂單常用語：不要了、取消、不叫了、不需要了。'
+      prompt: '花蓮縣計程車叫車，說話者可能帶有台語腔調（ㄋ/ㄌ混淆、ㄓ/ㄗ混淆）。常見地點：花蓮火車站、東大門夜市、慈濟醫院、門諾醫院、花蓮航空站、太魯閣、七星潭、遠東百貨、家樂福花蓮店、吉安鄉、壽豐鄉。常見路名：中山路、中正路、中華路、林森路、博愛街、民權路、自強路、府前路。取消訂單常用語：不要了、取消、不叫了、不需要了。錄音開頭為系統問候語「大豐你好請問哪裡搭車說完地址直接掛斷」，請忽略問候語，只轉錄乘客說的上車地點和目的地。'
     });
 
     return response as unknown as string;
