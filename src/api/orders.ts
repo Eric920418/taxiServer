@@ -25,6 +25,13 @@ const VALID_REJECTION_REASONS = [
 const router = Router();
 
 /**
+ * 取得目的地顯示地址：電話訂單優先用乘客原始說法（dropoff_original）
+ */
+function getDestAddress(order: any): string {
+  return (order.source === 'PHONE' && order.dropoff_original) || order.dest_address;
+}
+
+/**
  * 測試用：建立新訂單（模擬乘客叫車）
  * POST /api/orders
  */
@@ -110,7 +117,7 @@ router.post('/', async (req, res) => {
       destination: order.dest_lat ? {
         lat: parseFloat(order.dest_lat),
         lng: parseFloat(order.dest_lng),
-        address: order.dest_address
+        address: getDestAddress(order)
       } : null,
       status: 'OFFERED',
       paymentType: order.payment_type,
@@ -134,7 +141,7 @@ router.post('/', async (req, res) => {
         destination: order.dest_lat ? {
           lat: parseFloat(order.dest_lat),
           lng: parseFloat(order.dest_lng),
-          address: order.dest_address
+          address: getDestAddress(order)
         } : null,
         paymentType: order.payment_type
       },
@@ -186,7 +193,7 @@ router.get('/', async (req, res) => {
         destination: o.dest_lat ? {
           lat: parseFloat(o.dest_lat),
           lng: parseFloat(o.dest_lng),
-          address: o.dest_address
+          address: getDestAddress(o)
         } : null,
         paymentType: o.payment_type,
         meterAmount: o.meter_amount,
@@ -239,7 +246,7 @@ router.get('/:orderId', async (req, res) => {
       destination: order.dest_lat ? {
         lat: parseFloat(order.dest_lat),
         lng: parseFloat(order.dest_lng),
-        address: order.dest_address
+        address: getDestAddress(order)
       } : null,
       paymentType: order.payment_type,
       meterAmount: order.meter_amount,
@@ -364,7 +371,7 @@ router.patch('/:orderId/accept', async (req, res) => {
       destination: fullOrder.dest_lat ? {
         lat: parseFloat(fullOrder.dest_lat),
         lng: parseFloat(fullOrder.dest_lng),
-        address: fullOrder.dest_address
+        address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
       createdAt: new Date(fullOrder.created_at).getTime(),
@@ -397,7 +404,7 @@ router.patch('/:orderId/accept', async (req, res) => {
         destination: fullOrder.dest_lat ? {
           lat: parseFloat(fullOrder.dest_lat),
           lng: parseFloat(fullOrder.dest_lng),
-          address: fullOrder.dest_address
+          address: getDestAddress(fullOrder)
         } : null,
         paymentType: fullOrder.payment_type,
         createdAt: new Date(fullOrder.created_at).getTime(),
@@ -592,7 +599,7 @@ router.patch('/:orderId/status', async (req, res) => {
       destination: fullOrder.dest_lat ? {
         lat: parseFloat(fullOrder.dest_lat),
         lng: parseFloat(fullOrder.dest_lng),
-        address: fullOrder.dest_address
+        address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
       fare: fullOrder.meter_amount ? {
@@ -636,7 +643,7 @@ router.patch('/:orderId/status', async (req, res) => {
       destination: fullOrder.dest_lat ? {
         lat: parseFloat(fullOrder.dest_lat),
         lng: parseFloat(fullOrder.dest_lng),
-        address: fullOrder.dest_address
+        address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
       fare: fullOrder.meter_amount ? {
@@ -730,7 +737,7 @@ async function handleSubmitFare(req: any, res: any) {
       destination: fullOrder.dest_lat ? {
         lat: parseFloat(fullOrder.dest_lat),
         lng: parseFloat(fullOrder.dest_lng),
-        address: fullOrder.dest_address
+        address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
       fare: {
@@ -772,7 +779,7 @@ async function handleSubmitFare(req: any, res: any) {
       destination: fullOrder.dest_lat ? {
         lat: parseFloat(fullOrder.dest_lat),
         lng: parseFloat(fullOrder.dest_lng),
-        address: fullOrder.dest_address
+        address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
       fare: {

@@ -1,10 +1,21 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.5.2-MVP
+> 版本：v1.5.3-MVP
 > 更新日期：2026-03-14
 
-## 📝 最新修改（2026-03-14）- Voice Barge-in 語音打斷功能
+## 📝 最新修改（2026-03-14）- 修復司機端目的地顯示為「花蓮縣花蓮市」
+
+### 問題
+電話訂單的目的地在司機端永遠顯示「花蓮縣花蓮市」。根因是 Geocoding 後的 `formattedAddress` 被 Google 回傳為模糊行政區名，而非客人口述的具體地名。
+
+### 修復
+- `PhoneCallProcessor.ts`：目的地文字優先使用 GPT 提取的原始地址，座標仍用 Geocoding 結果
+- `orders.ts`：API 回應加入 `getDestAddress()` helper，電話訂單優先用 `dropoff_original`，補救 DB 中已存的模糊地址
+
+---
+
+## 📝 歷史修改（2026-03-14）- Voice Barge-in 語音打斷功能
 
 ### 背景
 原本 `Playback()` 是阻塞式播放，播完整段 greeting (~4 秒) 才進下一步。客人一聽到「大豐你好」就開始報地址，但系統繼續播語音蓋過客人聲音，導致錄音中系統語音和客人語音重疊，Whisper STT 轉錄品質下降。

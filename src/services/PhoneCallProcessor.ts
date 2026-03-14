@@ -211,7 +211,7 @@ export class PhoneCallProcessor {
         destination: destGeo ? {
           lat: destGeo.lat,
           lng: destGeo.lng,
-          address: destGeo.formattedAddress
+          address: parsedFields.destination_address || destGeo.formattedAddress
         } : null,
         paymentType: parsedFields.subsidy_type !== 'NONE' ? 'SUBSIDY' : 'CASH',
         createdAt: Date.now(),
@@ -623,7 +623,7 @@ export class PhoneCallProcessor {
       orderId,
       actualPassengerId,
       pickup.lat, pickup.lng, pickup.formattedAddress,
-      dest?.lat || null, dest?.lng || null, dest?.formattedAddress || null,
+      dest?.lat || null, dest?.lng || null, fields.destination_address || dest?.formattedAddress || null,
       fields.subsidy_type !== 'NONE' ? 'SUBSIDY' : 'CASH',
       now.getHours(), now.getDay(),
       fields.subsidy_type, fields.pet_present, fields.pet_carrier, fields.pet_note,
