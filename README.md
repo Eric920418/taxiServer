@@ -1,10 +1,63 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.5.1-MVP
-> 更新日期：2026-03-11
+> 版本：v1.5.2-MVP
+> 更新日期：2026-03-14
 
-## 📝 最新修改（2026-03-11）- 花蓮地址資料庫 + 台語別名支援
+## 📝 最新修改（2026-03-14）- Voice Barge-in 語音打斷功能
+
+### 背景
+原本 `Playback()` 是阻塞式播放，播完整段 greeting (~4 秒) 才進下一步。客人一聽到「大豐你好」就開始報地址，但系統繼續播語音蓋過客人聲音，導致錄音中系統語音和客人語音重疊，Whisper STT 轉錄品質下降。
+
+### 解決方案
+實作語音打斷（barge-in）— 客人在 greeting 播放期間開口，系統立即停止播放，開始聽客人說話。使用 Asterisk `BackgroundDetect()` 取代 `Playback()`。
+
+### 語音流程（新）
+```
+來電 → 接聽 → 錄音開始 → BackgroundDetect 播歡迎語
+  ├─ 路徑 A（客戶插話）→ 系統停止播放 → 跳 talk extension → 等說完 → 掛斷 → webhook
+  └─ 路徑 B（客戶沒插話）→ WaitForNoise 等開口 → WaitForSilence 等說完 → 掛斷 → webhook
+```
+
+### 修改檔案
+| 檔案 | 變更 |
+|------|------|
+| `config/asterisk/extensions_taxi.conf` | `Playback` → `BackgroundDetect`，新增 `talk` extension，移除 beep |
+| `scripts/generate-greeting.js` | 歡迎語縮短為「大豐您好，請說在哪裡搭車。」(~2 秒) |
+| `src/services/PhoneCallProcessor.ts` | Whisper prompt 更新，告知問候語可能被打斷不完整 |
+
+### BackgroundDetect 參數
+```
+BackgroundDetect(custom/taxi-greeting, 1000, 200, 10000)
+  sil=1000  → 語音後靜音 1 秒判定結束
+  min=200   → 最低 200ms 語音才觸發（過濾噪音）
+  max=10000 → 安全上限
+```
+
+### 關鍵設計決策
+1. **移除 `Playback(beep)`** — 像真人接電話，不需嗶聲
+2. **路徑 B 加 `WaitForNoise(300,1,15)`** — 避免 greeting 播完後立刻偵測到靜音就結束通話
+3. **`WaitForSilence` iterations 從 2 改 1** — 路徑 A 客人已在說話，路徑 B 有 WaitForNoise 確保開口
+4. **`talk` extension 共用** — `_X.` 和 `s` 都跳同一個 talk，channel variables 持續有效
+
+### 部署步驟
+```bash
+# VPS: git pull
+# VPS: node scripts/generate-greeting.js        # 重新生成縮短版歡迎語
+# VPS: sudo cp config/asterisk/extensions_taxi.conf /etc/asterisk/
+# VPS: sudo asterisk -rx 'dialplan reload'
+# VPS: source ~/.nvm/nvm.sh && cd /var/www/taxiServer && npm run build && pm2 restart taxiserver
+```
+
+### 驗證步驟
+1. **Barge-in 測試**：撥入 → 聽到「大豐您好」立刻說地址 → 確認系統語音停止 → Asterisk CLI 顯示 `Barge-in!`
+2. **正常流程測試**：撥入 → 聽完 greeting → 再說地址 → 確認正常錄到
+3. **靜音測試**：撥入 → 不說話 → 15 秒後自動掛斷 → webhook 仍觸發
+4. **端到端**：`pm2 logs` 確認 transcript 正確、GPT 解析地址成功、訂單建立
+
+---
+
+## 📝 歷史修改（2026-03-11）- 花蓮地址資料庫 + 台語別名支援
 
 ### 背景
 Whisper STT 在台語腔調下會把「慈濟」聽成「祠際」，舊系統 16 筆靜態地標完全無法命中，直接

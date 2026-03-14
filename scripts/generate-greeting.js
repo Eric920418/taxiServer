@@ -36,7 +36,7 @@ const CONFIG = {
   speed: 0.95,              // 稍慢一點，讓長輩聽清楚
 
   // 語音稿
-  text: '大豐你好，請問哪裡搭車？說完地址直接掛斷就好！',
+  text: '大豐您好，請說在哪裡搭車。',
 
   // 輸出路徑
   tmpFile: '/tmp/taxi-greeting-raw.mp3',
