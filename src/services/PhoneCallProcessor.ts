@@ -100,7 +100,7 @@ export class PhoneCallProcessor {
       const isTooShort = call.durationSeconds < 5;
 
       if (isHallucination || isTooShort) {
-        const reason = isHallucination ? `STT幻覺: ${transcript.substring(0, 50)}` : `錄音過短: ${fileStat.size} bytes`;
+        const reason = isHallucination ? `STT幻覺: ${transcript.substring(0, 50)}` : `通話過短: ${call.durationSeconds}秒`;
         console.log(`[PhoneCallProcessor] ⚠️ 錄音品質不足: ${reason}`);
         await this.markFailed(callId, `錄音品質不足：${reason}`);
         return;
