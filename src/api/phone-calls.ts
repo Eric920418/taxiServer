@@ -43,7 +43,7 @@ router.post('/webhook', async (req, res) => {
     console.log(`  錄音路徑: ${finalRecordingUrl}`);
 
     // 過濾太短的通話（< 3 秒可能是誤撥）
-    if (finalDuration < 3) {
+    if (finalDuration < 5) {
       console.log(`[PhoneCalls Webhook] 通話太短(${finalDuration}秒)，忽略`);
       return res.json({ success: true, message: '通話太短，已忽略' });
     }

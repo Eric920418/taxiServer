@@ -95,8 +95,9 @@ export class PhoneCallProcessor {
         '謝謝觀看', '感谢收看', '请不吝点赞', '小編'
       ];
       const isHallucination = HALLUCINATION_PATTERNS.some(p => transcript.includes(p));
-      const fileStat = fs.statSync(audioPath);
-      const isTooShort = fileStat.size < 48000; // < 3秒 (8kHz * 2bytes * 3s)
+      // MixMonitor 錄全程（含 greeting ~3.5s），檔案大小無法判斷是否有客人語音
+      // 改用通話時長：greeting 3.5s + Wait 0.5s = 4s 基線，< 5s 幾乎無開口時間
+      const isTooShort = call.durationSeconds < 5;
 
       if (isHallucination || isTooShort) {
         const reason = isHallucination ? `STT幻覺: ${transcript.substring(0, 50)}` : `錄音過短: ${fileStat.size} bytes`;
@@ -372,7 +373,7 @@ export class PhoneCallProcessor {
       model: 'gpt-4o-transcribe',
       language: 'zh',
       response_format: 'text',
-      prompt: '花蓮縣計程車叫車，說話者可能帶有台語腔調（ㄋ/ㄌ混淆、ㄓ/ㄗ混淆）。常見地點：花蓮火車站、東大門夜市、慈濟醫院、門諾醫院、花蓮航空站、太魯閣、七星潭、遠東百貨、家樂福花蓮店、吉安鄉、壽豐鄉。常見路名：中山路、中正路、中華路、林森路、博愛街、民權路、自強路、府前路。取消訂單常用語：不要了、取消、不叫了、不需要了。錄音開頭可能包含系統問候語「大豐您好請說您的位置跟要去哪裡」，可能被乘客語音打斷而不完整。請忽略問候語部分，完整轉錄乘客說的【上車地點】和【目的地】兩個資訊。'
+      prompt: '花蓮縣計程車叫車，說話者可能帶有台語腔調（ㄋ/ㄌ混淆、ㄓ/ㄗ混淆）。常見地點：花蓮火車站、東大門夜市、慈濟醫院、門諾醫院、花蓮航空站、太魯閣、七星潭、遠東百貨、家樂福花蓮店、吉安鄉、壽豐鄉。常見路名：中山路、中正路、中華路、林森路、博愛街、民權路、自強路、府前路。取消訂單常用語：不要了、取消、不叫了、不需要了。錄音開頭包含系統問候語「大豐您好請說您的位置跟要去哪裡」和可能的嗶聲提示音，問候語可能被乘客語音打斷而不完整。請完全忽略問候語和嗶聲部分，只轉錄乘客說的【上車地點】和【目的地】兩個資訊。'
     });
 
     return response as unknown as string;
