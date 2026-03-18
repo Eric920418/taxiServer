@@ -383,7 +383,17 @@ export class PhoneCallProcessor {
    * 下載/取得錄音檔
    */
   private async downloadRecording(call: PhoneCallRecord): Promise<string> {
-    // 3CX 錄音路徑直接在本機
+    // 優先使用客人專屬音軌（不含系統歡迎語，辨識更準確）
+    const callerOnlyPath = path.join(this.recordingsBasePath, `${call.callId}-caller.wav`);
+    if (fs.existsSync(callerOnlyPath)) {
+      const stat = fs.statSync(callerOnlyPath);
+      if (stat.size > 1000) { // 確保不是空檔案
+        console.log(`[PhoneCallProcessor] 使用客人專屬音軌: ${callerOnlyPath}`);
+        return callerOnlyPath;
+      }
+    }
+
+    // 退回混合音軌
     const localPath = path.join(this.recordingsBasePath, `${call.callId}.wav`);
 
     if (fs.existsSync(localPath)) {
