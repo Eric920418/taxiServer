@@ -116,10 +116,24 @@ async function main() {
   const soxCmd = `sox ${CONFIG.tmpFile} -r 8000 -c 1 -b 16 /tmp/taxi-greeting.wav`;
   execSync(soxCmd);
 
-  // 7. 複製到 Asterisk sounds 目錄
-  execSync(`sudo cp /tmp/taxi-greeting.wav ${CONFIG.outputFile}`);
-  execSync(`sudo chown asterisk:asterisk ${CONFIG.outputFile}`);
-  execSync(`sudo chmod 644 ${CONFIG.outputFile}`);
+  // 7. 複製到所有 Asterisk sounds 目錄（Asterisk 會從多個路徑搜尋）
+  const soundPaths = [
+    CONFIG.outputFile,                                                    // /var/lib/asterisk/sounds/custom/
+    '/usr/share/asterisk/sounds/en/custom/taxi-greeting.wav',            // Asterisk 預設語言路徑
+    '/usr/share/asterisk/sounds/custom/taxi-greeting.wav',               // 通用路徑
+  ];
+  for (const dest of soundPaths) {
+    try {
+      const dir = dest.substring(0, dest.lastIndexOf('/'));
+      execSync(`sudo mkdir -p ${dir}`);
+      execSync(`sudo cp /tmp/taxi-greeting.wav ${dest}`);
+      execSync(`sudo chown asterisk:asterisk ${dest}`);
+      execSync(`sudo chmod 644 ${dest}`);
+      console.log(`✅ 已複製: ${dest}`);
+    } catch (e) {
+      console.warn(`⚠️ 無法複製到 ${dest}: ${e.message}`);
+    }
+  }
 
   // 8. 驗證
   const stats = fs.statSync(CONFIG.outputFile);
