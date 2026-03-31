@@ -327,6 +327,9 @@ export function driverAcceptedCard(
 ): FlexMessage {
   const etaText = etaMinutes ? `預計 ${etaMinutes} 分鐘到達` : '正在前往中';
 
+  const liffTrackingId = process.env.LIFF_ID_TRACKING || '';
+  const trackingUrl = liffTrackingId ? `https://liff.line.me/${liffTrackingId}` : '';
+
   const bubble: FlexBubble = {
     type: 'bubble',
     body: {
@@ -375,6 +378,25 @@ export function driverAcceptedCard(
         },
       ],
     },
+    ...(trackingUrl ? {
+      footer: {
+        type: 'box' as const,
+        layout: 'vertical' as const,
+        contents: [
+          {
+            type: 'button' as const,
+            style: 'primary' as const,
+            color: '#2196F3',
+            height: 'md' as const,
+            action: {
+              type: 'uri' as const,
+              label: '即時追蹤司機位置',
+              uri: trackingUrl,
+            },
+          },
+        ],
+      },
+    } : {}),
   };
 
   return {

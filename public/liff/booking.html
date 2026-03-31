@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+  <title>花蓮計程車 - 叫車</title>
+  <link rel="stylesheet" href="/liff/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="header" id="header">花蓮計程車</div>
+
+  <!-- 地圖 -->
+  <div class="map-container">
+    <div id="map"></div>
+    <div class="map-hint" id="mapHint">拖曳地圖選擇上車點</div>
+  </div>
+
+  <div class="content">
+    <!-- 搜尋欄 -->
+    <div class="search-bar">
+      <input type="text" id="searchInput" placeholder="搜尋地址或地標...">
+    </div>
+
+    <!-- 步驟指示 -->
+    <div class="steps">
+      <div class="step active" id="step1"></div>
+      <div class="step" id="step2"></div>
+    </div>
+
+    <!-- 資訊卡 -->
+    <div class="info-card">
+      <div class="info-row">
+        <span class="info-label">上車點</span>
+        <span class="info-value" id="pickupDisplay">移動地圖選擇...</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">目的地</span>
+        <span class="info-value clickable" id="destDisplay" onclick="startDestStep()">點擊選擇目的地</span>
+      </div>
+      <div class="info-row" id="fareRow" style="display:none">
+        <span class="info-label">預估車資</span>
+        <span class="info-value highlight" id="fareDisplay"></span>
+      </div>
+    </div>
+
+    <!-- 預約時間（僅預約模式） -->
+    <div class="datetime-picker" id="datetimeSection" style="display:none">
+      <label>預約時間</label>
+      <input type="datetime-local" id="scheduledAt">
+    </div>
+
+    <!-- 按鈕 -->
+    <div class="btn-group">
+      <button class="btn btn-secondary" onclick="handleSkipDest()" id="skipDestBtn">不指定目的地</button>
+    </div>
+    <div style="height:12px"></div>
+    <button class="btn btn-primary" id="submitBtn" onclick="handleSubmit()" disabled>確認叫車</button>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+  <script>
+    // ===== 狀態 =====
+    let map, marker, geocoder, autocomplete;
+    let currentStep = 'pickup'; // 'pickup' | 'dest'
+    let pickupData = { lat: null, lng: null, address: '' };
+    let destData = { lat: null, lng: null, address: '' };
+    let liffProfile = null;
+    let accessToken = null;
+    let mode = 'call'; // 'call' | 'reserve'
+    let config = {};
+
+    // ===== 初始化 =====
+    async function init() {
+      // 讀取 URL 參數
+      const params = new URLSearchParams(window.location.search);
+      mode = params.get('mode') || 'call';
+
+      if (mode === 'reserve') {
+        document.getElementById('header').textContent = '花蓮計程車 - 預約';
+        document.getElementById('submitBtn').textContent = '確認預約';
+        document.getElementById('submitBtn').classList.remove('btn-primary');
+        document.getElementById('submitBtn').classList.add('btn-orange');
+        document.getElementById('datetimeSection').style.display = 'block';
+        // 預設 1 小時後
+        const d = new Date(Date.now() + 60 * 60 * 1000);
+        document.getElementById('scheduledAt').value = d.toISOString().slice(0, 16);
+        // 設定 min/max
+        const min = new Date(Date.now() + 30 * 60 * 1000).toISOString().slice(0, 16);
+        const max = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+        document.getElementById('scheduledAt').min = min;
+        document.getElementById('scheduledAt').max = max;
+      }
+
+      // 取得配置
+      try {
+        const res = await fetch('/api/line/liff/config');
+        config = await res.json();
+      } catch (e) {
+        console.error('Config fetch failed:', e);
+      }
+
+      // 初始化 LIFF
+      try {
+        await liff.init({ liffId: config.liffIdBooking || '2009661274-79Kh0rhe' });
+        if (liff.isLoggedIn()) {
+          liffProfile = await liff.getProfile();
+          accessToken = liff.getAccessToken();
+        } else {
+          liff.login();
+          return;
+        }
+      } catch (e) {
+        console.error('LIFF init failed:', e);
+      }
+
+      // 載入 Google Maps
+      if (config.googleMapsApiKey) {
+        const script = document.createElement('script');
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${config.googleMapsApiKey}&libraries=places&language=zh-TW&callback=initMap`;
+        script.async = true;
+        document.head.appendChild(script);
+      } else {
+        showToast('地圖服務未設定');
+      }
+    }
+
+    // ===== Google Maps =====
+    function initMap() {
+      const center = config.defaultCenter || { lat: 23.9871, lng: 121.6015 };
+
+      map = new google.maps.Map(document.getElementById('map'), {
+        center,
+        zoom: config.defaultZoom || 15,
+        disableDefaultUI: true,
+        zoomControl: true,
+        mapTypeControl: false,
+        gestureHandling: 'greedy',
+      });
+
+      marker = new google.maps.Marker({
+        position: center,
+        map,
+        draggable: true,
+        animation: google.maps.Animation.DROP,
+      });
+
+      geocoder = new google.maps.Geocoder();
+
+      // 拖曳結束 → 更新地址
+      marker.addListener('dragend', () => {
+        const pos = marker.getPosition();
+        updateLocationFromLatLng(pos.lat(), pos.lng());
+      });
+
+      // 地圖移動 → marker 跟隨中心
+      map.addListener('center_changed', () => {
+        const c = map.getCenter();
+        marker.setPosition(c);
+      });
+
+      map.addListener('idle', () => {
+        const c = map.getCenter();
+        updateLocationFromLatLng(c.lat(), c.lng());
+      });
+
+      // Places Autocomplete
+      const input = document.getElementById('searchInput');
+      autocomplete = new google.maps.places.Autocomplete(input, {
+        componentRestrictions: { country: 'tw' },
+        fields: ['geometry', 'formatted_address', 'name'],
+      });
+
+      autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        if (place.geometry) {
+          const loc = place.geometry.location;
+          map.setCenter(loc);
+          map.setZoom(17);
+          marker.setPosition(loc);
+          const addr = place.name || place.formatted_address || '';
+          updateLocation(loc.lat(), loc.lng(), addr);
+        }
+      });
+
+      // 嘗試取得使用者位置
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            map.setCenter(loc);
+            marker.setPosition(loc);
+            updateLocationFromLatLng(loc.lat, loc.lng);
+          },
+          () => { /* 使用預設位置 */ },
+          { timeout: 5000 }
+        );
+      }
+    }
+
+    function updateLocationFromLatLng(lat, lng) {
+      geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+        let addr = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        if (status === 'OK' && results[0]) {
+          addr = results[0].formatted_address.replace(/^\d{3}台灣/, '').trim();
+        }
+        updateLocation(lat, lng, addr);
+      });
+    }
+
+    function updateLocation(lat, lng, address) {
+      if (currentStep === 'pickup') {
+        pickupData = { lat, lng, address };
+        document.getElementById('pickupDisplay').textContent = address;
+        document.getElementById('pickupDisplay').classList.remove('clickable');
+        document.getElementById('submitBtn').disabled = false;
+      } else {
+        destData = { lat, lng, address };
+        document.getElementById('destDisplay').textContent = address;
+        document.getElementById('destDisplay').classList.remove('clickable');
+        document.getElementById('fareRow').style.display = 'flex';
+        // 估算車資
+        estimateFare();
+      }
+    }
+
+    // ===== 步驟切換 =====
+    function startDestStep() {
+      if (!pickupData.lat) {
+        showToast('請先選擇上車點');
+        return;
+      }
+      currentStep = 'dest';
+      document.getElementById('mapHint').textContent = '拖曳地圖選擇目的地';
+      document.getElementById('mapHint').style.background = 'rgba(255,152,0,0.9)';
+      document.getElementById('step1').classList.remove('active');
+      document.getElementById('step2').classList.add('active');
+      document.getElementById('skipDestBtn').style.display = 'none';
+      document.getElementById('searchInput').placeholder = '搜尋目的地...';
+      document.getElementById('searchInput').value = '';
+    }
+
+    function handleSkipDest() {
+      destData = { lat: null, lng: null, address: '' };
+      document.getElementById('destDisplay').textContent = '不指定';
+      document.getElementById('destDisplay').classList.remove('clickable');
+      document.getElementById('skipDestBtn').style.display = 'none';
+    }
+
+    // ===== 車資估算 =====
+    function estimateFare() {
+      if (!pickupData.lat || !destData.lat) return;
+
+      const service = new google.maps.DistanceMatrixService();
+      service.getDistanceMatrix({
+        origins: [{ lat: pickupData.lat, lng: pickupData.lng }],
+        destinations: [{ lat: destData.lat, lng: destData.lng }],
+        travelMode: 'DRIVING',
+      }, (response, status) => {
+        if (status === 'OK' && response.rows[0].elements[0].status === 'OK') {
+          const dist = response.rows[0].elements[0].distance.value; // 公尺
+          // 花蓮計程車計費：起跳 100，每 250m 加 5 元
+          const fare = 100 + Math.ceil(Math.max(0, dist - 1500) / 250) * 5;
+          document.getElementById('fareDisplay').textContent = `約 $${fare}`;
+        }
+      });
+    }
+
+    // ===== 提交 =====
+    async function handleSubmit() {
+      if (!pickupData.lat) {
+        showToast('請選擇上車地點');
+        return;
+      }
+
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '處理中...';
+
+      const body = {
+        pickupLat: pickupData.lat,
+        pickupLng: pickupData.lng,
+        pickupAddress: pickupData.address,
+        destLat: destData.lat || undefined,
+        destLng: destData.lng || undefined,
+        destAddress: destData.address || undefined,
+        mode,
+      };
+
+      if (mode === 'reserve') {
+        const dt = document.getElementById('scheduledAt').value;
+        if (!dt) {
+          showToast('請選擇預約時間');
+          btn.disabled = false;
+          btn.textContent = '確認預約';
+          return;
+        }
+        body.scheduledAt = new Date(dt).toISOString();
+      }
+
+      try {
+        const res = await fetch('/api/line/liff/create-order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify(body),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || '建單失敗');
+        }
+
+        // 發送確認訊息到聊天室
+        if (liff.isInClient()) {
+          try {
+            const msgText = mode === 'reserve'
+              ? `我已預約叫車！\n上車點：${pickupData.address}${destData.address ? '\n目的地：' + destData.address : ''}`
+              : `我已叫車！\n上車點：${pickupData.address}${destData.address ? '\n目的地：' + destData.address : ''}`;
+
+            await liff.sendMessages([{ type: 'text', text: msgText }]);
+          } catch (e) {
+            console.log('sendMessages failed (may not have permission):', e);
+          }
+          liff.closeWindow();
+        } else {
+          btn.textContent = mode === 'reserve' ? '預約成功！' : '叫車成功！';
+          btn.style.background = '#4CAF50';
+          showToast('請回到 LINE 查看訂單狀態');
+        }
+
+      } catch (error) {
+        console.error('Submit error:', error);
+        showToast(error.message || '操作失敗，請重試');
+        btn.disabled = false;
+        btn.textContent = mode === 'reserve' ? '確認預約' : '確認叫車';
+      }
+    }
+
+    // ===== Toast =====
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // ===== 啟動 =====
+    init();
+  </script>
+</body>
+</html>

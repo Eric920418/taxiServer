@@ -19,37 +19,45 @@ if (!channelAccessToken) {
 
 const client = new messagingApi.MessagingApiClient({ channelAccessToken });
 
+const LIFF_ID_BOOKING = process.env.LIFF_ID_BOOKING;
+const LIFF_ID_TRACKING = process.env.LIFF_ID_TRACKING;
+
+if (!LIFF_ID_BOOKING || !LIFF_ID_TRACKING) {
+  console.error('請設定 LIFF_ID_BOOKING 和 LIFF_ID_TRACKING');
+  process.exit(1);
+}
+
 async function setupRichMenu() {
   try {
-    // 1. 建立 Rich Menu
+    // 1. 建立 Rich Menu（使用 URI action 開啟 LIFF 頁面）
     const richMenu = await client.createRichMenu({
       size: { width: 2500, height: 843 },
       selected: true,
-      name: '花蓮計程車叫車選單',
+      name: '花蓮計程車叫車選單（LIFF）',
       chatBarText: '叫車選單',
       areas: [
         {
           bounds: { x: 0, y: 0, width: 833, height: 843 },
           action: {
-            type: 'postback',
-            data: 'action=CALL_TAXI',
-            displayText: '叫車',
+            type: 'uri',
+            uri: `https://liff.line.me/${LIFF_ID_BOOKING}?mode=call`,
+            label: '叫車',
           },
         },
         {
           bounds: { x: 833, y: 0, width: 834, height: 843 },
           action: {
-            type: 'postback',
-            data: 'action=RESERVE_TAXI',
-            displayText: '預約叫車',
+            type: 'uri',
+            uri: `https://liff.line.me/${LIFF_ID_BOOKING}?mode=reserve`,
+            label: '預約叫車',
           },
         },
         {
           bounds: { x: 1667, y: 0, width: 833, height: 843 },
           action: {
-            type: 'postback',
-            data: 'action=CHECK_ORDER',
-            displayText: '查詢/取消',
+            type: 'uri',
+            uri: `https://liff.line.me/${LIFF_ID_TRACKING}`,
+            label: '查詢/取消',
           },
         },
       ],

@@ -18,6 +18,7 @@ import whisperRouter from './api/whisper';
 import configRouter from './api/config';
 import phoneCallsRouter from './api/phone-calls';
 import lineWebhookRouter from './api/line-webhook';
+import lineLiffRouter from './api/line-liff';
 import { middleware as lineMiddleware } from '@line/bot-sdk';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 import { onDriverOnline } from './services/OrderDispatcher';
@@ -46,6 +47,10 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// LIFF 靜態頁面（在 Helmet 之前掛載，跳過 CSP 限制）
+const liffPath = path.join(__dirname, '../public/liff');
+app.use('/liff', express.static(liffPath));
 
 // Helmet 安全頭 - 配置適合管理後台的 CSP
 app.use(helmet({
@@ -192,6 +197,7 @@ app.use('/api/whisper', whisperRouter);
 app.use('/api/config', configRouter);
 app.use('/api/phone-calls', phoneCallsRouter);
 app.use('/api/line', lineWebhookRouter);
+app.use('/api/line/liff', lineLiffRouter);
 
 // Haversine 公式計算兩點間距離（公尺）
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {

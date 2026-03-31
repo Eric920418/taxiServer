@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+  <title>花蓮計程車 - 訂單追蹤</title>
+  <link rel="stylesheet" href="/liff/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="header">訂單追蹤</div>
+
+  <!-- 載入中 -->
+  <div class="loading" id="loadingState">
+    <div class="loading-spinner"></div>
+    <div>載入中...</div>
+  </div>
+
+  <!-- 無訂單 -->
+  <div class="empty-state" id="emptyState" style="display:none">
+    <div class="icon">🚕</div>
+    <div>目前沒有進行中的訂單</div>
+    <div style="margin-top:16px;color:#666;font-size:16px">點擊下方「叫車」開始叫車</div>
+  </div>
+
+  <!-- 主內容 -->
+  <div id="mainContent" style="display:none">
+    <!-- 地圖 -->
+    <div class="map-container">
+      <div id="map"></div>
+    </div>
+
+    <div class="content">
+      <!-- 狀態卡 -->
+      <div class="info-card">
+        <div class="info-row">
+          <span class="info-label">狀態</span>
+          <span class="info-value"><span class="status-badge" id="statusBadge">--</span></span>
+        </div>
+        <div class="info-row" id="driverRow" style="display:none">
+          <span class="info-label">司機</span>
+          <span class="info-value" id="driverInfo">--</span>
+        </div>
+        <div class="info-row" id="plateRow" style="display:none">
+          <span class="info-label">車牌</span>
+          <span class="info-value highlight" id="plateInfo">--</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">上車點</span>
+          <span class="info-value" id="pickupInfo">--</span>
+        </div>
+        <div class="info-row" id="destRow">
+          <span class="info-label">目的地</span>
+          <span class="info-value" id="destInfo">--</span>
+        </div>
+        <div class="info-row" id="fareRow" style="display:none">
+          <span class="info-label">車資</span>
+          <span class="info-value highlight" id="fareInfo">--</span>
+        </div>
+      </div>
+
+      <!-- 取消按鈕 -->
+      <button class="btn btn-danger" id="cancelBtn" onclick="handleCancel()" style="display:none">取消訂單</button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+  <script>
+    let map, pickupMarker, driverMarker;
+    let accessToken = null;
+    let currentOrder = null;
+    let pollTimer = null;
+    let config = {};
+
+    const STATUS_MAP = {
+      'WAITING': { text: '等待派單中', class: 'status-waiting' },
+      'OFFERED': { text: '尋找司機中', class: 'status-waiting' },
+      'ACCEPTED': { text: '司機已接單', class: 'status-accepted' },
+      'ARRIVED': { text: '司機已到達', class: 'status-arrived' },
+      'ON_TRIP': { text: '行程進行中', class: 'status-on-trip' },
+      'DONE': { text: '行程完成', class: 'status-done' },
+      'SETTLING': { text: '結算中', class: 'status-done' },
+      'CANCELLED': { text: '已取消', class: 'status-cancelled' },
+      'SCHEDULED': { text: '已預約', class: 'status-waiting' },
+    };
+
+    async function init() {
+      try {
+        const res = await fetch('/api/line/liff/config');
+        config = await res.json();
+      } catch (e) { console.error('Config failed:', e); }
+
+      try {
+        await liff.init({ liffId: config.liffIdTracking || '2009661274-wc9AHPr4' });
+        if (liff.isLoggedIn()) {
+          accessToken = liff.getAccessToken();
+        } else {
+          liff.login();
+          return;
+        }
+      } catch (e) {
+        console.error('LIFF init failed:', e);
+      }
+
+      await loadActiveOrder();
+    }
+
+    async function loadActiveOrder() {
+      try {
+        const res = await fetch('/api/line/liff/active-order', {
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+        const data = await res.json();
+
+        document.getElementById('loadingState').style.display = 'none';
+
+        if (!data.hasOrder) {
+          document.getElementById('emptyState').style.display = 'block';
+          return;
+        }
+
+        currentOrder = data.order;
+        document.getElementById('mainContent').style.display = 'block';
+        initMapAndDisplay();
+        startPolling();
+
+      } catch (error) {
+        console.error('Load order failed:', error);
+        document.getElementById('loadingState').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+      }
+    }
+
+    function initMapAndDisplay() {
+      if (!config.googleMapsApiKey) {
+        updateDisplay(currentOrder);
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${config.googleMapsApiKey}&language=zh-TW&callback=onMapReady`;
+      script.async = true;
+      document.head.appendChild(script);
+    }
+
+    function onMapReady() {
+      const pickup = currentOrder.pickup;
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: pickup.lat, lng: pickup.lng },
+        zoom: 15,
+        disableDefaultUI: true,
+        zoomControl: true,
+        gestureHandling: 'greedy',
+      });
+
+      // 上車點標記
+      pickupMarker = new google.maps.Marker({
+        position: { lat: pickup.lat, lng: pickup.lng },
+        map,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: '#2196F3',
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 3,
+        },
+        title: '上車點',
+      });
+
+      // 司機標記
+      if (currentOrder.driver && currentOrder.driver.location) {
+        const dl = currentOrder.driver.location;
+        driverMarker = new google.maps.Marker({
+          position: { lat: dl.lat, lng: dl.lng },
+          map,
+          icon: {
+            url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+              '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">' +
+              '<circle cx="20" cy="20" r="18" fill="#FF9800" stroke="#fff" stroke-width="3"/>' +
+              '<text x="20" y="26" text-anchor="middle" font-size="20">🚕</text></svg>'
+            ),
+            scaledSize: new google.maps.Size(40, 40),
+          },
+          title: '司機位置',
+        });
+
+        // 調整視角包含兩個標記
+        const bounds = new google.maps.LatLngBounds();
+        bounds.extend({ lat: pickup.lat, lng: pickup.lng });
+        bounds.extend({ lat: dl.lat, lng: dl.lng });
+        map.fitBounds(bounds, 60);
+      }
+
+      updateDisplay(currentOrder);
+    }
+
+    function updateDisplay(order) {
+      // 狀態
+      const status = STATUS_MAP[order.status] || { text: order.status, class: '' };
+      const badge = document.getElementById('statusBadge');
+      badge.textContent = status.text;
+      badge.className = 'status-badge ' + status.class;
+
+      // 上車點
+      document.getElementById('pickupInfo').textContent = order.pickup.address || '已定位';
+
+      // 目的地
+      if (order.destination) {
+        document.getElementById('destInfo').textContent = order.destination.address || '已定位';
+      } else {
+        document.getElementById('destRow').style.display = 'none';
+      }
+
+      // 司機資訊
+      if (order.driver) {
+        document.getElementById('driverRow').style.display = 'flex';
+        document.getElementById('driverInfo').textContent = order.driver.name || '司機';
+        if (order.driver.plate) {
+          document.getElementById('plateRow').style.display = 'flex';
+          document.getElementById('plateInfo').textContent = order.driver.plate;
+        }
+      }
+
+      // 車資
+      if (order.fare) {
+        document.getElementById('fareRow').style.display = 'flex';
+        document.getElementById('fareInfo').textContent = `$${order.fare}`;
+      }
+
+      // 取消按鈕（只在等待/接單前顯示）
+      const canCancel = ['WAITING', 'OFFERED', 'ACCEPTED', 'SCHEDULED'].includes(order.status);
+      document.getElementById('cancelBtn').style.display = canCancel ? 'block' : 'none';
+    }
+
+    // ===== 輪詢更新 =====
+    function startPolling() {
+      if (!currentOrder) return;
+      pollTimer = setInterval(pollOrderStatus, 5000);
+    }
+
+    async function pollOrderStatus() {
+      if (!currentOrder) return;
+
+      try {
+        const res = await fetch(`/api/line/liff/order-status/${currentOrder.orderId}`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // 更新 UI
+        currentOrder.status = data.status;
+        currentOrder.driver = data.driver;
+        currentOrder.fare = data.fare;
+        updateDisplay(currentOrder);
+
+        // 更新司機位置
+        if (data.driver && data.driver.location && map) {
+          const pos = { lat: data.driver.location.lat, lng: data.driver.location.lng };
+          if (driverMarker) {
+            driverMarker.setPosition(pos);
+          } else {
+            driverMarker = new google.maps.Marker({
+              position: pos,
+              map,
+              icon: {
+                url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+                  '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">' +
+                  '<circle cx="20" cy="20" r="18" fill="#FF9800" stroke="#fff" stroke-width="3"/>' +
+                  '<text x="20" y="26" text-anchor="middle" font-size="20">🚕</text></svg>'
+                ),
+                scaledSize: new google.maps.Size(40, 40),
+              },
+              title: '司機位置',
+            });
+
+            const bounds = new google.maps.LatLngBounds();
+            bounds.extend(pickupMarker.getPosition());
+            bounds.extend(pos);
+            map.fitBounds(bounds, 60);
+          }
+        }
+
+        // 終態：停止輪詢
+        if (['DONE', 'SETTLING', 'CANCELLED'].includes(data.status)) {
+          clearInterval(pollTimer);
+        }
+
+      } catch (error) {
+        console.error('Poll failed:', error);
+      }
+    }
+
+    // ===== 取消訂單 =====
+    async function handleCancel() {
+      if (!currentOrder || !confirm('確定要取消訂單嗎？')) return;
+
+      const btn = document.getElementById('cancelBtn');
+      btn.disabled = true;
+      btn.textContent = '取消中...';
+
+      try {
+        const res = await fetch(`/api/line/liff/cancel-order/${currentOrder.orderId}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || '取消失敗');
+        }
+
+        showToast('訂單已取消');
+        clearInterval(pollTimer);
+
+        currentOrder.status = 'CANCELLED';
+        updateDisplay(currentOrder);
+
+        setTimeout(() => {
+          if (liff.isInClient()) liff.closeWindow();
+        }, 1500);
+
+      } catch (error) {
+        showToast(error.message);
+        btn.disabled = false;
+        btn.textContent = '取消訂單';
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    init();
+  </script>
+</body>
+</html>
