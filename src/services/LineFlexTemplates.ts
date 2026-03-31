@@ -13,6 +13,10 @@ type FlexBubble = messagingApi.FlexBubble;
 // ========== 歡迎訊息 ==========
 
 export function welcomeMessage(): FlexMessage {
+  const liffBookingId = process.env.LIFF_ID_BOOKING || '';
+  const bookingUrl = liffBookingId ? `https://liff.line.me/${liffBookingId}` : '';
+  const reserveUrl = liffBookingId ? `https://liff.line.me/${liffBookingId}?mode=reserve` : '';
+
   const bubble: FlexBubble = {
     type: 'bubble',
     hero: {
@@ -45,45 +49,52 @@ export function welcomeMessage(): FlexMessage {
       contents: [
         {
           type: 'text',
-          text: '您可以使用以下功能：',
+          text: '點擊下方按鈕，或直接輸入文字：',
           size: 'md',
           margin: 'md',
           wrap: true,
         },
         {
           type: 'text',
-          text: '1. 輸入「叫車」立即叫車',
+          text: '輸入「叫車」「預約」「取消」也可以操作',
           size: 'sm',
-          color: '#666666',
+          color: '#999999',
           margin: 'md',
-          wrap: true,
-        },
-        {
-          type: 'text',
-          text: '2. 輸入「預約」預約叫車',
-          size: 'sm',
-          color: '#666666',
-          margin: 'sm',
-          wrap: true,
-        },
-        {
-          type: 'text',
-          text: '3. 輸入「取消」取消訂單',
-          size: 'sm',
-          color: '#666666',
-          margin: 'sm',
-          wrap: true,
-        },
-        {
-          type: 'text',
-          text: '或直接告訴我您的上車地點和目的地！',
-          size: 'sm',
-          color: '#2196F3',
-          margin: 'lg',
           wrap: true,
         },
       ],
     },
+    ...(bookingUrl ? {
+      footer: {
+        type: 'box' as const,
+        layout: 'vertical' as const,
+        spacing: 'sm' as const,
+        contents: [
+          {
+            type: 'button' as const,
+            style: 'primary' as const,
+            color: '#2196F3',
+            height: 'md' as const,
+            action: {
+              type: 'uri' as const,
+              label: '地圖叫車',
+              uri: bookingUrl,
+            },
+          },
+          {
+            type: 'button' as const,
+            style: 'primary' as const,
+            color: '#FF9800',
+            height: 'md' as const,
+            action: {
+              type: 'uri' as const,
+              label: '預約叫車',
+              uri: reserveUrl,
+            },
+          },
+        ],
+      },
+    } : {}),
   };
 
   return {
