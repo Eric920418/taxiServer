@@ -17,6 +17,8 @@ import ratingsRouter from './api/ratings';
 import whisperRouter from './api/whisper';
 import configRouter from './api/config';
 import phoneCallsRouter from './api/phone-calls';
+import lineWebhookRouter from './api/line-webhook';
+import { middleware as lineMiddleware } from '@line/bot-sdk';
 import { setSocketIO, driverSockets, passengerSockets } from './socket';
 import { onDriverOnline } from './services/OrderDispatcher';
 import { initSmartDispatcherV2, getSmartDispatcherV2 } from './services/SmartDispatcherV2';
@@ -24,6 +26,9 @@ import { initETAService } from './services/ETAService';
 import { initRejectionPredictor } from './services/RejectionPredictor';
 import { initWhisperService } from './services/WhisperService';
 import { initPhoneCallProcessor } from './services/PhoneCallProcessor';
+import { initLineMessageProcessor } from './services/LineMessageProcessor';
+import { initLineNotifier } from './services/LineNotifier';
+import { initScheduledOrderService } from './services/ScheduledOrderService';
 import pool from './db/connection';
 
 // 載入環境變數
@@ -65,6 +70,13 @@ app.use(helmet({
 
 // Middleware
 app.use(cors());
+
+// LINE Webhook 必須在 express.json() 之前掛載（LINE SDK 需要 raw body 驗證簽名）
+const lineChannelSecret = process.env.LINE_CHANNEL_SECRET;
+if (lineChannelSecret) {
+  app.use('/api/line/webhook', lineMiddleware({ channelSecret: lineChannelSecret }));
+}
+
 app.use(express.json());
 
 // 提供管理後台靜態檔案
@@ -131,6 +143,38 @@ try {
   console.warn('[系統] 電話叫車處理管線初始化失敗（需要 OPENAI_API_KEY）:', (error as Error).message);
 }
 
+// 初始化 LINE 叫車處理引擎
+if (process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.LINE_CHANNEL_SECRET) {
+  try {
+    initLineMessageProcessor(pool);
+    initLineNotifier(pool);
+    initScheduledOrderService(pool);
+    console.log('[系統] LINE 叫車處理引擎已初始化（含預約排程）');
+
+    // LINE 對話超時清理（每 10 分鐘掃描一次，超過 30 分鐘未更新的對話重置為 IDLE）
+    setInterval(async () => {
+      try {
+        const result = await pool.query(`
+          UPDATE line_users
+          SET conversation_state = 'IDLE', conversation_data = '{}'
+          WHERE conversation_state != 'IDLE'
+            AND updated_at < NOW() - INTERVAL '30 minutes'
+          RETURNING line_user_id
+        `);
+        if (result.rowCount && result.rowCount > 0) {
+          console.log(`[LINE] 已清理 ${result.rowCount} 個超時對話`);
+        }
+      } catch (err) {
+        console.error('[LINE] 對話超時清理失敗:', err);
+      }
+    }, 10 * 60 * 1000);
+  } catch (error) {
+    console.warn('[系統] LINE 叫車處理引擎初始化失敗:', (error as Error).message);
+  }
+} else {
+  console.log('[系統] LINE 未設定（需要 LINE_CHANNEL_ACCESS_TOKEN + LINE_CHANNEL_SECRET）');
+}
+
 console.log('[系統] 智能派單系統 V2 已初始化');
 console.log('[系統] Whisper 語音服務已初始化');
 
@@ -147,6 +191,7 @@ app.use('/api/ratings', ratingsRouter);
 app.use('/api/whisper', whisperRouter);
 app.use('/api/config', configRouter);
 app.use('/api/phone-calls', phoneCallsRouter);
+app.use('/api/line', lineWebhookRouter);
 
 // Haversine 公式計算兩點間距離（公尺）
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {

@@ -996,6 +996,18 @@ export class SmartDispatcherV2 {
       cancelReason: shouldCancel ? '目前無可用司機' : undefined,
     });
 
+    // LINE 推播無司機通知
+    if (shouldCancel) {
+      try {
+        const { getLineNotifier } = require('./LineNotifier');
+        const lineNotifier = getLineNotifier();
+        if (lineNotifier) {
+          lineNotifier.notifyNoDriverAvailable(orderId)
+            .catch((err: any) => console.error('[SmartDispatcherV2] LINE 推播失敗:', err));
+        }
+      } catch { /* LINE 未初始化，忽略 */ }
+    }
+
     // 從活動訂單移除
     this.activeOrders.delete(orderId);
   }

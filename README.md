@@ -1,10 +1,84 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.5.3-MVP
-> 更新日期：2026-03-14
+> 版本：v1.6.0-MVP
+> 更新日期：2026-03-26
 
-## 📝 最新修改（2026-03-14）- 修復司機端目的地顯示為「花蓮縣花蓮市」
+## 📝 最新修改（2026-03-26）- LINE Messaging API 叫車串接
+
+### 功能
+客戶可以透過 LINE Official Account 進行叫車、取消、預約叫車。
+
+### 三種叫車管道
+| 管道 | 觸發方式 | source 欄位 |
+|------|---------|------------|
+| APP | 乘客端 Android App | `APP` |
+| 電話 | 3CX Webhook → Whisper → GPT | `PHONE` |
+| **LINE** | LINE Webhook → 狀態機 + GPT fallback | `LINE` |
+
+### 新增檔案
+| 檔案 | 用途 |
+|------|------|
+| `src/api/line-webhook.ts` | LINE Webhook 路由（簽名驗證 + 事件分派） |
+| `src/services/LineMessageProcessor.ts` | LINE 對話狀態機（叫車/取消/預約流程） |
+| `src/services/LineNotifier.ts` | 訂單狀態 Push Message 推播 |
+| `src/services/LineFlexTemplates.ts` | Flex Message 模板集 |
+| `src/services/ScheduledOrderService.ts` | Bull Queue 預約排程（提前5分鐘派單、15分鐘提醒） |
+| `src/db/migrations/006-line-integration.sql` | DB Migration（line_users, line_messages, orders 擴展） |
+| `scripts/setup-line-richmenu.ts` | Rich Menu 設定腳本 |
+
+### 修改檔案
+| 檔案 | 變更 |
+|------|------|
+| `src/index.ts` | LINE middleware 掛載（在 express.json 之前）、初始化 LINE 服務、對話超時清理 |
+| `src/api/orders.ts` | accept/fare 端點加入 LINE Push 通知 |
+| `src/services/SmartDispatcherV2.ts` | 無司機時推播 LINE 通知 |
+| `src/db/migrate.ts` | 新增 `line-integration` migration |
+| `.env` | 新增 `LINE_CHANNEL_ACCESS_TOKEN`、`LINE_CHANNEL_SECRET` |
+
+### LINE 對話流程
+```
+叫車：「叫車」→ 傳送位置 → 選目的地 → 確認 → 建單派單
+預約：「預約」→ 傳送位置 → 選目的地 → 選日期時間 → 確認 → Bull Queue 排程
+取消：「取消」→ 顯示活動訂單 → 確認取消
+GPT：直接輸入「我在火車站要去太魯閣」→ GPT 解析 → 確認
+```
+
+### 推播成本優化
+- Reply Message（對話互動）：免費
+- Push Message（狀態推播）：只推 ACCEPTED + DONE，每單約 2 則
+- 預估 1000 單/月 ≈ 2000 則 Push
+
+### 部署步驟
+```bash
+# 1. 安裝依賴
+pnpm add @line/bot-sdk
+
+# 2. 設定 .env
+LINE_CHANNEL_ACCESS_TOKEN=your_token
+LINE_CHANNEL_SECRET=your_secret
+
+# 3. 執行 DB Migration
+npx ts-node src/db/migrate.ts line-integration
+
+# 4. 設定 Rich Menu（可選）
+npx ts-node scripts/setup-line-richmenu.ts
+
+# 5. 在 LINE Developers Console 設定 Webhook URL
+# URL: https://your-domain/api/line/webhook
+
+# 6. 重新啟動伺服器
+pnpm run build && pm2 restart taxiserver
+```
+
+### 注意事項
+- LINE Webhook 要求 HTTPS，需確認伺服器有 SSL 證書
+- 預約功能依賴 Redis（Bull Queue），已確認伺服器 Redis 運行中
+- 對話超時清理：30 分鐘未操作自動重置為 IDLE
+
+---
+
+## 📝 歷史修改（2026-03-14）- 修復司機端目的地顯示為「花蓮縣花蓮市」
 
 ### 問題
 電話訂單的目的地在司機端永遠顯示「花蓮縣花蓮市」。根因是 Geocoding 後的 `formattedAddress` 被 Google 回傳為模糊行政區名，而非客人口述的具體地名。

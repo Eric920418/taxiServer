@@ -1,0 +1,177 @@
+/**
+ * LineNotifier - LINE 訂單狀態推播服務
+ *
+ * 當訂單狀態變更時，主動推送 LINE Push Message 給使用者
+ * 只推播關鍵狀態（ACCEPTED、DONE、CANCELLED、無司機），節省 Push Message 費用
+ */
+
+import { Pool } from 'pg';
+import { messagingApi } from '@line/bot-sdk';
+import * as templates from './LineFlexTemplates';
+
+export class LineNotifier {
+  private pool: Pool;
+  private lineClient: messagingApi.MessagingApiClient;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+
+    const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    if (!channelAccessToken) {
+      throw new Error('LINE_CHANNEL_ACCESS_TOKEN is required for LineNotifier');
+    }
+
+    this.lineClient = new messagingApi.MessagingApiClient({ channelAccessToken });
+  }
+
+  /**
+   * 訂單狀態變更通知
+   * 只在訂單有 line_user_id 時才推播
+   */
+  async notifyOrderStatusChange(
+    orderId: string,
+    newStatus: string,
+    extraData?: { fare?: number; driverName?: string; plate?: string; etaMinutes?: number; reason?: string }
+  ): Promise<void> {
+    try {
+      // 查詢訂單的 line_user_id
+      const result = await this.pool.query(
+        'SELECT line_user_id, driver_id FROM orders WHERE order_id = $1',
+        [orderId]
+      );
+
+      if (result.rows.length === 0) return;
+
+      const { line_user_id, driver_id } = result.rows[0];
+      if (!line_user_id) return; // 非 LINE 訂單，跳過
+
+      let message: messagingApi.Message | null = null;
+
+      switch (newStatus) {
+        case 'ACCEPTED': {
+          // 查詢司機資訊
+          let driverName = extraData?.driverName || '司機';
+          let plate = extraData?.plate || '';
+          const etaMinutes = extraData?.etaMinutes || null;
+
+          if (!extraData?.driverName && driver_id) {
+            const driverResult = await this.pool.query(
+              'SELECT name, plate FROM drivers WHERE driver_id = $1',
+              [driver_id]
+            );
+            if (driverResult.rows[0]) {
+              driverName = driverResult.rows[0].name;
+              plate = driverResult.rows[0].plate;
+            }
+          }
+
+          message = templates.driverAcceptedCard(orderId, driverName, plate, etaMinutes);
+          break;
+        }
+
+        case 'DONE':
+        case 'SETTLING': {
+          const fare = extraData?.fare || 0;
+          if (fare > 0) {
+            message = templates.tripCompletedCard(orderId, fare);
+          }
+          break;
+        }
+
+        case 'CANCELLED': {
+          const reason = extraData?.reason || '訂單已取消';
+          message = templates.orderCancelledCard(orderId, reason);
+          break;
+        }
+      }
+
+      if (message) {
+        await this.lineClient.pushMessage({
+          to: line_user_id,
+          messages: [message],
+        });
+        console.log(`[LineNotifier] 已推播 ${newStatus} 通知給 ${line_user_id} (訂單 ${orderId})`);
+      }
+
+    } catch (error: any) {
+      // Push 失敗不影響主流程（使用者可能已封鎖）
+      console.error(`[LineNotifier] 推播失敗 (${orderId}):`, error.message || error);
+    }
+  }
+
+  /**
+   * 無可用司機通知
+   */
+  async notifyNoDriverAvailable(orderId: string): Promise<void> {
+    try {
+      const result = await this.pool.query(
+        'SELECT line_user_id FROM orders WHERE order_id = $1',
+        [orderId]
+      );
+
+      if (result.rows.length === 0) return;
+
+      const { line_user_id } = result.rows[0];
+      if (!line_user_id) return;
+
+      await this.lineClient.pushMessage({
+        to: line_user_id,
+        messages: [templates.noDriverCard()],
+      });
+      console.log(`[LineNotifier] 已推播無司機通知給 ${line_user_id} (訂單 ${orderId})`);
+
+    } catch (error: any) {
+      console.error(`[LineNotifier] 無司機推播失敗 (${orderId}):`, error.message || error);
+    }
+  }
+
+  /**
+   * 預約提醒
+   */
+  async notifyScheduledOrderReminder(orderId: string): Promise<void> {
+    try {
+      const result = await this.pool.query(
+        'SELECT line_user_id, scheduled_at, pickup_address FROM orders WHERE order_id = $1',
+        [orderId]
+      );
+
+      if (result.rows.length === 0) return;
+
+      const { line_user_id, scheduled_at, pickup_address } = result.rows[0];
+      if (!line_user_id) return;
+
+      const scheduledTime = this.formatDateTime(new Date(scheduled_at));
+      const message = templates.scheduleReminderCard(orderId, scheduledTime, pickup_address);
+
+      await this.lineClient.pushMessage({
+        to: line_user_id,
+        messages: [message],
+      });
+      console.log(`[LineNotifier] 已推播預約提醒給 ${line_user_id} (訂單 ${orderId})`);
+
+    } catch (error: any) {
+      console.error(`[LineNotifier] 預約提醒推播失敗 (${orderId}):`, error.message || error);
+    }
+  }
+
+  private formatDateTime(date: Date): string {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${y}/${m}/${d} ${h}:${min}`;
+  }
+}
+
+// ========== 單例管理 ==========
+
+let lineNotifier: LineNotifier | null = null;
+
+export function initLineNotifier(pool: Pool): void {
+  lineNotifier = new LineNotifier(pool);
+}
+
+export function getLineNotifier(): LineNotifier | null {
+  return lineNotifier;
+}

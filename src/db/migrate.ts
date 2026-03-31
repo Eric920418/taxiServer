@@ -11,6 +11,7 @@ const MIGRATIONS = {
   'fcm-token': 'add-fcm-token-columns.sql',
   'smart-dispatch': '001-smart-dispatch-tables.sql',  // 智能派單系統 V2
   'phone-order': '004-phone-order-tables.sql',        // 電話叫車系統
+  'line-integration': '006-line-integration.sql',     // LINE 叫車系統
 };
 
 /**

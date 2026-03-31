@@ -11,6 +11,7 @@ import {
 } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2 } from '../services/SmartDispatcherV2';
 import { getNotificationService } from '../services/NotificationService';
+import { getLineNotifier } from '../services/LineNotifier';
 
 // 有效的拒單原因（強制選擇）
 const VALID_REJECTION_REASONS = [
@@ -385,6 +386,15 @@ router.patch('/:orderId/accept', async (req, res) => {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
     }
 
+    // LINE 推播通知
+    const lineNotifier = getLineNotifier();
+    if (lineNotifier) {
+      lineNotifier.notifyOrderStatusChange(orderId, 'ACCEPTED', {
+        driverName: fullOrder.driver_name || driverName,
+        plate: fullOrder.plate || '',
+      }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+    }
+
     res.json({
       success: true,
       message: '接單成功',
@@ -756,6 +766,13 @@ async function handleSubmitFare(req: any, res: any) {
       console.log(`[Order] ✅ 已通知乘客 ${fullOrder.passenger_id} 訂單已完成，車資 NT$ ${meterAmount}`);
     } else {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
+    }
+
+    // LINE 推播通知
+    const lineNotifier = getLineNotifier();
+    if (lineNotifier) {
+      lineNotifier.notifyOrderStatusChange(orderId, 'DONE', { fare: meterAmount })
+        .catch(err => console.error('[Order] LINE 推播失敗:', err));
     }
 
     // 產生管理後台通知
