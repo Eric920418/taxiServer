@@ -97,26 +97,30 @@
         document.getElementById('scheduledAt').max = max;
       }
 
-      // 取得配置
+      // 初始化 LIFF（必須先於其他操作）
       try {
-        const res = await fetch('/api/line/liff/config');
-        config = await res.json();
-      } catch (e) {
-        console.error('Config fetch failed:', e);
-      }
-
-      // 初始化 LIFF
-      try {
-        await liff.init({ liffId: config.liffIdBooking || '2009661274-79Kh0rhe' });
+        await liff.init({ liffId: '2009661274-79Kh0rhe' });
         if (liff.isLoggedIn()) {
           liffProfile = await liff.getProfile();
           accessToken = liff.getAccessToken();
+        } else if (liff.isInClient()) {
+          // 在 LINE 內應該自動登入，不應走到這裡
+          showToast('登入中，請稍候...');
         } else {
           liff.login();
           return;
         }
       } catch (e) {
         console.error('LIFF init failed:', e);
+        showToast('LIFF 初始化失敗：' + (e.message || e));
+      }
+
+      // 取得後端配置
+      try {
+        const res = await fetch('/api/line/liff/config');
+        config = await res.json();
+      } catch (e) {
+        console.error('Config fetch failed:', e);
       }
 
       // 載入 Google Maps

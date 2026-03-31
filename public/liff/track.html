@@ -91,21 +91,27 @@
 
     async function init() {
       try {
-        const res = await fetch('/api/line/liff/config');
-        config = await res.json();
-      } catch (e) { console.error('Config failed:', e); }
-
-      try {
-        await liff.init({ liffId: config.liffIdTracking || '2009661274-wc9AHPr4' });
+        await liff.init({ liffId: '2009661274-wc9AHPr4' });
         if (liff.isLoggedIn()) {
           accessToken = liff.getAccessToken();
+        } else if (liff.isInClient()) {
+          showToast('登入中，請稍候...');
         } else {
           liff.login();
           return;
         }
       } catch (e) {
         console.error('LIFF init failed:', e);
+        document.getElementById('loadingState').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+        document.querySelector('#emptyState div:last-child').textContent = 'LIFF 初始化失敗：' + (e.message || e);
+        return;
       }
+
+      try {
+        const res = await fetch('/api/line/liff/config');
+        config = await res.json();
+      } catch (e) { console.error('Config failed:', e); }
 
       await loadActiveOrder();
     }
