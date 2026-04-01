@@ -9,6 +9,9 @@ export const driverSockets = new Map<string, string>();
 // 儲存乘客socket映射 { passengerId: socketId }
 export const passengerSockets = new Map<string, string>();
 
+// 儲存管理員socket映射 { adminId: socketId }
+export const adminSockets = new Map<string, string>();
+
 // 儲存司機當前位置 { driverId: location }
 interface DriverLocation {
   driverId: string;
@@ -123,6 +126,21 @@ export function notifyDriverOrderStatus(driverId: string, order: any) {
     console.log(`[Driver] 司機 ${driverId} 不在線，無法推播`);
     return false;
   }
+}
+
+/**
+ * 通知所有在線管理員/Operator
+ */
+export function notifyAdmins(event: string, data: any) {
+  const onlineAdminCount = adminSockets.size;
+  if (onlineAdminCount === 0) {
+    console.log(`[Admin] 無在線管理員，跳過推播 ${event}`);
+    return;
+  }
+  console.log(`[Admin] 推播 ${event} 給 ${onlineAdminCount} 位在線管理員`);
+  adminSockets.forEach((socketId, adminId) => {
+    io.to(socketId).emit(event, data);
+  });
 }
 
 /**

@@ -20,7 +20,7 @@ import phoneCallsRouter from './api/phone-calls';
 import lineWebhookRouter from './api/line-webhook';
 import lineLiffRouter from './api/line-liff';
 import { middleware as lineMiddleware } from '@line/bot-sdk';
-import { setSocketIO, driverSockets, passengerSockets } from './socket';
+import { setSocketIO, driverSockets, passengerSockets, adminSockets } from './socket';
 import { onDriverOnline } from './services/OrderDispatcher';
 import { initSmartDispatcherV2, getSmartDispatcherV2 } from './services/SmartDispatcherV2';
 import { initETAService } from './services/ETAService';
@@ -533,6 +533,28 @@ io.on('connection', (socket) => {
     socket.emit('nearby:drivers', nearbyDrivers);
   });
 
+  // 管理員上線（需驗證 JWT token）
+  socket.on('admin:online', (data) => {
+    const { adminId, token } = data;
+    if (!token) {
+      console.warn(`[Admin] admin:online 缺少 token，拒絕: ${socket.id}`);
+      return;
+    }
+    try {
+      const jwt = require('jsonwebtoken');
+      const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      if (decoded.adminId !== adminId) {
+        console.warn(`[Admin] token adminId 不符: ${decoded.adminId} !== ${adminId}`);
+        return;
+      }
+      adminSockets.set(adminId, socket.id);
+      console.log(`[Admin] ${adminId} 已上線（已驗證），Socket: ${socket.id}`);
+    } catch (err) {
+      console.warn(`[Admin] admin:online token 驗證失敗:`, err);
+    }
+  });
+
   // 斷線處理
   socket.on('disconnect', async () => {
     console.log(`[Socket] 斷線: ${socket.id}`);
@@ -564,6 +586,15 @@ io.on('connection', (socket) => {
       if (socketId === socket.id) {
         passengerSockets.delete(passengerId);
         console.log(`[Passenger] ${passengerId} 已離線`);
+        break;
+      }
+    }
+
+    // 移除管理員socket映射
+    for (const [adminId, socketId] of adminSockets.entries()) {
+      if (socketId === socket.id) {
+        adminSockets.delete(adminId);
+        console.log(`[Admin] ${adminId} 已離線`);
         break;
       }
     }

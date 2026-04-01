@@ -1,7 +1,7 @@
 import { query } from '../db/connection';
 
 export type NotificationType = 'info' | 'warning' | 'error' | 'success';
-export type NotificationCategory = 'order' | 'driver' | 'passenger' | 'system';
+export type NotificationCategory = 'order' | 'driver' | 'passenger' | 'system' | 'phone_call';
 
 interface NotificationData {
   type: NotificationType;
@@ -161,6 +161,22 @@ class NotificationService {
       category: 'passenger',
       title: '新評價',
       message: `收到 ${count} 則新的 ${rating} 星評價`
+    });
+  }
+
+  // ========== 電話叫車相關通知 ==========
+
+  /**
+   * 電話叫車需人工審核通知
+   */
+  async notifyPhoneCallNeedsReview(callId: string, callerNumber: string, transcript: string): Promise<void> {
+    await this.create({
+      type: 'warning',
+      category: 'phone_call',
+      title: '電話需人工審核',
+      message: `來電 ${callerNumber} 信心度不足，請審核: "${transcript?.substring(0, 50)}..."`,
+      relatedId: callId,
+      link: `/phonecalls?review=${callId}`
     });
   }
 

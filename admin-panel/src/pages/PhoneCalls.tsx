@@ -13,12 +13,21 @@ import {
   Row,
   Col,
   message,
+  Alert,
+  Form,
+  Divider,
+  Popconfirm,
+  Progress,
 } from 'antd';
 import {
   PhoneOutlined,
   EyeOutlined,
   ReloadOutlined,
   SearchOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ExclamationCircleOutlined,
+  SoundOutlined,
 } from '@ant-design/icons';
 import { phoneCallAPI } from '../services/api';
 import dayjs from 'dayjs';
@@ -26,12 +35,23 @@ import type { ColumnsType } from 'antd/es/table';
 
 const { Text, Paragraph } = Typography;
 const { Option } = Select;
+const { TextArea } = Input;
 
 // 後端回傳 camelCase
 interface ParsedFields {
+  pickup_address?: string;
+  destination_address?: string;
+  customer_name?: string;
+  passenger_count?: number;
+  subsidy_type?: string;
+  pet_present?: string;
+  pet_carrier?: string;
+  pet_note?: string;
+  special_notes?: string;
+  confidence?: number;
+  // 舊格式相容
   pickup?: string;
   destination?: string;
-  subsidy_type?: string;
   has_pet?: boolean;
   [key: string]: unknown;
 }
@@ -47,6 +67,9 @@ interface PhoneCall {
   orderId: string | null;
   parsedFields: ParsedFields | null;
   errorMessage: string | null;
+  eventConfidence?: number | null;
+  fieldConfidence?: number | null;
+  recordingUrl?: string | null;
 }
 
 const EVENT_TYPE_MAP: Record<string, { label: string; color: string }> = {
@@ -62,6 +85,14 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   PROCESSING: { label: '處理中', color: 'processing' },
   PENDING: { label: '待處理', color: 'default' },
   RECEIVED: { label: '已接收', color: 'default' },
+  NEEDS_REVIEW: { label: '需審核', color: 'warning' },
+  APPROVED: { label: '已核准', color: 'success' },
+  REJECTED: { label: '��拒絕', color: 'error' },
+  DOWNLOADING: { label: '下載中', color: 'processing' },
+  TRANSCRIBING: { label: '轉錄中', color: 'processing' },
+  PARSING: { label: '解析中', color: 'processing' },
+  DISPATCHING: { label: '派單中', color: 'processing' },
+  FOLLOW_UP: { label: '跟進', color: 'default' },
 };
 
 const PhoneCalls: React.FC = () => {
@@ -72,22 +103,23 @@ const PhoneCalls: React.FC = () => {
   const [callerSearch, setCallerSearch] = useState('');
   const [selectedRecord, setSelectedRecord] = useState<PhoneCall | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [needsReviewCount, setNeedsReviewCount] = useState(0);
+  const [reviewForm] = Form.useForm();
 
   const fetchRecords = useCallback(async (page = 1, pageSize = 20) => {
     setLoading(true);
     try {
       const res = await phoneCallAPI.list({ page, pageSize, status: statusFilter });
-      // 後端回傳 { calls: [...], total: N }
       const calls: PhoneCall[] = res.data?.calls ?? [];
       const total: number = res.data?.total ?? calls.length;
 
-      // 若有搜尋號碼，在前端篩選（後端不支援此參數）
       const filtered = callerSearch
         ? calls.filter(c => c.callerNumber?.includes(callerSearch))
         : calls;
 
       setRecords(filtered);
-      setPagination({ current: page, pageSize, total });
+      setPagination({ current: page, pageSize, total: callerSearch ? filtered.length : total });
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } }; message?: string };
       message.error(error?.response?.data?.message || error?.message || '載入失敗');
@@ -96,10 +128,26 @@ const PhoneCalls: React.FC = () => {
     }
   }, [statusFilter, callerSearch]);
 
+  const fetchNeedsReviewCount = useCallback(async () => {
+    try {
+      const res = await phoneCallAPI.getNeedsReviewCount();
+      setNeedsReviewCount(res.data?.count ?? 0);
+    } catch {
+      // 靜默失敗（可能未登入）
+    }
+  }, []);
+
   useEffect(() => {
     fetchRecords(1, pagination.pageSize);
+    fetchNeedsReviewCount();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  // 定期刷新待審核數量
+  useEffect(() => {
+    const timer = setInterval(fetchNeedsReviewCount, 15000);
+    return () => clearInterval(timer);
+  }, [fetchNeedsReviewCount]);
 
   const handleSearch = () => {
     fetchRecords(1, pagination.pageSize);
@@ -108,6 +156,57 @@ const PhoneCalls: React.FC = () => {
   const openDrawer = (record: PhoneCall) => {
     setSelectedRecord(record);
     setDrawerOpen(true);
+
+    // 預填審核表單
+    if (record.processingStatus === 'NEEDS_REVIEW' && record.parsedFields) {
+      const pf = record.parsedFields;
+      reviewForm.setFieldsValue({
+        pickup_address: pf.pickup_address || pf.pickup || '',
+        destination_address: pf.destination_address || pf.destination || '',
+        customer_name: pf.customer_name || '',
+        subsidy_type: pf.subsidy_type || 'NONE',
+        pet_present: pf.pet_present || 'UNKNOWN',
+        note: '',
+      });
+    }
+  };
+
+  const handleReview = async (action: 'APPROVED' | 'REJECTED') => {
+    if (!selectedRecord) return;
+    setReviewLoading(true);
+    try {
+      const formValues = reviewForm.getFieldsValue();
+      const editedFields = action === 'APPROVED' ? {
+        pickup_address: formValues.pickup_address,
+        destination_address: formValues.destination_address,
+        customer_name: formValues.customer_name,
+        subsidy_type: formValues.subsidy_type,
+        pet_present: formValues.pet_present,
+      } : undefined;
+
+      await phoneCallAPI.reviewCall(selectedRecord.callId, {
+        action,
+        editedFields,
+        note: formValues.note,
+      });
+
+      message.success(action === 'APPROVED' ? '已核准，訂單建立中' : '已拒絕');
+      setDrawerOpen(false);
+      fetchRecords(pagination.current, pagination.pageSize);
+      fetchNeedsReviewCount();
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { error?: string } }; message?: string };
+      message.error(error?.response?.data?.error || error?.message || '操作失敗');
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const getConfidenceColor = (confidence: number | null | undefined): string => {
+    if (confidence == null) return '#d9d9d9';
+    if (confidence >= 0.8) return '#52c41a';
+    if (confidence >= 0.6) return '#faad14';
+    return '#ff4d4f';
   };
 
   const columns: ColumnsType<PhoneCall> = [
@@ -133,10 +232,10 @@ const PhoneCalls: React.FC = () => {
       dataIndex: 'transcript',
       ellipsis: true,
       render: (v: string | null) => {
-        if (!v) return <Text type="secondary">（無逐字稿）</Text>;
+        if (!v) return <Text type="secondary">(無逐字稿)</Text>;
         return (
           <Text ellipsis={{ tooltip: v }}>
-            {v.length > 60 ? v.slice(0, 60) + '…' : v}
+            {v.length > 60 ? v.slice(0, 60) + '...' : v}
           </Text>
         );
       },
@@ -172,10 +271,11 @@ const PhoneCalls: React.FC = () => {
       render: (_: unknown, record: PhoneCall) => (
         <Button
           size="small"
-          icon={<EyeOutlined />}
+          type={record.processingStatus === 'NEEDS_REVIEW' ? 'primary' : 'default'}
+          icon={record.processingStatus === 'NEEDS_REVIEW' ? <ExclamationCircleOutlined /> : <EyeOutlined />}
           onClick={() => openDrawer(record)}
         >
-          查看
+          {record.processingStatus === 'NEEDS_REVIEW' ? '審核' : '查看'}
         </Button>
       ),
     },
@@ -183,17 +283,44 @@ const PhoneCalls: React.FC = () => {
 
   return (
     <div>
+      {needsReviewCount > 0 && (
+        <Alert
+          message={`有 ${needsReviewCount} 通電話需要人工審核`}
+          type="warning"
+          showIcon
+          icon={<ExclamationCircleOutlined />}
+          style={{ marginBottom: 16 }}
+          action={
+            <Button
+              size="small"
+              type="primary"
+              onClick={() => {
+                setStatusFilter('NEEDS_REVIEW');
+              }}
+            >
+              查看待審核
+            </Button>
+          }
+        />
+      )}
+
       <Card
         title={
           <Space>
             <PhoneOutlined />
             電話記錄
+            {needsReviewCount > 0 && (
+              <Tag color="warning">{needsReviewCount} 待審核</Tag>
+            )}
           </Space>
         }
         extra={
           <Button
             icon={<ReloadOutlined />}
-            onClick={() => fetchRecords(pagination.current, pagination.pageSize)}
+            onClick={() => {
+              fetchRecords(pagination.current, pagination.pageSize);
+              fetchNeedsReviewCount();
+            }}
           >
             重新整理
           </Button>
@@ -208,10 +335,11 @@ const PhoneCalls: React.FC = () => {
               value={statusFilter}
               onChange={(v) => setStatusFilter(v)}
             >
-              <Option value="COMPLETED">完成</Option>
+              <Option value="NEEDS_REVIEW">需審核</Option>
+              <Option value="COMPLETED">完��</Option>
               <Option value="FAILED">失敗</Option>
-              <Option value="PROCESSING">處理中</Option>
-              <Option value="PENDING">待處理</Option>
+              <Option value="APPROVED">已核准</Option>
+              <Option value="REJECTED">���拒絕</Option>
               <Option value="RECEIVED">已接收</Option>
             </Select>
           </Col>
@@ -236,6 +364,9 @@ const PhoneCalls: React.FC = () => {
           dataSource={records}
           rowKey="callId"
           loading={loading}
+          rowClassName={(record) =>
+            record.processingStatus === 'NEEDS_REVIEW' ? 'needs-review-row' : ''
+          }
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,
@@ -249,15 +380,20 @@ const PhoneCalls: React.FC = () => {
       </Card>
 
       <Drawer
-        title="電話記錄詳情"
+        title={
+          selectedRecord?.processingStatus === 'NEEDS_REVIEW'
+            ? '電話審核'
+            : '電話記錄詳情'
+        }
         placement="right"
-        width={520}
+        width={560}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
       >
         {selectedRecord && (
           <Space direction="vertical" style={{ width: '100%' }} size="large">
+            {/* 基本資訊 */}
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="來電號碼">
                 {selectedRecord.callerNumber}
@@ -295,6 +431,50 @@ const PhoneCalls: React.FC = () => {
               </Descriptions.Item>
             </Descriptions>
 
+            {/* 信心度顯示 */}
+            {(selectedRecord.eventConfidence != null || selectedRecord.fieldConfidence != null) && (
+              <Card size="small" title="LLM 信心度">
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {selectedRecord.eventConfidence != null && (
+                    <div>
+                      <Text style={{ marginRight: 8 }}>事件分類:</Text>
+                      <Progress
+                        percent={Math.round(selectedRecord.eventConfidence * 100)}
+                        size="small"
+                        strokeColor={getConfidenceColor(selectedRecord.eventConfidence)}
+                        style={{ maxWidth: 200, display: 'inline-flex' }}
+                      />
+                    </div>
+                  )}
+                  {selectedRecord.fieldConfidence != null && (
+                    <div>
+                      <Text style={{ marginRight: 8 }}>欄位提取:</Text>
+                      <Progress
+                        percent={Math.round(selectedRecord.fieldConfidence * 100)}
+                        size="small"
+                        strokeColor={getConfidenceColor(selectedRecord.fieldConfidence)}
+                        style={{ maxWidth: 200, display: 'inline-flex' }}
+                      />
+                    </div>
+                  )}
+                </Space>
+              </Card>
+            )}
+
+            {/* 錄音播放 */}
+            {selectedRecord.recordingUrl && (
+              <Card size="small" title={<><SoundOutlined /> 錄音播放</>}>
+                <audio
+                  controls
+                  style={{ width: '100%' }}
+                  src={selectedRecord.recordingUrl}
+                >
+                  瀏覽器不支援音訊播放
+                </audio>
+              </Card>
+            )}
+
+            {/* 逐字稿 */}
             {selectedRecord.transcript && (
               <Card size="small" title="客人說了什麼（逐字稿）">
                 <Paragraph
@@ -305,33 +485,117 @@ const PhoneCalls: React.FC = () => {
               </Card>
             )}
 
-            {selectedRecord.parsedFields && (
-              <Card size="small" title="GPT 解析結果">
-                <Descriptions column={1} size="small">
-                  {selectedRecord.parsedFields.pickup && (
-                    <Descriptions.Item label="上車地點">
-                      {selectedRecord.parsedFields.pickup}
-                    </Descriptions.Item>
-                  )}
-                  {selectedRecord.parsedFields.destination && (
-                    <Descriptions.Item label="目的地">
-                      {selectedRecord.parsedFields.destination}
-                    </Descriptions.Item>
-                  )}
-                  {selectedRecord.parsedFields.subsidy_type && (
-                    <Descriptions.Item label="補貼類型">
-                      {selectedRecord.parsedFields.subsidy_type}
-                    </Descriptions.Item>
-                  )}
-                  {selectedRecord.parsedFields.has_pet != null && (
-                    <Descriptions.Item label="寵物">
-                      {selectedRecord.parsedFields.has_pet ? '有' : '無'}
-                    </Descriptions.Item>
-                  )}
-                </Descriptions>
-              </Card>
+            {/* NEEDS_REVIEW: 審核表單 */}
+            {selectedRecord.processingStatus === 'NEEDS_REVIEW' ? (
+              <>
+                <Divider>審核操作</Divider>
+                <Form form={reviewForm} layout="vertical" size="small">
+                  <Form.Item
+                    label="上車地點"
+                    name="pickup_address"
+                    rules={[{ required: true, message: '請填寫上車地點' }]}
+                  >
+                    <Input placeholder="例：花蓮火車站" />
+                  </Form.Item>
+                  <Form.Item label="目的地" name="destination_address">
+                    <Input placeholder="例：慈濟醫院" />
+                  </Form.Item>
+                  <Form.Item label="乘客姓名" name="customer_name">
+                    <Input placeholder="（選填）" />
+                  </Form.Item>
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Item label="補貼類型" name="subsidy_type">
+                        <Select>
+                          <Option value="NONE">無</Option>
+                          <Option value="SENIOR_CARD">敬老卡</Option>
+                          <Option value="LOVE_CARD">愛心卡</Option>
+                          <Option value="PENDING">待確認</Option>
+                        </Select>
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item label="寵物" name="pet_present">
+                        <Select>
+                          <Option value="UNKNOWN">不明</Option>
+                          <Option value="YES">有</Option>
+                          <Option value="NO">無</Option>
+                        </Select>
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item label="審核備註" name="note">
+                    <TextArea rows={2} placeholder="（選填）備註原因" />
+                  </Form.Item>
+                </Form>
+
+                <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+                  <Popconfirm
+                    title="確定拒絕此通電話？"
+                    onConfirm={() => handleReview('REJECTED')}
+                    okText="確定拒絕"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Button
+                      danger
+                      icon={<CloseCircleOutlined />}
+                      loading={reviewLoading}
+                    >
+                      拒絕
+                    </Button>
+                  </Popconfirm>
+                  <Button
+                    type="primary"
+                    icon={<CheckCircleOutlined />}
+                    loading={reviewLoading}
+                    onClick={() => {
+                      reviewForm.validateFields().then(() => {
+                        handleReview('APPROVED');
+                      });
+                    }}
+                    style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                  >
+                    核准建單
+                  </Button>
+                </Space>
+              </>
+            ) : (
+              /* 非審核模式：顯示 GPT 解析結果 */
+              selectedRecord.parsedFields && (
+                <Card size="small" title="GPT 解析結果">
+                  <Descriptions column={1} size="small">
+                    {(selectedRecord.parsedFields.pickup_address || selectedRecord.parsedFields.pickup) && (
+                      <Descriptions.Item label="上車地點">
+                        {selectedRecord.parsedFields.pickup_address || selectedRecord.parsedFields.pickup}
+                      </Descriptions.Item>
+                    )}
+                    {(selectedRecord.parsedFields.destination_address || selectedRecord.parsedFields.destination) && (
+                      <Descriptions.Item label="目的地">
+                        {selectedRecord.parsedFields.destination_address || selectedRecord.parsedFields.destination}
+                      </Descriptions.Item>
+                    )}
+                    {selectedRecord.parsedFields.customer_name && (
+                      <Descriptions.Item label="乘客姓名">
+                        {selectedRecord.parsedFields.customer_name}
+                      </Descriptions.Item>
+                    )}
+                    {selectedRecord.parsedFields.subsidy_type && selectedRecord.parsedFields.subsidy_type !== 'NONE' && (
+                      <Descriptions.Item label="補貼類型">
+                        {selectedRecord.parsedFields.subsidy_type}
+                      </Descriptions.Item>
+                    )}
+                    {selectedRecord.parsedFields.pet_present && selectedRecord.parsedFields.pet_present !== 'UNKNOWN' && (
+                      <Descriptions.Item label="寵物">
+                        {selectedRecord.parsedFields.pet_present === 'YES' ? '有' : '無'}
+                      </Descriptions.Item>
+                    )}
+                  </Descriptions>
+                </Card>
+              )
             )}
 
+            {/* 錯誤訊息 */}
             {selectedRecord.errorMessage && (
               <Card size="small" title="錯誤訊息" styles={{ header: { color: '#ff4d4f' } }}>
                 <Text type="danger">{selectedRecord.errorMessage}</Text>
@@ -340,6 +604,15 @@ const PhoneCalls: React.FC = () => {
           </Space>
         )}
       </Drawer>
+
+      <style>{`
+        .needs-review-row {
+          background-color: #fff7e6 !important;
+        }
+        .needs-review-row:hover > td {
+          background-color: #fff1cc !important;
+        }
+      `}</style>
     </div>
   );
 };

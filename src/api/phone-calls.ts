@@ -1,14 +1,25 @@
 /**
- * phone-calls.ts - 電話叫車 Webhook 路由
+ * phone-calls.ts - 電話叫車 Webhook 路由 + Operator 審核 API
  *
  * 接收 3CX CallCompleted webhook，管理電話處理管線
  */
 
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
 import { getPhoneCallProcessor } from '../services/PhoneCallProcessor';
+import { authenticateAdmin } from './admin';
 
 const router = Router();
+
+// 擴展 Request 以包含 admin 資訊
+interface AuthenticatedRequest extends Request {
+  admin?: {
+    admin_id: string;
+    username: string;
+    role: string;
+    email: string;
+  };
+}
 
 /**
  * 3CX Webhook - 接收通話完成事件
@@ -78,6 +89,69 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+// ========== Operator 審核 API（需驗證，放在 /:callId 之前）==========
+
+/**
+ * 取得待審核電話列表
+ * GET /api/phone-calls/needs-review
+ */
+router.get('/needs-review', authenticateAdmin as any, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const calls = await queryMany(
+      `SELECT * FROM phone_calls
+       WHERE processing_status = 'NEEDS_REVIEW'
+       ORDER BY created_at ASC`,
+      []
+    );
+
+    res.json({
+      success: true,
+      calls: calls.map(c => ({
+        callId: c.call_id,
+        callerNumber: c.caller_number,
+        durationSeconds: c.duration_seconds,
+        recordingUrl: c.recording_url,
+        processingStatus: c.processing_status,
+        transcript: c.transcript,
+        parsedFields: c.parsed_fields,
+        orderId: c.order_id,
+        eventType: c.event_type,
+        eventConfidence: c.event_confidence ? parseFloat(c.event_confidence) : null,
+        fieldConfidence: c.field_confidence ? parseFloat(c.field_confidence) : null,
+        relatedCallId: c.related_call_id,
+        errorMessage: c.error_message,
+        retryCount: c.retry_count,
+        reviewedBy: c.reviewed_by,
+        reviewAction: c.review_action,
+        editedFields: c.edited_fields,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      })),
+      total: calls.length
+    });
+  } catch (error) {
+    console.error('[PhoneCalls NeedsReview] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 取得待審核數量
+ * GET /api/phone-calls/needs-review/count
+ */
+router.get('/needs-review/count', authenticateAdmin as any, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await queryOne(
+      `SELECT COUNT(*) as count FROM phone_calls WHERE processing_status = 'NEEDS_REVIEW'`,
+      []
+    );
+    res.json({ success: true, count: parseInt(result?.count || '0') });
+  } catch (error) {
+    console.error('[PhoneCalls NeedsReviewCount] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
 /**
  * 列出電話記錄
  * GET /api/phone-calls
@@ -110,6 +184,8 @@ router.get('/', async (req, res) => {
         parsedFields: c.parsed_fields,
         orderId: c.order_id,
         eventType: c.event_type,
+        eventConfidence: c.event_confidence ? parseFloat(c.event_confidence) : null,
+        fieldConfidence: c.field_confidence ? parseFloat(c.field_confidence) : null,
         errorMessage: c.error_message,
         retryCount: c.retry_count,
         createdAt: c.created_at,
@@ -150,14 +226,103 @@ router.get('/:callId', async (req, res) => {
       parsedFields: call.parsed_fields,
       orderId: call.order_id,
       eventType: call.event_type,
+      eventConfidence: call.event_confidence ? parseFloat(call.event_confidence) : null,
+      fieldConfidence: call.field_confidence ? parseFloat(call.field_confidence) : null,
       relatedCallId: call.related_call_id,
       errorMessage: call.error_message,
       retryCount: call.retry_count,
+      reviewedBy: call.reviewed_by,
+      reviewedAt: call.reviewed_at,
+      reviewAction: call.review_action,
+      reviewNote: call.review_note,
+      editedFields: call.edited_fields,
       createdAt: call.created_at,
       updatedAt: call.updated_at
     });
   } catch (error) {
     console.error('[PhoneCalls GET/:id] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * Operator 審核電話
+ * POST /api/phone-calls/:callId/review
+ */
+router.post('/:callId/review', authenticateAdmin as any, async (req: AuthenticatedRequest, res: Response) => {
+  const { callId } = req.params;
+  const { action, editedFields, note } = req.body;
+
+  try {
+    // 驗證 action
+    if (!action || !['APPROVED', 'REJECTED'].includes(action)) {
+      return res.status(400).json({ error: 'action 必須為 APPROVED 或 REJECTED' });
+    }
+
+    // 原子性更新：只更新 NEEDS_REVIEW 狀態的記錄（防競態）
+    const result = await query(
+      `UPDATE phone_calls SET
+        processing_status = $1,
+        review_action = $1,
+        reviewed_by = $2,
+        reviewed_at = CURRENT_TIMESTAMP,
+        review_note = $3,
+        edited_fields = $4,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE call_id = $5 AND processing_status = 'NEEDS_REVIEW'
+       RETURNING call_id`,
+      [
+        action,
+        req.admin?.admin_id || 'unknown',
+        note || null,
+        editedFields ? JSON.stringify(editedFields) : null,
+        callId
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      // 沒有更新到任何行：不存在或已被其他 operator 處理
+      const existing = await queryOne('SELECT processing_status FROM phone_calls WHERE call_id = $1', [callId]);
+      if (!existing) {
+        return res.status(404).json({ error: '電話記錄不存在' });
+      }
+      return res.status(409).json({
+        error: '此電話已被審核',
+        currentStatus: existing.processing_status
+      });
+    }
+
+    console.log(`[PhoneCalls Review] ${req.admin?.username} ${action} 電話 ${callId}`);
+
+    // APPROVED：非同步恢復處理管線
+    if (action === 'APPROVED') {
+      res.json({
+        success: true,
+        callId,
+        action,
+        message: '已核准，開始處理訂單'
+      });
+
+      setImmediate(async () => {
+        try {
+          const processor = getPhoneCallProcessor();
+          await processor.resumeAfterApproval(callId, editedFields);
+        } catch (error) {
+          console.error(`[PhoneCalls Review] 審核後處理失敗:`, error);
+        }
+      });
+    } else {
+      // REJECTED
+      res.json({
+        success: true,
+        callId,
+        action,
+        message: '已拒絕'
+      });
+    }
+
+  } catch (error) {
+    console.error('[PhoneCalls Review] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });

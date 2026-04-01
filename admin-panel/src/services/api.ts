@@ -337,6 +337,13 @@ export const phoneCallAPI = {
       },
     });
   },
+  getNeedsReview: () => api.get('/phone-calls/needs-review'),
+  getNeedsReviewCount: () => api.get('/phone-calls/needs-review/count'),
+  reviewCall: (callId: string, data: {
+    action: 'APPROVED' | 'REJECTED';
+    editedFields?: Record<string, any>;
+    note?: string;
+  }) => api.post(`/phone-calls/${callId}/review`, data),
 };
 
 export default api;

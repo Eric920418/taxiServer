@@ -10,9 +10,10 @@ import fs from 'fs';
 import path from 'path';
 import { CallFieldExtractor, ParsedFields, CallEventType } from './CallFieldExtractor';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
-import { getSocketIO, driverSockets } from '../socket';
+import { getSocketIO, driverSockets, notifyAdmins } from '../socket';
 import { hualienAddressDB } from './HualienAddressDB';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
+import { getNotificationService } from './NotificationService';
 
 // ========== 類型定義 ==========
 
@@ -48,6 +49,10 @@ export class PhoneCallProcessor {
 
   // 3CX 錄音存放路徑
   private recordingsBasePath: string;
+
+  // 信心度閾值（低於此值轉人工審核）
+  private readonly EVENT_CONFIDENCE_THRESHOLD = parseFloat(process.env.PHONE_EVENT_CONFIDENCE_THRESHOLD || '0.7');
+  private readonly FIELD_CONFIDENCE_THRESHOLD = parseFloat(process.env.PHONE_FIELD_CONFIDENCE_THRESHOLD || '0.6');
 
   constructor(pool: Pool) {
     this.pool = pool;
@@ -130,10 +135,33 @@ export class PhoneCallProcessor {
       console.log(`[PhoneCallProcessor] 事件類型: ${eventClassification.eventType} (信心度: ${eventClassification.confidence})`);
       await this.updateEventType(callId, eventClassification.eventType);
 
+      // 4.5 對 NEW_ORDER 預先提取欄位（以便 operator 審核時能看到）
+      let parsedFields: ParsedFields | null = null;
+      if (eventClassification.eventType === 'NEW_ORDER') {
+        console.log('[PhoneCall] 轉錄原文:', transcript);
+        parsedFields = await this.fieldExtractor.extractFields(transcript);
+        console.log('[PhoneCall] GPT提取:', JSON.stringify(parsedFields));
+        await this.updateParsedFields(callId, parsedFields);
+      }
+
+      // 4.6 持久化信心度分數
+      await this.persistConfidenceScores(callId, eventClassification.confidence, parsedFields?.confidence ?? null);
+
+      // 4.7 信心度閘門：低於閾值則轉人工審核
+      const needsReview =
+        eventClassification.confidence < this.EVENT_CONFIDENCE_THRESHOLD ||
+        (parsedFields !== null && parsedFields.confidence < this.FIELD_CONFIDENCE_THRESHOLD);
+
+      if (needsReview) {
+        console.log(`[PhoneCallProcessor] ⚠️ 信心度不足，轉人工審核 (event: ${eventClassification.confidence}, field: ${parsedFields?.confidence ?? 'N/A'})`);
+        await this.markNeedsReview(callId, call, transcript, eventClassification, parsedFields);
+        return;
+      }
+
       // 5. 根據事件類型處理
       switch (eventClassification.eventType) {
         case 'NEW_ORDER':
-          await this.handleNewOrder(callId, call, transcript);
+          await this.handleNewOrder(callId, call, transcript, parsedFields!);
           break;
         case 'URGE':
           await this.handleUrge(callId, call, activeOrder);
@@ -158,15 +186,18 @@ export class PhoneCallProcessor {
   private async handleNewOrder(
     callId: string,
     call: PhoneCallRecord,
-    transcript: string
+    transcript: string,
+    preExtractedFields?: ParsedFields | null
   ): Promise<void> {
     console.log(`[PhoneCallProcessor] 處理新訂單...`);
 
-    // GPT 欄位提取
-    console.log('[PhoneCall] 轉錄原文:', transcript);
-    const parsedFields = await this.fieldExtractor.extractFields(transcript);
-    console.log('[PhoneCall] GPT提取:', JSON.stringify(parsedFields));
-    await this.updateParsedFields(callId, parsedFields);
+    // 使用預提取的欄位（信心度閘門已提取）或重新提取
+    const parsedFields = preExtractedFields || await this.fieldExtractor.extractFields(transcript);
+    if (!preExtractedFields) {
+      console.log('[PhoneCall] 轉錄原文:', transcript);
+      console.log('[PhoneCall] GPT提取:', JSON.stringify(parsedFields));
+      await this.updateParsedFields(callId, parsedFields);
+    }
 
     // 地址 Geocoding
     let pickupGeo: GeocodingResult | null = null;
@@ -728,6 +759,118 @@ export class PhoneCallProcessor {
       'UPDATE phone_calls SET order_id = $1, updated_at = CURRENT_TIMESTAMP WHERE call_id = $2',
       [orderId, callId]
     );
+  }
+
+  /**
+   * 持久化信心度分數
+   */
+  private async persistConfidenceScores(callId: string, eventConfidence: number, fieldConfidence: number | null): Promise<void> {
+    await this.pool.query(
+      `UPDATE phone_calls SET event_confidence = $1, field_confidence = $2, updated_at = CURRENT_TIMESTAMP WHERE call_id = $3`,
+      [eventConfidence, fieldConfidence, callId]
+    );
+  }
+
+  /**
+   * 標記為需人工審核
+   */
+  private async markNeedsReview(
+    callId: string,
+    call: PhoneCallRecord,
+    transcript: string,
+    eventClassification: { eventType: string; confidence: number },
+    parsedFields: ParsedFields | null
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE phone_calls SET processing_status = 'NEEDS_REVIEW', updated_at = CURRENT_TIMESTAMP WHERE call_id = $1`,
+      [callId]
+    );
+
+    // 建立後台通知
+    try {
+      const notificationService = getNotificationService();
+      await notificationService.notifyPhoneCallNeedsReview(callId, call.callerNumber, transcript);
+    } catch (err) {
+      console.error('[PhoneCallProcessor] 建立審核通知失敗:', err);
+    }
+
+    // Socket 即時推播給在線管理員
+    try {
+      notifyAdmins('phone:needs_review', {
+        callId,
+        callerNumber: call.callerNumber,
+        transcript: transcript?.substring(0, 100),
+        eventType: eventClassification.eventType,
+        eventConfidence: eventClassification.confidence,
+        fieldConfidence: parsedFields?.confidence ?? null,
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('[PhoneCallProcessor] Socket 推播失敗:', err);
+    }
+
+    console.log(`[PhoneCallProcessor] 已標記為 NEEDS_REVIEW: ${callId}`);
+  }
+
+  /**
+   * Operator 審核通過後恢復處理
+   */
+  async resumeAfterApproval(callId: string, editedFields?: Record<string, any>): Promise<void> {
+    console.log(`\n[PhoneCallProcessor] ====== 審核通過，恢復處理 ${callId} ======`);
+
+    try {
+      const call = await this.getCallRecord(callId);
+      if (!call) {
+        throw new Error(`找不到電話記錄: ${callId}`);
+      }
+
+      // 合併 operator 編輯的欄位到原始 parsed_fields
+      let finalFields: ParsedFields | null = call.parsedFields || null;
+      if (editedFields) {
+        finalFields = { ...(finalFields || {} as ParsedFields), ...editedFields };
+        await this.updateParsedFields(callId, finalFields);
+      }
+
+      const transcript = call.transcript || '';
+      const eventType = call.eventType || 'NEW_ORDER';
+
+      // 重新進入事件處理流程
+      // 注意：URGE/CHANGE 在找不到活動訂單時會 updateEventType 為 NEW_ORDER 然後 return
+      // 審核後直接以 operator 核准的 eventType 處理，若無活動訂單則一律走 NEW_ORDER
+      switch (eventType) {
+        case 'NEW_ORDER':
+          await this.handleNewOrder(callId, call, transcript, finalFields);
+          break;
+        case 'URGE': {
+          const activeOrder = await this.findActiveOrderByPhone(call.callerNumber);
+          if (!activeOrder) {
+            console.log(`[PhoneCallProcessor] 審核後催單無活動訂單，轉新訂單處理`);
+            await this.handleNewOrder(callId, call, transcript, finalFields);
+          } else {
+            await this.handleUrge(callId, call, activeOrder);
+          }
+          break;
+        }
+        case 'CANCEL': {
+          const activeOrder = await this.findActiveOrderByPhone(call.callerNumber);
+          await this.handleCancel(callId, call, activeOrder);
+          break;
+        }
+        case 'CHANGE': {
+          const activeOrder = await this.findActiveOrderByPhone(call.callerNumber);
+          if (!activeOrder) {
+            console.log(`[PhoneCallProcessor] 審核後變更無活動訂單，轉新訂單處理`);
+            await this.handleNewOrder(callId, call, transcript, finalFields);
+          } else {
+            await this.handleChange(callId, call, activeOrder, editedFields?.changeDetails);
+          }
+          break;
+        }
+      }
+    } catch (error: any) {
+      console.error(`[PhoneCallProcessor] 審核後處理失敗 (${callId}):`, error);
+      await this.markFailed(callId, `審核後處理失敗: ${error.message}`);
+    }
   }
 
   private async markFailed(callId: string, errorMessage: string): Promise<void> {
