@@ -404,4 +404,129 @@ router.get('/:driverId/auto-accept-stats', async (req: Request, res: Response) =
   }
 });
 
+// ========== 電話叫車人工審核（司機客服）==========
+
+/**
+ * 取得待審核電話列表
+ * GET /api/drivers/:driverId/phone-reviews
+ */
+router.get('/:driverId/phone-reviews', async (req: Request, res: Response) => {
+  try {
+    const { queryMany } = require('../db/connection');
+    const calls = await queryMany(
+      `SELECT * FROM phone_calls
+       WHERE processing_status = 'NEEDS_REVIEW'
+       ORDER BY created_at ASC`,
+      []
+    );
+
+    res.json({
+      success: true,
+      calls: calls.map((c: any) => ({
+        callId: c.call_id,
+        callerNumber: c.caller_number,
+        durationSeconds: c.duration_seconds,
+        recordingUrl: c.recording_url,
+        processingStatus: c.processing_status,
+        transcript: c.transcript,
+        parsedFields: c.parsed_fields,
+        eventType: c.event_type,
+        eventConfidence: c.event_confidence ? parseFloat(c.event_confidence) : null,
+        fieldConfidence: c.field_confidence ? parseFloat(c.field_confidence) : null,
+        createdAt: c.created_at,
+      })),
+      total: calls.length
+    });
+  } catch (error) {
+    console.error('[DriverPhoneReview GET] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 取得待審核數量
+ * GET /api/drivers/:driverId/phone-reviews/count
+ */
+router.get('/:driverId/phone-reviews/count', async (req: Request, res: Response) => {
+  try {
+    const result = await queryOne(
+      `SELECT COUNT(*) as count FROM phone_calls WHERE processing_status = 'NEEDS_REVIEW'`,
+      []
+    );
+    res.json({ success: true, count: parseInt(result?.count || '0') });
+  } catch (error) {
+    console.error('[DriverPhoneReview Count] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 司機審核電話
+ * POST /api/drivers/:driverId/phone-reviews/:callId
+ */
+router.post('/:driverId/phone-reviews/:callId', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+  const { callId } = req.params;
+  const { action, editedFields, note } = req.body;
+
+  try {
+    if (!action || !['APPROVED', 'REJECTED'].includes(action)) {
+      return res.status(400).json({ error: 'action 必須為 APPROVED 或 REJECTED' });
+    }
+
+    // 原子性更新：只更新 NEEDS_REVIEW 狀態（防競態）
+    const result = await query(
+      `UPDATE phone_calls SET
+        processing_status = $1,
+        review_action = $1,
+        reviewed_by = $2,
+        reviewed_at = CURRENT_TIMESTAMP,
+        review_note = $3,
+        edited_fields = $4,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE call_id = $5 AND processing_status = 'NEEDS_REVIEW'
+       RETURNING call_id`,
+      [
+        action,
+        `driver:${driverId}`,
+        note || null,
+        editedFields ? JSON.stringify(editedFields) : null,
+        callId
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      const existing = await queryOne('SELECT processing_status FROM phone_calls WHERE call_id = $1', [callId]);
+      if (!existing) {
+        return res.status(404).json({ error: '電話記錄不存在' });
+      }
+      return res.status(409).json({
+        error: '此電話已被審核',
+        currentStatus: existing.processing_status
+      });
+    }
+
+    console.log(`[DriverPhoneReview] 司機 ${driverId} ${action} 電話 ${callId}`);
+
+    if (action === 'APPROVED') {
+      res.json({ success: true, callId, action, message: '已核准，開始處理訂單' });
+
+      const { getPhoneCallProcessor } = require('../services/PhoneCallProcessor');
+      setImmediate(async () => {
+        try {
+          const processor = getPhoneCallProcessor();
+          await processor.resumeAfterApproval(callId, editedFields);
+        } catch (error) {
+          console.error(`[DriverPhoneReview] 審核後處理失敗:`, error);
+        }
+      });
+    } else {
+      res.json({ success: true, callId, action, message: '已拒絕' });
+    }
+  } catch (error) {
+    console.error('[DriverPhoneReview] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
 export default router;
