@@ -39,9 +39,18 @@ const LANDMARKS: LandmarkEntry[] = [
     lat: 24.0007, lng: 121.6161,
     address: '花蓮縣花蓮市站前路',
     category: 'TRANSPORT',
-    aliases: ['火車站', '車站', '花蓮站', '車頭', '火車頭', '站前'],
+    aliases: ['火車站', '車站', '花蓮站', '車頭', '火車頭', '站前', '前站'],
     taigiAliases: ['火車頭', '車頭', '花蓮車頭'],
     priority: 9, district: '花蓮市'
+  },
+  {
+    name: '花蓮火車站後站',
+    lat: 23.9988, lng: 121.6098,
+    address: '花蓮縣花蓮市富安路100號',
+    category: 'TRANSPORT',
+    aliases: ['後站', '西站', '花蓮後站', '花蓮西站'],
+    taigiAliases: [],
+    priority: 8, district: '花蓮市'
   },
   {
     name: '花蓮航空站',
@@ -335,13 +344,22 @@ const LANDMARKS: LandmarkEntry[] = [
     lat: 23.9801, lng: 121.6079,
     address: '花蓮縣花蓮市明義街30號',
     category: 'SCHOOL',
-    aliases: ['明義國小'],
+    aliases: ['明義國小', '明義後門'],
     taigiAliases: [],
     priority: 4, district: '花蓮市'
   },
+  {
+    name: '四維高級中學',
+    lat: 23.9850, lng: 121.6050,
+    address: '花蓮縣花蓮市中山路717號',
+    category: 'SCHOOL',
+    aliases: ['四維', '四維高中', '四維中學'],
+    taigiAliases: [],
+    priority: 7, district: '花蓮市'
+  },
 
   // ================================================
-  // 商業（9 筆）
+  // 商業（12 筆）
   // ================================================
   {
     name: '東大門夜市',
@@ -423,6 +441,33 @@ const LANDMARKS: LandmarkEntry[] = [
     aliases: ['新光三越', '遠雄廣場', '花蓮廣場'],
     taigiAliases: [],
     priority: 6, district: '花蓮市'
+  },
+  {
+    name: '丁丁連鎖藥局花蓮店',
+    lat: 23.9830, lng: 121.6070,
+    address: '花蓮縣花蓮市中山路553號',
+    category: 'COMMERCIAL',
+    aliases: ['丁丁', '丁丁藥局', '花蓮丁丁'],
+    taigiAliases: [],
+    priority: 6, district: '花蓮市'
+  },
+  {
+    name: '丁丁連鎖藥局吉安店',
+    lat: 23.9700, lng: 121.5870,
+    address: '花蓮縣吉安鄉中華路二段11號',
+    category: 'COMMERCIAL',
+    aliases: ['吉安丁丁', '丁丁吉安'],
+    taigiAliases: [],
+    priority: 5, district: '吉安鄉'
+  },
+  {
+    name: '公正包子店',
+    lat: 23.9780, lng: 121.6050,
+    address: '花蓮縣花蓮市仁愛街46號',
+    category: 'COMMERCIAL',
+    aliases: ['公正包子', '包子店', '公正街包子'],
+    taigiAliases: [],
+    priority: 7, district: '花蓮市'
   },
 
   // ================================================
