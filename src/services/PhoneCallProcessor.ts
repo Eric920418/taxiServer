@@ -52,7 +52,7 @@ export class PhoneCallProcessor {
 
   // 信心度閾值（低於此值轉人工審核）
   private readonly EVENT_CONFIDENCE_THRESHOLD = parseFloat(process.env.PHONE_EVENT_CONFIDENCE_THRESHOLD || '0.7');
-  private readonly FIELD_CONFIDENCE_THRESHOLD = parseFloat(process.env.PHONE_FIELD_CONFIDENCE_THRESHOLD || '0.6');
+  private readonly FIELD_CONFIDENCE_THRESHOLD = parseFloat(process.env.PHONE_FIELD_CONFIDENCE_THRESHOLD || '0.4');
 
   constructor(pool: Pool) {
     this.pool = pool;
@@ -218,7 +218,9 @@ export class PhoneCallProcessor {
       pickupGeo = {
         lat: 23.9871,
         lng: 121.6015,
-        formattedAddress: parsedFields.pickup_address || '花蓮市（電話訂單，待確認地址）'
+        formattedAddress: parsedFields.pickup_address
+          ? `${parsedFields.pickup_address}（待確認地址）`
+          : '花蓮市（電話訂單，待確認地址）'
       };
     }
 

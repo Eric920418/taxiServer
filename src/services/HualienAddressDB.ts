@@ -469,6 +469,24 @@ const LANDMARKS: LandmarkEntry[] = [
     taigiAliases: [],
     priority: 7, district: '花蓮市'
   },
+  {
+    name: '好樂迪KTV花蓮店',
+    lat: 24.0005, lng: 121.6130,
+    address: '花蓮縣花蓮市國聯五路69號',
+    category: 'COMMERCIAL',
+    aliases: ['好樂迪', 'KTV', '花蓮KTV', '好樂迪KTV', '唱歌'],
+    taigiAliases: [],
+    priority: 7, district: '花蓮市'
+  },
+  {
+    name: '三角形餐酒館',
+    lat: 23.9770, lng: 121.6055,
+    address: '花蓮縣花蓮市光復街52號',
+    category: 'COMMERCIAL',
+    aliases: ['三角形', '三角型', '三角形pub', '三角型pub', 'Triangle Bar'],
+    taigiAliases: [],
+    priority: 7, district: '花蓮市'
+  },
 
   // ================================================
   // 政府（10 筆）
