@@ -40,7 +40,7 @@ const io = new Server(httpServer, {
     credentials: true
   },
   // Socket.io 效能優化
-  pingTimeout: 60000,
+  pingTimeout: 120000,     // 120 秒容忍度（WiFi 環境 Android 可能暫停網路 30-60 ���）
   pingInterval: 25000,
   transports: ['websocket', 'polling'],
   allowEIO3: true
@@ -303,7 +303,7 @@ io.on('connection', (socket) => {
     socket.emit('nearby:drivers', nearbyDrivers);
   });
 
-  // 斷線處理
+  // 斷線處理（30 秒 grace period，避免短暫斷線就標記 OFFLINE）
   socket.on('disconnect', async () => {
     logSocketEvent('disconnect', socket.id);
 
@@ -311,8 +311,20 @@ io.on('connection', (socket) => {
     for (const [driverId, socketId] of driverSockets.entries()) {
       if (socketId === socket.id) {
         driverSockets.delete(driverId);
-        batchUpdater.queueStatusUpdate(driverId, 'OFFLINE');
-        logger.info(`司機 ${driverId} 已離線`);
+        logger.info(`司機 ${driverId} 斷線，30 秒 grace period 開始...`);
+
+        // 30 秒 grace period：如果司機在 30 秒內重連，不標記 OFFLINE
+        setTimeout(() => {
+          const currentSocketId = driverSockets.get(driverId);
+          if (!currentSocketId) {
+            // 30 秒後仍未重連，正式標記 OFFLINE
+            batchUpdater.queueStatusUpdate(driverId, 'OFFLINE');
+            logger.info(`司機 ${driverId} 30 秒內未重連，標記為 OFFLINE`);
+          } else {
+            logger.info(`司機 ${driverId} 已在 grace period 內重連 (socket: ${currentSocketId})`);
+          }
+        }, 30000);
+
         break;
       }
     }
