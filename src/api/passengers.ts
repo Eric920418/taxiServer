@@ -3,6 +3,7 @@ import { query, queryOne, queryMany } from '../db/connection';
 import { broadcastOrderToDrivers, broadcastOrderStatusToDrivers, notifyDriverOrderStatus } from '../socket';
 import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
+import { hualienAddressDB } from '../services/HualienAddressDB';
 
 import { fareConfigService } from '../services/FareConfigService';
 const router = Router();
@@ -115,6 +116,10 @@ router.post('/request-ride', async (req, res) => {
       return res.status(400).json({ error: '缺少必要欄位' });
     }
 
+    // 段數正規化：1段→一段，確保 DB 儲存的地址格式統一
+    const normalizedPickupAddress = hualienAddressDB.normalizeSegment(pickupAddress);
+    const normalizedDestAddress = destAddress ? hualienAddressDB.normalizeSegment(destAddress) : destAddress;
+
     // 【重要】檢查乘客是否已有進行中的訂單（防止重複叫車）
     const existingOrder = await queryOne(`
       SELECT order_id, status, pickup_address, created_at
@@ -205,8 +210,8 @@ router.post('/request-ride', async (req, res) => {
       ) RETURNING *
     `, [
       orderId, actualPassengerId,
-      pickupLat, pickupLng, pickupAddress,
-      destLat || null, destLng || null, destAddress || null,
+      pickupLat, pickupLng, normalizedPickupAddress,
+      destLat || null, destLng || null, normalizedDestAddress || null,
       paymentType,
       now.getHours(), now.getDay(),
       estimatedFare

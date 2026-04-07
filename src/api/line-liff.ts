@@ -8,6 +8,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 import { getScheduledOrderService } from '../services/ScheduledOrderService';
+import { hualienAddressDB } from '../services/HualienAddressDB';
 import { getSocketIO, driverSockets, driverLocations } from '../socket';
 import pool from '../db/connection';
 
@@ -95,6 +96,10 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     return;
   }
 
+  // 段數正規化：1段→一段
+  const normalizedPickupAddress = pickupAddress ? hualienAddressDB.normalizeSegment(pickupAddress) : pickupAddress;
+  const normalizedDestAddress = destAddress ? hualienAddressDB.normalizeSegment(destAddress) : destAddress;
+
   try {
     // 確保 LINE 使用者和乘客記錄存在
     const passengerId = `LINE_${userId.substring(0, 10)}`;
@@ -144,8 +149,8 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
       )
     `, [
       orderId, passengerId,
-      pickupLat, pickupLng, pickupAddress || `${pickupLat}, ${pickupLng}`,
-      destLat || null, destLng || null, destAddress || null,
+      pickupLat, pickupLng, normalizedPickupAddress || `${pickupLat}, ${pickupLng}`,
+      destLat || null, destLng || null, normalizedDestAddress || null,
       now.getHours(), now.getDay(),
       userId,
       ...(isScheduled ? [scheduledAt] : []),
@@ -172,8 +177,8 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
         passengerId,
         passengerName: displayName,
         passengerPhone: '',
-        pickup: { lat: pickupLat, lng: pickupLng, address: pickupAddress || '' },
-        destination: destLat ? { lat: destLat, lng: destLng, address: destAddress || '' } : null,
+        pickup: { lat: pickupLat, lng: pickupLng, address: normalizedPickupAddress || '' },
+        destination: destLat ? { lat: destLat, lng: destLng, address: normalizedDestAddress || '' } : null,
         paymentType: 'CASH',
         createdAt: Date.now(),
         source: 'LINE',

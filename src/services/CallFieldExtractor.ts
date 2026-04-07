@@ -238,13 +238,14 @@ ${hasActiveOrder
   }
 
   /**
-   * 正規化地址（委派給 HualienAddressDB.resolveAliases）
+   * 正規化地址：先做段數正規化（1段→一段），再依地址類型決定是否做地標替換
    * 街道地址（含路/街/道/巷/弄/號）不做地標替換，避免破壞 Geocoding
    */
   private normalizeAddress(address: string | null): string | null {
     if (!address) return null;
-    if (/[路街道巷弄號]/.test(address)) return address;
-    return hualienAddressDB.resolveAliases(address);
+    const segNormalized = hualienAddressDB.normalizeSegment(address);
+    if (/[路街道巷弄號]/.test(segNormalized)) return segNormalized;
+    return hualienAddressDB.resolveAliases(segNormalized);
   }
 
   private validateSubsidyType(val: string): ParsedFields['subsidy_type'] {

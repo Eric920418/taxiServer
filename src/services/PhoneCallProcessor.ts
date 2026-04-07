@@ -473,12 +473,15 @@ export class PhoneCallProcessor {
       return null;
     }
 
+    // 段數正規化：1段→一段
+    const addr = hualienAddressDB.normalizeSegment(address);
+
     // Redis 快取查詢
-    const cacheKey = `geocode:v2:${address}`;
+    const cacheKey = `geocode:v2:${addr}`;
     try {
       const cached = await getCachedApiResponse(cacheKey);
       if (cached) {
-        console.log(`[PhoneCallProcessor] Geocoding 快取命中: ${address}`);
+        console.log(`[PhoneCallProcessor] Geocoding 快取命中: ${addr}`);
         return cached as GeocodingResult;
       }
     } catch { /* Redis 失敗不阻斷主流程 */ }
@@ -488,11 +491,11 @@ export class PhoneCallProcessor {
 
     // ① 本地 DB 查詢（含台語別名，O(1)）
     // 街道門牌不允許 SUBSTRING 命中，避免「吉安路一段16號」誤判為「吉安鄉」
-    const isStreetAddress = /[路街道巷弄號]/.test(address);
-    const dbResult = hualienAddressDB.lookup(address);
+    const isStreetAddress = /[路街道巷弄號]/.test(addr);
+    const dbResult = hualienAddressDB.lookup(addr);
     if (dbResult && dbResult.entry.lat !== null && dbResult.entry.lng !== null) {
       if (isStreetAddress && dbResult.matchType === 'SUBSTRING') {
-        console.log(`[HualienAddressDB] 街道地址跳過 SUBSTRING 命中: ${address} → ${dbResult.entry.name}，改用 Geocoding API`);
+        console.log(`[HualienAddressDB] 街道地址跳過 SUBSTRING 命中: ${addr} → ${dbResult.entry.name}，改用 Geocoding API`);
       } else {
         console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType})`);
         result = {
@@ -506,20 +509,28 @@ export class PhoneCallProcessor {
 
     // ② 街道地址 → Geocoding API
     if (!result) {
-      const isStreetAddress = /[路街道巷弄號]/i.test(address);
       if (isStreetAddress) {
-        const geocoded = await this.geocodeWithGeocodingAPI(address);
+        const geocoded = await this.geocodeWithGeocodingAPI(addr);
         if (geocoded && !this.isDefaultCoords(geocoded.lat, geocoded.lng)) {
-          result = geocoded;
+          result = {
+            ...geocoded,
+            formattedAddress: hualienAddressDB.normalizeSegment(geocoded.formattedAddress),
+          };
         } else {
-          console.warn(`[PhoneCallProcessor] Geocoding 無效結果，改用 Places Search: ${address}`);
+          console.warn(`[PhoneCallProcessor] Geocoding 無效結果，改用 Places Search: ${addr}`);
         }
       }
     }
 
     // ③ 地標/景點 → Places Search
     if (!result) {
-      result = await this.geocodeWithPlacesSearch(address);
+      const placesResult = await this.geocodeWithPlacesSearch(addr);
+      if (placesResult) {
+        result = {
+          ...placesResult,
+          formattedAddress: hualienAddressDB.normalizeSegment(placesResult.formattedAddress),
+        };
+      }
     }
 
     // 寫入 Redis 快取

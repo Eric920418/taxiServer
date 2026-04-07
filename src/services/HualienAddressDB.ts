@@ -928,6 +928,34 @@ const LANDMARKS: LandmarkEntry[] = [
   },
 ];
 
+// ========== 地址段數正規化（阿拉伯數字 → 國字） ==========
+
+const SEGMENT_DIGIT_TO_HANZI: Record<string, string> = {
+  '1': '一', '2': '二', '3': '三', '4': '四', '5': '五',
+  '6': '六', '7': '七', '8': '八', '9': '九',
+};
+
+/**
+ * 將「路/街/道/線/大道」後面的單位數字段數轉成國字段數
+ *
+ * 範例：
+ *   吉興路1段     → 吉興路一段
+ *   中央路3段56號 → 中央路三段56號（門牌號保留）
+ *   吉安路 2 段   → 吉安路二段（吸收空白）
+ *   中山路10段    → 中山路10段（雙位數不轉，避免「一〇」）
+ *   嘉里路一段    → 嘉里路一段（已是國字，不變）
+ *   第1段        → 第1段（前面不是路名字符，不轉）
+ *
+ * 只處理 1-9 單位數，避免破壞門牌號碼。
+ */
+export function normalizeSegmentDigits(input: string): string {
+  if (!input) return input;
+  return input.replace(
+    /([路街道線]|大道)\s*([1-9])\s*段/g,
+    (_match, road: string, digit: string) => `${road}${SEGMENT_DIGIT_TO_HANZI[digit]}段`
+  );
+}
+
 // ========== HualienAddressDB Class ==========
 
 class HualienAddressDB {
@@ -968,11 +996,18 @@ class HualienAddressDB {
   }
 
   /**
+   * 對外暴露的段數正規化方法（讓 caller 可在 lookup 之外也用）
+   */
+  normalizeSegment(input: string): string {
+    return normalizeSegmentDigits(input);
+  }
+
+  /**
    * 主查詢：精確名稱 → 別名 → 台語別名 → 子字串包含
    */
   lookup(input: string): LookupResult | null {
     if (!input) return null;
-    const normalized = input.trim();
+    const normalized = normalizeSegmentDigits(input.trim());
 
     // ① 精確全名
     const exact = this.exactIndex.get(normalized);
@@ -1034,7 +1069,7 @@ class HualienAddressDB {
    * 供 normalizeAddress 呼叫
    */
   resolveAliases(text: string): string {
-    let result = text;
+    let result = normalizeSegmentDigits(text);
 
     // 台語別名優先替換（因為是最需要修正的）
     for (const [taigi, entry] of this.taigiIndex) {

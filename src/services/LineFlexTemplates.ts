@@ -12,16 +12,59 @@ type FlexBubble = messagingApi.FlexBubble;
 
 // ========== 歡迎訊息 ==========
 
-export function welcomeMessage(): FlexMessage {
+/**
+ * 主要入口 Bubble — 歡迎訊息和 IDLE 預設回覆共用
+ *
+ * 設計：一個大 CTA「立即叫車」+ 兩個小 link 按鈕（預約 / 查詢取消）
+ * - Hero：簡潔藍底品牌
+ * - Body：可點擊大盒子（主 CTA）+ 副提示
+ * - Footer：兩個小 link 按鈕（次要動作）
+ */
+export function primaryEntryBubble(): FlexMessage {
   const liffBookingId = process.env.LIFF_ID_BOOKING || '';
-  const bookingUrl = liffBookingId ? `https://liff.line.me/${liffBookingId}` : '';
+  const liffTrackingId = process.env.LIFF_ID_TRACKING || '';
+
+  const bookingUrl = liffBookingId ? `https://liff.line.me/${liffBookingId}?mode=call` : '';
   const reserveUrl = liffBookingId ? `https://liff.line.me/${liffBookingId}?mode=reserve` : '';
+  const trackingUrl = liffTrackingId ? `https://liff.line.me/${liffTrackingId}` : '';
+
+  // 主 CTA action：有 LIFF 用 URI，沒有 fallback 到 postback
+  const primaryAction: any = bookingUrl
+    ? { type: 'uri', label: '立即叫車', uri: bookingUrl }
+    : { type: 'postback', label: '立即叫車', data: 'action=CALL_TAXI', displayText: '叫車' };
+
+  // Footer 次要按鈕
+  const footerContents: any[] = [
+    {
+      type: 'button',
+      style: 'link',
+      height: 'sm',
+      flex: 1,
+      action: reserveUrl
+        ? { type: 'uri', label: '預約叫車', uri: reserveUrl }
+        : { type: 'postback', label: '預約叫車', data: 'action=RESERVE_TAXI', displayText: '預約' },
+    },
+    {
+      type: 'button',
+      style: 'link',
+      height: 'sm',
+      flex: 1,
+      action: trackingUrl
+        ? { type: 'uri', label: '查詢/取消', uri: trackingUrl }
+        : { type: 'postback', label: '查詢/取消', data: 'action=CHECK_ORDER', displayText: '查詢訂單' },
+    },
+  ];
 
   const bubble: FlexBubble = {
     type: 'bubble',
+    size: 'mega',
+
+    // Hero：簡潔品牌列
     hero: {
       type: 'box',
       layout: 'vertical',
+      backgroundColor: '#2196F3',
+      paddingAll: '16px',
       contents: [
         {
           type: 'text',
@@ -33,75 +76,89 @@ export function welcomeMessage(): FlexMessage {
         },
         {
           type: 'text',
-          text: '歡迎使用 LINE 叫車服務',
-          size: 'md',
-          color: '#FFFFFF',
+          text: 'Hualien Taxi',
+          size: 'xs',
+          color: '#E3F2FD',
           align: 'center',
-          margin: 'md',
+          margin: 'xs',
         },
       ],
-      backgroundColor: '#2196F3',
-      paddingAll: '20px',
     },
+
+    // Body：可點擊大 CTA 盒子 + 副提示
     body: {
       type: 'box',
       layout: 'vertical',
+      paddingAll: '20px',
+      spacing: 'md',
       contents: [
         {
-          type: 'text',
-          text: '點擊下方按鈕，或直接輸入文字：',
-          size: 'md',
-          margin: 'md',
-          wrap: true,
+          // 可點擊的大盒子（取代普通 button，可控制大小）
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#1E88E5',
+          cornerRadius: '12px',
+          paddingAll: '24px',
+          spacing: 'sm',
+          action: primaryAction,
+          contents: [
+            {
+              type: 'text',
+              text: '🚕  立即叫車',
+              color: '#FFFFFF',
+              size: 'xxl',
+              weight: 'bold',
+              align: 'center',
+            },
+            {
+              type: 'text',
+              text: '點我開啟地圖選位置',
+              color: '#BBDEFB',
+              size: 'sm',
+              align: 'center',
+              margin: 'sm',
+            },
+          ],
+        },
+        {
+          type: 'separator',
+          margin: 'lg',
+          color: '#EEEEEE',
         },
         {
           type: 'text',
-          text: '輸入「叫車」「預約」「取消」也可以操作',
-          size: 'sm',
-          color: '#999999',
+          text: '或直接輸入上車地點傳給我',
+          size: 'xs',
+          color: '#AAAAAA',
+          align: 'center',
           margin: 'md',
           wrap: true,
         },
       ],
     },
-    ...(bookingUrl ? {
-      footer: {
-        type: 'box' as const,
-        layout: 'vertical' as const,
-        spacing: 'sm' as const,
-        contents: [
-          {
-            type: 'button' as const,
-            style: 'primary' as const,
-            color: '#2196F3',
-            height: 'md' as const,
-            action: {
-              type: 'uri' as const,
-              label: '地圖叫車',
-              uri: bookingUrl,
-            },
-          },
-          {
-            type: 'button' as const,
-            style: 'primary' as const,
-            color: '#FF9800',
-            height: 'md' as const,
-            action: {
-              type: 'uri' as const,
-              label: '預約叫車',
-              uri: reserveUrl,
-            },
-          },
-        ],
-      },
-    } : {}),
+
+    // Footer：兩個小 link 按鈕水平排列
+    footer: {
+      type: 'box',
+      layout: 'horizontal',
+      spacing: 'sm',
+      paddingAll: '8px',
+      contents: footerContents,
+    },
   };
 
   return {
     type: 'flex',
-    altText: '歡迎使用花蓮計程車 LINE 叫車服務',
+    altText: '花蓮計程車 - 立即叫車',
     contents: bubble,
   };
+}
+
+/**
+ * 歡迎訊息（向後相容，delegate 到 primaryEntryBubble）
+ */
+export function welcomeMessage(): FlexMessage {
+  return primaryEntryBubble();
 }
 
 // ========== 請求上車地點 ==========

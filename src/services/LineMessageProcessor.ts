@@ -240,40 +240,10 @@ export class LineMessageProcessor {
         if (this.openai && trimmed.length > 3) {
           await this.handleNaturalLanguage(userId, trimmed, replyToken);
         } else {
-          const liffBookingId = process.env.LIFF_ID_BOOKING || '';
-          const liffTrackingId = process.env.LIFF_ID_TRACKING || '';
-          const quickReplyItems: any[] = [];
-
-          if (liffBookingId) {
-            quickReplyItems.push({
-              type: 'action',
-              action: { type: 'uri', label: '地圖叫車', uri: `https://liff.line.me/${liffBookingId}?mode=call` },
-            });
-            quickReplyItems.push({
-              type: 'action',
-              action: { type: 'uri', label: '預約叫車', uri: `https://liff.line.me/${liffBookingId}?mode=reserve` },
-            });
-          }
-
-          quickReplyItems.push({
-            type: 'action',
-            action: { type: 'postback', label: '文字叫車', data: 'action=CALL_TAXI', displayText: '叫車' },
-          });
-
-          if (liffTrackingId) {
-            quickReplyItems.push({
-              type: 'action',
-              action: { type: 'uri', label: '查詢/取消', uri: `https://liff.line.me/${liffTrackingId}` },
-            });
-          }
-
+          // 顯示主要入口 Flex Bubble（與歡迎訊息一致）
           await this.lineClient.replyMessage({
             replyToken,
-            messages: [{
-              type: 'text',
-              text: '請選擇操作方式，或直接輸入上車地點：',
-              ...(quickReplyItems.length > 0 ? { quickReply: { items: quickReplyItems } } : {}),
-            }],
+            messages: [templates.primaryEntryBubble()],
           });
         }
         break;
@@ -899,9 +869,12 @@ export class LineMessageProcessor {
   // ========== Geocoding ==========
 
   private async geocodeAddress(address: string): Promise<GeocodingResult | null> {
+    // 段數正規化：1段→一段
+    const addr = hualienAddressDB.normalizeSegment(address);
+
     // 1. 本地 DB 查詢
-    const isStreetAddress = /[路街道巷弄號]/.test(address);
-    const dbResult = hualienAddressDB.lookup(address);
+    const isStreetAddress = /[路街道巷弄號]/.test(addr);
+    const dbResult = hualienAddressDB.lookup(addr);
     if (dbResult && dbResult.entry.lat !== null && dbResult.entry.lng !== null) {
       if (isStreetAddress && dbResult.matchType === 'SUBSTRING') {
         // 街道地址跳過 SUBSTRING 命中
@@ -918,17 +891,17 @@ export class LineMessageProcessor {
     if (!this.googleMapsApiKey) return null;
 
     try {
-      const cacheKey = `geocode:v2:${address}`;
+      const cacheKey = `geocode:v2:${addr}`;
       try {
         const cached = await getCachedApiResponse(cacheKey);
         if (cached) return cached as GeocodingResult;
       } catch { /* Redis 失敗不阻斷 */ }
 
       const HUALIEN_TOWNSHIPS = ['吉安', '新城', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
-      const hasTownship = HUALIEN_TOWNSHIPS.some(t => address.includes(t));
-      const alreadyHasPrefix = address.startsWith('花蓮');
+      const hasTownship = HUALIEN_TOWNSHIPS.some(t => addr.includes(t));
+      const alreadyHasPrefix = addr.startsWith('花蓮');
       const prefix = hasTownship ? '花蓮縣' : '花蓮縣花蓮市';
-      const fullAddress = alreadyHasPrefix ? address : `${prefix}${address}`;
+      const fullAddress = alreadyHasPrefix ? addr : `${prefix}${addr}`;
 
       const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(fullAddress)}&language=zh-TW&region=tw&components=country:TW&key=${this.googleMapsApiKey}`;
       const response = await fetch(url);
@@ -939,7 +912,7 @@ export class LineMessageProcessor {
         const geo: GeocodingResult = {
           lat: result.geometry.location.lat,
           lng: result.geometry.location.lng,
-          formattedAddress: result.formatted_address || fullAddress,
+          formattedAddress: hualienAddressDB.normalizeSegment(result.formatted_address || fullAddress),
         };
 
         try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
