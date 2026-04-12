@@ -15,6 +15,7 @@ export interface FareConfig {
   nightSurchargeRate: number;  // 夜間加成比例
   nightStartHour: number;      // 夜間開始時間
   nightEndHour: number;        // 夜間結束時間
+  loveCardSubsidyAmount: number;  // 愛心卡每趟補貼金額（元）
 }
 
 class FareConfigService {
@@ -36,6 +37,7 @@ class FareConfigService {
       nightSurchargeRate: parseFloat(process.env.FARE_NIGHT_SURCHARGE_RATE || '0.2'),
       nightStartHour: parseInt(process.env.FARE_NIGHT_START_HOUR || '23'),
       nightEndHour: parseInt(process.env.FARE_NIGHT_END_HOUR || '6'),
+      loveCardSubsidyAmount: parseInt(process.env.LOVE_CARD_SUBSIDY_AMOUNT || '73'),
     };
   }
 
@@ -75,6 +77,7 @@ class FareConfigService {
         'FARE_NIGHT_SURCHARGE_RATE': this.config.nightSurchargeRate,
         'FARE_NIGHT_START_HOUR': this.config.nightStartHour,
         'FARE_NIGHT_END_HOUR': this.config.nightEndHour,
+        'LOVE_CARD_SUBSIDY_AMOUNT': this.config.loveCardSubsidyAmount,
       };
 
       for (const [key, value] of Object.entries(updates)) {

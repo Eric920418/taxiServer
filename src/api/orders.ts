@@ -12,6 +12,7 @@ import {
 import { getSmartDispatcherV2 } from '../services/SmartDispatcherV2';
 import { getNotificationService } from '../services/NotificationService';
 import { getLineNotifier } from '../services/LineNotifier';
+import { fareConfigService } from '../services/FareConfigService';
 
 // 有效的拒單原因（強制選擇）
 const VALID_REJECTION_REASONS = [
@@ -204,6 +205,8 @@ router.get('/', async (req, res) => {
         // 電話叫車欄位
         source: o.source || 'APP',
         subsidyType: o.subsidy_type || 'NONE',
+        subsidyConfirmed: o.subsidy_confirmed || false,
+        subsidyAmount: o.subsidy_amount || 0,
         petPresent: o.pet_present || 'UNKNOWN',
         petCarrier: o.pet_carrier || 'UNKNOWN',
         customerPhone: o.customer_phone,
@@ -260,6 +263,8 @@ router.get('/:orderId', async (req, res) => {
       // 電話叫車欄位
       source: order.source || 'APP',
       subsidyType: order.subsidy_type || 'NONE',
+      subsidyConfirmed: order.subsidy_confirmed || false,
+      subsidyAmount: order.subsidy_amount || 0,
       petPresent: order.pet_present || 'UNKNOWN',
       petCarrier: order.pet_carrier || 'UNKNOWN',
       petNote: order.pet_note,
@@ -656,6 +661,9 @@ router.patch('/:orderId/status', async (req, res) => {
         address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
+      subsidyType: fullOrder.subsidy_type || 'NONE',
+      subsidyConfirmed: fullOrder.subsidy_confirmed || false,
+      subsidyAmount: fullOrder.subsidy_amount || 0,
       fare: fullOrder.meter_amount ? {
         meterAmount: fullOrder.meter_amount,
         appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0
@@ -668,6 +676,108 @@ router.patch('/:orderId/status', async (req, res) => {
     });
   } catch (error) {
     console.error('[Update Status] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 愛心卡/敬老卡確認或取消
+ * PATCH /api/orders/:orderId/subsidy
+ */
+router.patch('/:orderId/subsidy', async (req, res) => {
+  const { orderId } = req.params;
+  const { driverId, action } = req.body;
+
+  try {
+    if (!driverId || !action) {
+      return res.status(400).json({ error: '缺少 driverId 或 action' });
+    }
+
+    if (!['CONFIRM', 'CANCEL'].includes(action)) {
+      return res.status(400).json({ error: 'action 必須為 CONFIRM 或 CANCEL' });
+    }
+
+    const order = await queryOne(
+      'SELECT * FROM orders WHERE order_id = $1',
+      [orderId]
+    );
+
+    if (!order) {
+      return res.status(404).json({ error: '訂單不存在' });
+    }
+
+    if (order.driver_id !== driverId) {
+      return res.status(403).json({ error: '只有指派的司機可以操作' });
+    }
+
+    if (!['ARRIVED', 'ON_TRIP'].includes(order.status)) {
+      return res.status(400).json({ error: '只能在已到達或行程中確認愛心卡' });
+    }
+
+    let updatedOrder;
+    if (action === 'CONFIRM') {
+      const result = await query(
+        'UPDATE orders SET subsidy_confirmed = true WHERE order_id = $1 RETURNING *',
+        [orderId]
+      );
+      updatedOrder = result.rows[0];
+      console.log(`[Order] 訂單 ${orderId} 愛心卡已確認`);
+    } else {
+      // CANCEL: 改回一般計費
+      const result = await query(
+        `UPDATE orders SET subsidy_type = 'NONE', subsidy_confirmed = false WHERE order_id = $1 RETURNING *`,
+        [orderId]
+      );
+      updatedOrder = result.rows[0];
+      console.log(`[Order] 訂單 ${orderId} 愛心卡已取消，改為一般計費`);
+    }
+
+    // 查詢完整訂單資訊
+    const fullOrder = await queryOne(`
+      SELECT o.*, p.name as passenger_name, p.phone as passenger_phone,
+             d.name as driver_name, d.phone as driver_phone
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.order_id = $1
+    `, [orderId]);
+
+    const orderUpdate = {
+      orderId: fullOrder.order_id,
+      passengerId: fullOrder.passenger_id,
+      passengerName: fullOrder.passenger_name || '乘客',
+      passengerPhone: fullOrder.passenger_phone,
+      driverId: fullOrder.driver_id,
+      driverName: fullOrder.driver_name,
+      driverPhone: fullOrder.driver_phone,
+      status: fullOrder.status,
+      pickup: {
+        lat: parseFloat(fullOrder.pickup_lat),
+        lng: parseFloat(fullOrder.pickup_lng),
+        address: fullOrder.pickup_address
+      },
+      destination: fullOrder.dest_lat ? {
+        lat: parseFloat(fullOrder.dest_lat),
+        lng: parseFloat(fullOrder.dest_lng),
+        address: getDestAddress(fullOrder)
+      } : null,
+      paymentType: fullOrder.payment_type,
+      subsidyType: fullOrder.subsidy_type || 'NONE',
+      subsidyConfirmed: fullOrder.subsidy_confirmed || false,
+      subsidyAmount: fullOrder.subsidy_amount || 0,
+      createdAt: new Date(fullOrder.created_at).getTime(),
+      acceptedAt: fullOrder.accepted_at ? new Date(fullOrder.accepted_at).getTime() : null,
+      arrivedAt: fullOrder.arrived_at ? new Date(fullOrder.arrived_at).getTime() : null,
+      startedAt: fullOrder.started_at ? new Date(fullOrder.started_at).getTime() : null,
+      completedAt: fullOrder.completed_at ? new Date(fullOrder.completed_at).getTime() : null
+    };
+
+    // WebSocket 通知乘客
+    notifyPassengerOrderUpdate(fullOrder.passenger_id, orderUpdate);
+
+    res.json(orderUpdate);
+  } catch (error) {
+    console.error('[Order] 愛心卡確認/取消錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
@@ -693,6 +803,14 @@ async function handleSubmitFare(req: any, res: any) {
       return res.status(400).json({ error: '只能在行程中或結算中提交車資' });
     }
 
+    // 計算愛心卡補貼金額
+    let subsidyAmount = 0;
+    if (order.subsidy_type === 'LOVE_CARD' && order.subsidy_confirmed) {
+      const config = fareConfigService.getConfig();
+      subsidyAmount = Math.min(config.loveCardSubsidyAmount, meterAmount);
+      console.log(`[Order] 訂單 ${orderId} 愛心卡補貼: NT$ ${subsidyAmount}`);
+    }
+
     // 更新訂單（提交車資後訂單直接完成）
     const result = await query(`
       UPDATE orders
@@ -701,11 +819,12 @@ async function handleSubmitFare(req: any, res: any) {
         actual_distance_km = $2,
         actual_duration_min = $3,
         photo_url = $4,
+        subsidy_amount = $6,
         status = 'DONE',
         completed_at = CURRENT_TIMESTAMP
       WHERE order_id = $5
       RETURNING *
-    `, [meterAmount, distance, duration, photoUrl || null, orderId]);
+    `, [meterAmount, distance, duration, photoUrl || null, orderId, subsidyAmount]);
 
     const updatedOrder = result.rows[0];
 
@@ -730,6 +849,7 @@ async function handleSubmitFare(req: any, res: any) {
     `, [orderId]);
 
     // 透過 WebSocket 通知乘客訂單進入結算階段
+    const passengerPays = fullOrder.meter_amount - (fullOrder.subsidy_amount || 0);
     const orderUpdate = {
       orderId: fullOrder.order_id,
       passengerId: fullOrder.passenger_id,
@@ -750,6 +870,10 @@ async function handleSubmitFare(req: any, res: any) {
         address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
+      subsidyType: fullOrder.subsidy_type || 'NONE',
+      subsidyConfirmed: fullOrder.subsidy_confirmed || false,
+      subsidyAmount: fullOrder.subsidy_amount || 0,
+      passengerPays,
       fare: {
         meterAmount: fullOrder.meter_amount,
         appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0
@@ -799,6 +923,10 @@ async function handleSubmitFare(req: any, res: any) {
         address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
+      subsidyType: fullOrder.subsidy_type || 'NONE',
+      subsidyConfirmed: fullOrder.subsidy_confirmed || false,
+      subsidyAmount: fullOrder.subsidy_amount || 0,
+      passengerPays,
       fare: {
         meterAmount: fullOrder.meter_amount,
         appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0

@@ -106,7 +106,9 @@ router.post('/request-ride', async (req, res) => {
     paymentType = 'CASH',
     // 乘客端傳入的道路距離和車資（Google Directions API 計算）
     tripDistanceMeters,
-    estimatedFare: clientEstimatedFare
+    estimatedFare: clientEstimatedFare,
+    // 愛心卡/敬老卡補貼類型
+    subsidyType = 'NONE'
   } = req.body;
 
   try {
@@ -195,7 +197,7 @@ router.post('/request-ride', async (req, res) => {
         order_id, passenger_id, status,
         pickup_lat, pickup_lng, pickup_address,
         dest_lat, dest_lng, dest_address,
-        payment_type,
+        payment_type, subsidy_type,
         created_at, offered_at,
         hour_of_day, day_of_week,
         dispatch_method, estimated_fare
@@ -203,7 +205,7 @@ router.post('/request-ride', async (req, res) => {
         $1, $2, 'OFFERED',
         $3, $4, $5,
         $6, $7, $8,
-        $9,
+        $9, $13,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
         $10, $11,
         'LAYERED', $12
@@ -214,7 +216,8 @@ router.post('/request-ride', async (req, res) => {
       destLat || null, destLng || null, normalizedDestAddress || null,
       paymentType,
       now.getHours(), now.getDay(),
-      estimatedFare
+      estimatedFare,
+      subsidyType
     ]);
 
     const order = result.rows[0];
@@ -250,7 +253,8 @@ router.post('/request-ride', async (req, res) => {
       } : null,
       paymentType: order.payment_type,
       estimatedFare: estimatedFare || undefined,
-      createdAt: new Date(order.created_at).getTime()
+      createdAt: new Date(order.created_at).getTime(),
+      subsidyType: order.subsidy_type || 'NONE'
     };
 
     // 使用 SmartDispatcherV2 智能派單（分層派單 + ML 預測）

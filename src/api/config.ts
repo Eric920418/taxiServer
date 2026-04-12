@@ -93,6 +93,14 @@ router.put('/fare', async (req, res) => {
       updates.nightEndHour = val;
     }
 
+    if (req.body.loveCardSubsidyAmount !== undefined) {
+      const val = parseInt(req.body.loveCardSubsidyAmount);
+      if (isNaN(val) || val < 0) {
+        return res.status(400).json({ success: false, error: 'loveCardSubsidyAmount 必須是非負整數' });
+      }
+      updates.loveCardSubsidyAmount = val;
+    }
+
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ success: false, error: '沒有提供要更新的欄位' });
     }
