@@ -928,6 +928,22 @@ const LANDMARKS: LandmarkEntry[] = [
   },
 ];
 
+// ========== 花蓮縣地理範圍驗證 ==========
+
+const HUALIEN_BOUNDS = {
+  south: 23.20, north: 24.16,
+  west: 121.30, east: 121.66,
+};
+
+/**
+ * 驗證座標是否在花蓮縣範圍內
+ * 用於攔截 Google Geocoding 回傳的離譜結果（如打錯字跑到玉里或台東）
+ */
+export function isWithinHualienBounds(lat: number, lng: number): boolean {
+  return lat >= HUALIEN_BOUNDS.south && lat <= HUALIEN_BOUNDS.north &&
+         lng >= HUALIEN_BOUNDS.west && lng <= HUALIEN_BOUNDS.east;
+}
+
 // ========== 地址段數正規化（阿拉伯數字 → 國字） ==========
 
 const SEGMENT_DIGIT_TO_HANZI: Record<string, string> = {
@@ -1000,6 +1016,13 @@ class HualienAddressDB {
    */
   normalizeSegment(input: string): string {
     return normalizeSegmentDigits(input);
+  }
+
+  /**
+   * 驗證座標是否在花蓮縣服務範圍內
+   */
+  isWithinBounds(lat: number, lng: number): boolean {
+    return isWithinHualienBounds(lat, lng);
   }
 
   /**

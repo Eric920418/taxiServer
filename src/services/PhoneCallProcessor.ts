@@ -565,6 +565,7 @@ export class PhoneCallProcessor {
       const url = `https://maps.googleapis.com/maps/api/geocode/json`
         + `?address=${encodeURIComponent(fullAddress)}`
         + `&language=zh-TW&region=tw`
+        + `&bounds=23.20,121.30|24.16,121.66`
         + `&components=country:TW`
         + `&key=${this.googleMapsApiKey}`;
 
@@ -574,16 +575,24 @@ export class PhoneCallProcessor {
 
       if (data.results && data.results.length > 0) {
         const result = data.results[0];
+        const lat = result.geometry.location.lat;
+        const lng = result.geometry.location.lng;
+
+        // 驗證結果在花蓮縣範圍內
+        if (!hualienAddressDB.isWithinBounds(lat, lng)) {
+          console.warn(`[PhoneCallProcessor] Geocoding 結果超出花蓮範圍，丟棄: ${fullAddress} → lat=${lat}, lng=${lng}`);
+          return null;
+        }
+
         const googleAddr = result.formatted_address || fullAddress;
-        // 若 Google 只回傳縣市行政區（沒有路/街/地標），使用原始查詢地址
         const hasDetail = /[路街道巷弄號]/.test(googleAddr) ||
           (result.types || []).some((t: string) =>
             ['street_address','premise','establishment','point_of_interest'].includes(t)
           );
         return {
-          lat: result.geometry.location.lat,
-          lng: result.geometry.location.lng,
-          formattedAddress: hasDetail ? googleAddr : fullAddress
+          lat,
+          lng,
+          formattedAddress: hualienAddressDB.normalizeSegment(hasDetail ? googleAddr : fullAddress)
         };
       }
 
@@ -601,7 +610,7 @@ export class PhoneCallProcessor {
     try {
       const url = `https://maps.googleapis.com/maps/api/place/textsearch/json`
         + `?query=${encodeURIComponent(`${address} 花蓮`)}`
-        + `&location=23.9871,121.6015&radius=20000`
+        + `&location=23.9871,121.6015&radius=50000`
         + `&language=zh-TW&region=tw`
         + `&key=${this.googleMapsApiKey}`;
 
@@ -611,16 +620,24 @@ export class PhoneCallProcessor {
 
       if (data.results && data.results.length > 0) {
         const result = data.results[0];
+        const lat = result.geometry.location.lat;
+        const lng = result.geometry.location.lng;
+
+        // 驗證結果在花蓮縣範圍內
+        if (!hualienAddressDB.isWithinBounds(lat, lng)) {
+          console.warn(`[PhoneCallProcessor] Places Search 結果超出花蓮範圍，丟棄: ${address} → lat=${lat}, lng=${lng}`);
+          return null;
+        }
+
         const googleAddr = result.formatted_address || address;
-        // 若 Google 只回傳縣市行政區，使用原始查詢地址
         const hasDetail = /[路街道巷弄號]/.test(googleAddr) ||
           (result.types || []).some((t: string) =>
             ['street_address','premise','establishment','point_of_interest'].includes(t)
           );
         return {
-          lat: result.geometry.location.lat,
-          lng: result.geometry.location.lng,
-          formattedAddress: hasDetail ? googleAddr : address
+          lat,
+          lng,
+          formattedAddress: hualienAddressDB.normalizeSegment(hasDetail ? googleAddr : address)
         };
       }
 

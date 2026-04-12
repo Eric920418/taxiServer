@@ -903,15 +903,24 @@ export class LineMessageProcessor {
       const prefix = hasTownship ? '花蓮縣' : '花蓮縣花蓮市';
       const fullAddress = alreadyHasPrefix ? addr : `${prefix}${addr}`;
 
-      const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(fullAddress)}&language=zh-TW&region=tw&components=country:TW&key=${this.googleMapsApiKey}`;
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(fullAddress)}&language=zh-TW&region=tw&bounds=23.20,121.30|24.16,121.66&components=country:TW&key=${this.googleMapsApiKey}`;
       const response = await fetch(url);
       const geoData = await response.json() as any;
 
       if (geoData.results && geoData.results.length > 0) {
         const result = geoData.results[0];
+        const lat = result.geometry.location.lat;
+        const lng = result.geometry.location.lng;
+
+        // 驗證結果在花蓮縣範圍內
+        if (!hualienAddressDB.isWithinBounds(lat, lng)) {
+          console.warn(`[LINE] Geocoding 結果超出花蓮範圍，丟棄: ${fullAddress} → lat=${lat}, lng=${lng}`);
+          return null;
+        }
+
         const geo: GeocodingResult = {
-          lat: result.geometry.location.lat,
-          lng: result.geometry.location.lng,
+          lat,
+          lng,
           formattedAddress: hualienAddressDB.normalizeSegment(result.formatted_address || fullAddress),
         };
 
