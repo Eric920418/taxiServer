@@ -9,7 +9,7 @@ import { messagingApi, WebhookEvent, MessageEvent, PostbackEvent, FollowEvent, E
 import OpenAI from 'openai';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getSocketIO, driverSockets } from '../socket';
-import { hualienAddressDB } from './HualienAddressDB';
+import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } from './HualienAddressDB';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
 import { getScheduledOrderService } from './ScheduledOrderService';
 import * as templates from './LineFlexTemplates';
@@ -912,26 +912,89 @@ export class LineMessageProcessor {
         const lat = result.geometry.location.lat;
         const lng = result.geometry.location.lng;
 
-        // 驗證結果在花蓮縣範圍內
+        // 驗證 1：範圍檢查
         if (!hualienAddressDB.isWithinBounds(lat, lng)) {
           console.warn(`[LINE] Geocoding 結果超出花蓮範圍，丟棄: ${fullAddress} → lat=${lat}, lng=${lng}`);
-          return null;
         }
+        // 驗證 2：拒絕行政區級結果（避免「台新銀行」被定位到花蓮市中心）
+        else if (isAdministrativeAreaResult(result.types)) {
+          console.warn(`[LINE] Geocoding 僅回傳行政區級別，fallback 到 Places Search: ${fullAddress} → types=${JSON.stringify(result.types)}`);
+        }
+        // 精確結果
+        else {
+          const geo: GeocodingResult = {
+            lat,
+            lng,
+            formattedAddress: hualienAddressDB.normalizeSegment(result.formatted_address || fullAddress),
+          };
+          try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
+          return geo;
+        }
+      }
 
-        const geo: GeocodingResult = {
-          lat,
-          lng,
-          formattedAddress: hualienAddressDB.normalizeSegment(result.formatted_address || fullAddress),
-        };
-
-        try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
-        return geo;
+      // 3. Places Text Search fallback — 處理地標/POI（銀行、店家等）
+      const placesResult = await this.geocodeWithPlacesSearch(addr);
+      if (placesResult) {
+        try { await cacheApiResponse(cacheKey, placesResult, 3600); } catch { /* ignore */ }
+        return placesResult;
       }
     } catch (error) {
       console.error('[LINE] Geocoding 失敗:', error);
     }
 
     return null;
+  }
+
+  /**
+   * Places Text Search - 處理地標/POI（銀行、店家等非街道地址）
+   * 對齊 PhoneCallProcessor 的實作
+   */
+  private async geocodeWithPlacesSearch(address: string): Promise<GeocodingResult | null> {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/place/textsearch/json`
+        + `?query=${encodeURIComponent(`${address} 花蓮`)}`
+        + `&location=23.9871,121.6015&radius=50000`
+        + `&language=zh-TW&region=tw`
+        + `&key=${this.googleMapsApiKey}`;
+
+      console.log(`[LINE] Places Search 查詢: ${address} 花蓮`);
+      const response = await fetch(url);
+      const data = await response.json() as any;
+
+      if (!data.results || data.results.length === 0) {
+        console.warn(`[LINE] Places Search 無結果: ${address}`);
+        return null;
+      }
+
+      // 智慧挑選：過濾 ATM、優先選分行
+      const result = pickBestPlaceResult(data.results, address);
+      if (!result) return null;
+
+      const lat = result.geometry.location.lat;
+      const lng = result.geometry.location.lng;
+
+      // 範圍驗證
+      if (!hualienAddressDB.isWithinBounds(lat, lng)) {
+        console.warn(`[LINE] Places Search 結果超出花蓮範圍，丟棄: ${address} → lat=${lat}, lng=${lng}`);
+        return null;
+      }
+
+      const googleAddr = result.formatted_address || address;
+      const hasDetail = /[路街道巷弄號]/.test(googleAddr) ||
+        (result.types || []).some((t: string) =>
+          ['street_address', 'premise', 'establishment', 'point_of_interest'].includes(t)
+        );
+
+      console.log(`[LINE] Places Search 命中: ${result.name || address} → ${googleAddr}`);
+      return {
+        lat,
+        lng,
+        formattedAddress: hualienAddressDB.normalizeSegment(hasDetail ? googleAddr : address),
+      };
+    } catch (error) {
+      console.error('[LINE] Places Search 失敗:', error);
+      return null;
+    }
   }
 
   // ========== LINE 使用者管理 ==========

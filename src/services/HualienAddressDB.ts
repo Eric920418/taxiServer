@@ -944,6 +944,63 @@ export function isWithinHualienBounds(lat: number, lng: number): boolean {
          lng >= HUALIEN_BOUNDS.west && lng <= HUALIEN_BOUNDS.east;
 }
 
+// ========== Google Places 結果智慧挑選 ==========
+
+/**
+ * 判斷 Google Geocoding/Places 結果是否為「行政區級別」（粗糙結果）
+ * 行政區級結果代表 API 找不到精確地址，只能回傳縣市鄉鎮中心點，應視為失敗
+ *
+ * 精確結果的 types 會含：street_address / premise / establishment / point_of_interest
+ * 粗糙結果的 types 只有：administrative_area_level_X / political / locality
+ */
+export function isAdministrativeAreaResult(types: string[] | undefined): boolean {
+  if (!types || types.length === 0) return false;
+  const preciseTypes = ['street_address', 'premise', 'establishment', 'point_of_interest', 'subpremise'];
+  const hasPrecise = types.some(t => preciseTypes.includes(t));
+  if (hasPrecise) return false;
+  const adminTypes = ['administrative_area_level_1', 'administrative_area_level_2', 'administrative_area_level_3', 'locality', 'political'];
+  return types.every(t => adminTypes.includes(t));
+}
+
+/**
+ * 從 Places Search 結果陣列中智慧挑選最符合 query 的那筆
+ *
+ * 策略：
+ * 1. 過濾：query 含「銀行/分行/郵局」但不含「ATM」→ 排除 types 含 'atm' 的結果
+ * 2. 優先：name 完整包含 query 關鍵詞 + types 含 establishment/bank/post_office
+ * 3. Fallback：保留順序的第一筆
+ *
+ * 例：query="台新銀行"
+ *   結果 A: name="台新銀行花蓮分行" types=[bank, establishment] → 優先選
+ *   結果 B: name="台新銀行(XX店 ATM)" types=[atm] → 過濾掉
+ */
+export function pickBestPlaceResult(results: any[], query: string): any | null {
+  if (!results || results.length === 0) return null;
+
+  const queryHasBank = /銀行|分行|郵局/.test(query);
+  const queryHasAtm = /ATM|atm/i.test(query);
+
+  // 過濾掉 ATM（除非使用者明確搜 ATM）
+  const filtered = (queryHasBank && !queryHasAtm)
+    ? results.filter(r => !(r.types || []).includes('atm'))
+    : results;
+
+  if (filtered.length === 0) return results[0]; // 全部都是 ATM，只好回傳原始第一筆
+
+  // 優先選「分行類」：name 含 query 關鍵字 + types 是 establishment/bank/post_office
+  const preferredTypes = ['bank', 'post_office', 'establishment', 'point_of_interest'];
+  const preferred = filtered.find(r => {
+    const name = r.name || '';
+    const types = r.types || [];
+    const nameMatches = queryHasBank
+      ? /分行|分公司|支行/.test(name) || types.includes('bank') || types.includes('post_office')
+      : types.some((t: string) => preferredTypes.includes(t));
+    return nameMatches;
+  });
+
+  return preferred || filtered[0];
+}
+
 // ========== 地址段數正規化（阿拉伯數字 → 國字） ==========
 
 const SEGMENT_DIGIT_TO_HANZI: Record<string, string> = {

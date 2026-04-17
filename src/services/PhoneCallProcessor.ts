@@ -11,7 +11,7 @@ import path from 'path';
 import { CallFieldExtractor, ParsedFields, CallEventType } from './CallFieldExtractor';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getSocketIO, driverSockets, notifyAdmins } from '../socket';
-import { hualienAddressDB } from './HualienAddressDB';
+import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } from './HualienAddressDB';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
 import { getNotificationService } from './NotificationService';
 
@@ -578,9 +578,15 @@ export class PhoneCallProcessor {
         const lat = result.geometry.location.lat;
         const lng = result.geometry.location.lng;
 
-        // 驗證結果在花蓮縣範圍內
+        // 驗證 1：範圍檢查
         if (!hualienAddressDB.isWithinBounds(lat, lng)) {
           console.warn(`[PhoneCallProcessor] Geocoding 結果超出花蓮範圍，丟棄: ${fullAddress} → lat=${lat}, lng=${lng}`);
+          return null;
+        }
+
+        // 驗證 2：拒絕行政區級別粗糙結果（讓 caller fallback 到 Places Search）
+        if (isAdministrativeAreaResult(result.types)) {
+          console.warn(`[PhoneCallProcessor] Geocoding 僅回傳行政區級別，fallback: ${fullAddress} → types=${JSON.stringify(result.types)}`);
           return null;
         }
 
@@ -619,7 +625,13 @@ export class PhoneCallProcessor {
       const data = await response.json() as any;
 
       if (data.results && data.results.length > 0) {
-        const result = data.results[0];
+        // 智慧挑選：過濾 ATM、優先選分行（對台新銀行/中國信託等 POI 尤其重要）
+        const result = pickBestPlaceResult(data.results, address);
+        if (!result) {
+          console.warn(`[PhoneCallProcessor] Places Search 挑選後無結果: ${address}`);
+          return null;
+        }
+
         const lat = result.geometry.location.lat;
         const lng = result.geometry.location.lng;
 
@@ -634,6 +646,8 @@ export class PhoneCallProcessor {
           (result.types || []).some((t: string) =>
             ['street_address','premise','establishment','point_of_interest'].includes(t)
           );
+
+        console.log(`[PhoneCallProcessor] Places Search 命中: ${result.name || address} → ${googleAddr}`);
         return {
           lat,
           lng,
