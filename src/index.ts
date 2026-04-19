@@ -57,16 +57,36 @@ const liffPath = path.join(__dirname, '../public/liff');
 app.use('/liff', express.static(liffPath));
 
 // Helmet 安全頭 - 配置適合管理後台的 CSP
+// 已加 Google Maps JS SDK 白名單（Admin Panel 地標管理頁面用）
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      scriptSrc: [
+        "'self'", "'unsafe-inline'", "'unsafe-eval'",
+        "https://maps.googleapis.com",
+        "https://maps.gstatic.com",
+      ],
+      styleSrc: [
+        "'self'", "'unsafe-inline'",
+        "https://fonts.googleapis.com",
+        "https://maps.googleapis.com",
+      ],
       fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+      imgSrc: [
+        "'self'", "data:", "https:", "http:",
+        "https://maps.googleapis.com",
+        "https://maps.gstatic.com",
+        "https://*.googleapis.com",
+        "https://*.gstatic.com",
+      ],
+      connectSrc: [
+        "'self'", "ws:", "wss:", "http:", "https:",
+        "https://maps.googleapis.com",
+        "https://*.googleapis.com",
+      ],
       frameSrc: ["'self'"],
+      workerSrc: ["'self'", "blob:"],
       objectSrc: ["'none'"],
       // 不使用 upgradeInsecureRequests，因為目前沒有 HTTPS
       upgradeInsecureRequests: null
