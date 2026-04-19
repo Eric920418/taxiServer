@@ -8,6 +8,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 import { getScheduledOrderService } from '../services/ScheduledOrderService';
+import { getLineNotifier } from '../services/LineNotifier';
 import { hualienAddressDB } from '../services/HualienAddressDB';
 import { getSocketIO, driverSockets, driverLocations } from '../socket';
 import pool from '../db/connection';
@@ -185,6 +186,14 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
       };
       await dispatcher.startDispatch(orderData);
       console.log(`[LIFF] 訂單 ${orderId} 已派單`);
+    }
+
+    // 推播「訂單已建立，正在媒合司機」到聊天室
+    // 目的：讓使用者關掉 LIFF 回到聊天室時看到系統在運作
+    const lineNotifier = getLineNotifier();
+    if (lineNotifier) {
+      lineNotifier.notifyOrderCreated(orderId)
+        .catch(err => console.error('[LIFF] 訂單建立推播失敗:', err));
     }
 
     res.json({

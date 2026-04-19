@@ -328,6 +328,9 @@ export function orderConfirmCard(
 // ========== 訂單已建立 ==========
 
 export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMessage {
+  const liffTrackingId = process.env.LIFF_ID_TRACKING || '';
+  const trackingUrl = liffTrackingId ? `https://liff.line.me/${liffTrackingId}` : '';
+
   const bubble: FlexBubble = {
     type: 'bubble',
     body: {
@@ -338,8 +341,15 @@ export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMe
           type: 'text',
           text: '叫車成功！',
           weight: 'bold',
-          size: 'lg',
+          size: 'xl',
           color: '#4CAF50',
+        },
+        {
+          type: 'text',
+          text: '正在為您媒合司機，請稍候',
+          size: 'sm',
+          color: '#666666',
+          margin: 'xs',
         },
         { type: 'separator', margin: 'md' },
         {
@@ -351,8 +361,8 @@ export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMe
               type: 'box',
               layout: 'horizontal',
               contents: [
-                { type: 'text', text: '訂單編號', size: 'sm', color: '#999999', flex: 3 },
-                { type: 'text', text: orderId, size: 'sm', color: '#333333', flex: 5, wrap: true },
+                { type: 'text', text: '上車點', size: 'sm', color: '#999999', flex: 2 },
+                { type: 'text', text: pickupAddress, size: 'sm', color: '#333333', flex: 5, wrap: true },
               ],
             },
             {
@@ -360,27 +370,63 @@ export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMe
               layout: 'horizontal',
               margin: 'sm',
               contents: [
-                { type: 'text', text: '上車點', size: 'sm', color: '#999999', flex: 3 },
-                { type: 'text', text: pickupAddress, size: 'sm', color: '#333333', flex: 5, wrap: true },
+                { type: 'text', text: '訂單', size: 'sm', color: '#999999', flex: 2 },
+                { type: 'text', text: orderId, size: 'xs', color: '#AAAAAA', flex: 5, wrap: true },
               ],
             },
             {
-              type: 'text',
-              text: '正在為您尋找司機，請稍候...',
-              size: 'sm',
-              color: '#2196F3',
+              type: 'box',
+              layout: 'vertical',
               margin: 'lg',
-              wrap: true,
+              backgroundColor: '#FFF3E0',
+              cornerRadius: '8px',
+              paddingAll: '12px',
+              contents: [
+                {
+                  type: 'text',
+                  text: '🔍  尋找附近司機中...',
+                  size: 'md',
+                  color: '#E65100',
+                  weight: 'bold',
+                  align: 'center',
+                },
+                {
+                  type: 'text',
+                  text: '找到司機後會立即通知您',
+                  size: 'xs',
+                  color: '#999999',
+                  align: 'center',
+                  margin: 'xs',
+                },
+              ],
             },
           ],
         },
       ],
     },
+    ...(trackingUrl ? {
+      footer: {
+        type: 'box' as const,
+        layout: 'vertical' as const,
+        contents: [
+          {
+            type: 'button' as const,
+            style: 'secondary' as const,
+            height: 'sm' as const,
+            action: {
+              type: 'uri' as const,
+              label: '查看派單狀態',
+              uri: trackingUrl,
+            },
+          },
+        ],
+      },
+    } : {}),
   };
 
   return {
     type: 'flex',
-    altText: `叫車成功！訂單 ${orderId}，正在尋找司機`,
+    altText: `叫車成功！正在為您媒合司機，請稍候...`,
     contents: bubble,
   };
 }
@@ -393,7 +439,7 @@ export function driverAcceptedCard(
   plate: string,
   etaMinutes: number | null
 ): FlexMessage {
-  const etaText = etaMinutes ? `預計 ${etaMinutes} 分鐘到達` : '正在前往中';
+  const etaText = etaMinutes ? `預計 ${etaMinutes} 分鐘後到達上車點` : '司機正在前往您的上車點';
 
   const liffTrackingId = process.env.LIFF_ID_TRACKING || '';
   const trackingUrl = liffTrackingId ? `https://liff.line.me/${liffTrackingId}` : '';
@@ -406,10 +452,17 @@ export function driverAcceptedCard(
       contents: [
         {
           type: 'text',
-          text: '司機已接單！',
+          text: '已媒合到車！',
           weight: 'bold',
-          size: 'lg',
+          size: 'xl',
           color: '#4CAF50',
+        },
+        {
+          type: 'text',
+          text: '司機正在路上，請稍候',
+          size: 'sm',
+          color: '#666666',
+          margin: 'xs',
         },
         { type: 'separator', margin: 'md' },
         {
@@ -422,7 +475,7 @@ export function driverAcceptedCard(
               layout: 'horizontal',
               contents: [
                 { type: 'text', text: '司機', size: 'sm', color: '#999999', flex: 2 },
-                { type: 'text', text: driverName, size: 'sm', color: '#333333', flex: 5 },
+                { type: 'text', text: driverName, size: 'md', color: '#333333', weight: 'bold', flex: 5 },
               ],
             },
             {
@@ -431,16 +484,27 @@ export function driverAcceptedCard(
               margin: 'sm',
               contents: [
                 { type: 'text', text: '車牌', size: 'sm', color: '#999999', flex: 2 },
-                { type: 'text', text: plate, size: 'md', color: '#FF6B35', weight: 'bold', flex: 5 },
+                { type: 'text', text: plate, size: 'xl', color: '#FF6B35', weight: 'bold', flex: 5 },
               ],
             },
             {
-              type: 'text',
-              text: etaText,
-              size: 'sm',
-              color: '#2196F3',
+              type: 'box',
+              layout: 'vertical',
               margin: 'lg',
-              wrap: true,
+              backgroundColor: '#E3F2FD',
+              cornerRadius: '8px',
+              paddingAll: '12px',
+              contents: [
+                {
+                  type: 'text',
+                  text: etaText,
+                  size: 'md',
+                  color: '#1976D2',
+                  weight: 'bold',
+                  align: 'center',
+                  wrap: true,
+                },
+              ],
             },
           ],
         },
@@ -469,7 +533,7 @@ export function driverAcceptedCard(
 
   return {
     type: 'flex',
-    altText: `司機 ${driverName}（${plate}）已接單，${etaText}`,
+    altText: `已媒合到車！司機 ${driverName}（${plate}）正在路上，${etaText}`,
     contents: bubble,
   };
 }

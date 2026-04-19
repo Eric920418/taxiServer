@@ -100,6 +100,31 @@ export class LineNotifier {
   }
 
   /**
+   * 訂單已建立通知（叫車成功，正在媒合司機）
+   * 目的：讓使用者從 LIFF 回到聊天室後，看到系統正在運作
+   */
+  async notifyOrderCreated(orderId: string): Promise<void> {
+    try {
+      const result = await this.pool.query(
+        'SELECT line_user_id, pickup_address FROM orders WHERE order_id = $1',
+        [orderId]
+      );
+      if (result.rows.length === 0) return;
+
+      const { line_user_id, pickup_address } = result.rows[0];
+      if (!line_user_id) return;
+
+      await this.lineClient.pushMessage({
+        to: line_user_id,
+        messages: [templates.orderCreatedCard(orderId, pickup_address || '已定位')],
+      });
+      console.log(`[LineNotifier] 已推播訂單建立通知給 ${line_user_id} (訂單 ${orderId})`);
+    } catch (error: any) {
+      console.error(`[LineNotifier] 訂單建立推播失敗 (${orderId}):`, error.message || error);
+    }
+  }
+
+  /**
    * 無可用司機通知
    */
   async notifyNoDriverAvailable(orderId: string): Promise<void> {
