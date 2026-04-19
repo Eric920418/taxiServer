@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Table, Button, Space, Tag, Typography, Select, Popconfirm, Modal, Form,
-  Input, InputNumber, Row, Col, App as AntdApp, Card, Statistic,
+  Input, InputNumber, Row, Col, App as AntdApp, Card, Statistic, Alert,
 } from 'antd';
 import {
   ReloadOutlined, CheckCircleOutlined, CloseOutlined,
@@ -12,7 +12,7 @@ import {
   addressFailureAPI, landmarkAPI,
   type AddressLookupFailure, type LandmarkInput,
 } from '../services/api';
-import LandmarkMapPicker from '../components/LandmarkMapPicker';
+import GoogleMapsPicker, { type GoogleMapsPickerChange } from '../components/GoogleMapsPicker';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
@@ -100,7 +100,8 @@ const AddressFailures: React.FC = () => {
       category: 'COMMERCIAL',
       district: '花蓮市',
       priority: 5,
-      aliases: [],
+      // 自動把原用戶輸入加為別名 —— 下次相同查詢就能本地命中
+      aliases: [failure.query],
       taigi_aliases: [],
     });
     setFormLat(lat ? parseFloat(lat) : null);
@@ -367,43 +368,53 @@ const AddressFailures: React.FC = () => {
             </Col>
           </Row>
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="緯度"
-                name="lat"
-                rules={[{ required: true }, { type: 'number', min: 23.0, max: 24.6 }]}
-              >
-                <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="經度"
-                name="lng"
-                rules={[{ required: true }, { type: 'number', min: 121.0, max: 122.0 }]}
-              >
-                <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
-              </Form.Item>
-            </Col>
-          </Row>
+          {/* 經緯度隱藏 — 從地圖自動填，客服不用碰 */}
+          <Form.Item name="lat" hidden rules={[
+            { required: true, message: '請從地圖選地點' },
+            { type: 'number', min: 23.0, max: 24.6, message: '座標須在花蓮縣範圍內' },
+          ]}>
+            <InputNumber />
+          </Form.Item>
+          <Form.Item name="lng" hidden rules={[
+            { required: true, message: '請從地圖選地點' },
+            { type: 'number', min: 121.0, max: 122.0, message: '座標須在花蓮縣範圍內' },
+          ]}>
+            <InputNumber />
+          </Form.Item>
 
-          <LandmarkMapPicker
+          <Alert
+            type="info"
+            showIcon
+            message="地圖上搜尋用戶原輸入或其他關鍵字，選中後會自動填地址與座標。冷門地點可直接點擊地圖定位。"
+            style={{ marginBottom: 12 }}
+          />
+
+          <GoogleMapsPicker
             lat={formLat}
             lng={formLng}
-            onChange={(lat, lng) => {
-              form.setFieldsValue({ lat, lng });
-              setFormLat(lat);
-              setFormLng(lng);
+            onChange={(d: GoogleMapsPickerChange) => {
+              form.setFieldsValue({ lat: d.lat, lng: d.lng });
+              setFormLat(d.lat);
+              setFormLng(d.lng);
+
+              // Google 搜尋到地點 → 補地址（若還沒填）與合併建議別名
+              if (d.address && !form.getFieldValue('address')) {
+                form.setFieldsValue({ address: d.address });
+              }
+              if (d.suggestedAliases && d.suggestedAliases.length > 0) {
+                const current: string[] = form.getFieldValue('aliases') || [];
+                const merged = Array.from(new Set([...current, ...d.suggestedAliases]));
+                form.setFieldsValue({ aliases: merged });
+              }
             }}
-            height={260}
+            height={320}
           />
 
           <Form.Item
-            label="別名（會加入原輸入作為其中一個別名）"
+            label="別名（自動帶入原輸入與 Google 建議，可再補）"
             name="aliases"
             style={{ marginTop: 16 }}
-            tooltip="建議把原始輸入加進來，下次相同輸入就能本地命中"
+            tooltip="原用戶輸入已自動加為別名，下次相同輸入即能本地命中"
           >
             <Select mode="tags" tokenSeparators={[',', ' ', '、']} />
           </Form.Item>

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag,
   Popconfirm, Drawer, Timeline, Typography, Row, Col, App as AntdApp,
-  Tooltip, Switch,
+  Tooltip, Switch, Alert, Collapse,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { landmarkAPI, type Landmark, type LandmarkInput, type LandmarkAudit } from '../services/api';
-import LandmarkMapPicker from '../components/LandmarkMapPicker';
+import GoogleMapsPicker, { type GoogleMapsPickerChange } from '../components/GoogleMapsPicker';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -447,79 +447,97 @@ const Landmarks: React.FC = () => {
             </Col>
           </Row>
 
-          <Row gutter={16}>
-            <Col span={8}>
-              <Form.Item
-                label="緯度"
-                name="lat"
-                rules={[
-                  { required: true, message: '緯度必填' },
-                  { type: 'number', min: 23.0, max: 24.6, message: '須在花蓮縣範圍內' },
-                ]}
-              >
-                <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item
-                label="經度"
-                name="lng"
-                rules={[
-                  { required: true, message: '經度必填' },
-                  { type: 'number', min: 121.0, max: 122.0, message: '須在花蓮縣範圍內' },
-                ]}
-              >
-                <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
-              </Form.Item>
-            </Col>
-          </Row>
+          {/* 經緯度隱藏 — 由地圖自動填，客服不用碰 */}
+          <Form.Item name="lat" hidden rules={[
+            { required: true, message: '請從地圖選地點' },
+            { type: 'number', min: 23.0, max: 24.6, message: '座標須在花蓮縣範圍內' },
+          ]}>
+            <InputNumber />
+          </Form.Item>
+          <Form.Item name="lng" hidden rules={[
+            { required: true, message: '請從地圖選地點' },
+            { type: 'number', min: 121.0, max: 122.0, message: '座標須在花蓮縣範圍內' },
+          ]}>
+            <InputNumber />
+          </Form.Item>
 
-          <LandmarkMapPicker
-            lat={formLat}
-            lng={formLng}
-            onChange={(lat, lng) => {
-              form.setFieldsValue({ lat, lng });
-              setFormLat(lat);
-              setFormLng(lng);
-            }}
-            height={280}
+          <Alert
+            type="info"
+            showIcon
+            message="在下方地圖上搜尋「慈濟醫院」「花蓮火車站」等名稱，選中後會自動填入地址、座標與建議別名。冷門小店可直接點擊地圖定位。"
+            style={{ marginBottom: 12 }}
           />
 
-          <Title level={5} style={{ marginTop: 16 }}>別名</Title>
+          <GoogleMapsPicker
+            lat={formLat}
+            lng={formLng}
+            onChange={(d: GoogleMapsPickerChange) => {
+              form.setFieldsValue({ lat: d.lat, lng: d.lng });
+              setFormLat(d.lat);
+              setFormLng(d.lng);
+
+              // 只有新增時才用 Google 建議的 name/address 覆蓋（編輯時保留原有值避免誤改）
+              const isCreating = !editing;
+              if (isCreating && d.name && !form.getFieldValue('name')) {
+                form.setFieldsValue({ name: d.name });
+              }
+              if (isCreating && d.address) {
+                form.setFieldsValue({ address: d.address });
+              }
+
+              // 合併建議別名（去重）
+              if (d.suggestedAliases && d.suggestedAliases.length > 0) {
+                const current: string[] = form.getFieldValue('aliases') || [];
+                const merged = Array.from(new Set([...current, ...d.suggestedAliases]));
+                form.setFieldsValue({ aliases: merged });
+              }
+            }}
+            height={340}
+          />
+
+          <Title level={5} style={{ marginTop: 16 }}>別名（幫助語音/文字叫車匹配）</Title>
           <Form.Item
-            label="一般別名（逗號、空格或 Enter 分隔）"
+            label="一般別名（按 Enter、逗號或空格分隔多筆）"
             name="aliases"
-            tooltip="例如：火車站、車站、花蓮站"
+            tooltip="Google 搜尋地點時會自動建議，你可以再增刪"
           >
-            <Select mode="tags" tokenSeparators={[',', ' ', '、']} />
+            <Select mode="tags" tokenSeparators={[',', ' ', '、']} placeholder="例如：火車站、車站、花蓮站" />
           </Form.Item>
 
           <Form.Item
-            label="台語別名（Whisper STT 容錯用，可空）"
+            label="台語別名（Whisper 語音容錯用，可空）"
             name="taigi_aliases"
             tooltip="Whisper 在台語腔調下可能轉出的同音字，例如：火車頭、飛機厝"
           >
             <Select mode="tags" tokenSeparators={[',', ' ', '、']} />
           </Form.Item>
 
-          <Title level={5}>司機停靠點（可選，僅車站/醫院/機場這類有明確下車點的地標需要）</Title>
-          <Row gutter={16}>
-            <Col span={8}>
-              <Form.Item label="停靠點緯度" name="dropoff_lat">
-                <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item label="停靠點經度" name="dropoff_lng">
-                <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item label="停靠點地址" name="dropoff_address">
-                <Input placeholder="可空" />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Collapse
+            ghost
+            items={[{
+              key: 'advanced',
+              label: '🔧 進階：司機停靠點（僅車站/醫院/機場等有明確下車點需要）',
+              children: (
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <Form.Item label="停靠點緯度" name="dropoff_lat">
+                      <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item label="停靠點經度" name="dropoff_lng">
+                      <InputNumber style={{ width: '100%' }} step={0.000001} precision={6} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item label="停靠點地址" name="dropoff_address">
+                      <Input placeholder="可空" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              ),
+            }]}
+          />
         </Form>
       </Modal>
 

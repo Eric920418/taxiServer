@@ -539,6 +539,27 @@ router.post(
 );
 
 // ============================================================
+// GET /api/admin/landmarks/config/gmaps-key
+// 回傳 Google Maps API Key 供 Admin Panel 前端使用
+// （已 authenticateAdmin 保護，只有登入管理員取得；key 本身也應在
+//  Google Cloud Console 以 HTTP referrer 限制只允許 api.hualientaxi.taxi）
+// ============================================================
+router.get('/config/gmaps-key', async (_req: AuthedRequest, res: Response) => {
+  try {
+    const key = process.env.GOOGLE_MAPS_API_KEY;
+    if (!key) {
+      return res.status(500).json({
+        success: false,
+        error: 'Server 未設定 GOOGLE_MAPS_API_KEY 環境變數',
+      });
+    }
+    res.json({ success: true, api_key: key });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message, stack: error.stack });
+  }
+});
+
+// ============================================================
 // POST /api/admin/landmarks/rebuild-index（手動觸發索引重建）
 // ============================================================
 router.post(

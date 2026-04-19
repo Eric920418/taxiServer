@@ -397,6 +397,19 @@ export interface LandmarkAudit {
   created_at: string;
 }
 
+// 從 Server 取得 Google Maps API Key（已登入管理員才會回）
+// Key 載入後快取在 module level，避免每次開 Modal 都打 API
+let cachedGmapsKey: string | null = null;
+export async function getGoogleMapsKey(): Promise<string> {
+  if (cachedGmapsKey) return cachedGmapsKey;
+  const res = await api.get('/admin/landmarks/config/gmaps-key');
+  if (!res.data.success || !res.data.api_key) {
+    throw new Error(res.data.error || 'Server 未回傳 Google Maps Key');
+  }
+  cachedGmapsKey = res.data.api_key;
+  return cachedGmapsKey!;
+}
+
 export const landmarkAPI = {
   list: (params: {
     q?: string;
