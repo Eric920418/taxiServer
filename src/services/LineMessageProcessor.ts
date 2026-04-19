@@ -10,6 +10,7 @@ import OpenAI from 'openai';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getSocketIO, driverSockets } from '../socket';
 import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } from './HualienAddressDB';
+import { recordFailedQuery, attachGoogleResult, shouldLogFailure } from './AddressFailureLogger';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
 import { getScheduledOrderService } from './ScheduledOrderService';
 import * as templates from './LineFlexTemplates';
@@ -887,6 +888,11 @@ export class LineMessageProcessor {
       }
     }
 
+    // 記錄未能高信心命中的查詢（fire-and-forget，不影響主流程）
+    if (shouldLogFailure(dbResult)) {
+      recordFailedQuery(address, 'LINE', dbResult).catch(() => {});
+    }
+
     // 2. Google Geocoding API
     if (!this.googleMapsApiKey) return null;
 
@@ -928,6 +934,8 @@ export class LineMessageProcessor {
             formattedAddress: hualienAddressDB.normalizeSegment(result.formatted_address || fullAddress),
           };
           try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
+          // 附加到失敗佇列（讓 Admin 看到 Google 建議座標）
+          attachGoogleResult(address, 'LINE', { lat: geo.lat, lng: geo.lng, formattedAddress: geo.formattedAddress }).catch(() => {});
           return geo;
         }
       }
@@ -936,6 +944,7 @@ export class LineMessageProcessor {
       const placesResult = await this.geocodeWithPlacesSearch(addr);
       if (placesResult) {
         try { await cacheApiResponse(cacheKey, placesResult, 3600); } catch { /* ignore */ }
+        attachGoogleResult(address, 'LINE', { lat: placesResult.lat, lng: placesResult.lng, formattedAddress: placesResult.formattedAddress }).catch(() => {});
         return placesResult;
       }
     } catch (error) {

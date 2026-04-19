@@ -346,4 +346,105 @@ export const phoneCallAPI = {
   }) => api.post(`/phone-calls/${callId}/review`, data),
 };
 
+// ============================================================
+// 地標管理 API（Phase 1.5：Landmarks 頁面使用）
+// ============================================================
+export interface Landmark {
+  id: number;
+  name: string;
+  lat: number | string;
+  lng: number | string;
+  address: string;
+  category: 'TRANSPORT' | 'MEDICAL' | 'SCHOOL' | 'COMMERCIAL' |
+            'GOVERNMENT' | 'ATTRACTION' | 'HOTEL' | 'TOWNSHIP';
+  district: string;
+  priority: number;
+  dropoff_lat: number | string | null;
+  dropoff_lng: number | string | null;
+  dropoff_address: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  alias_count?: number;
+  aliases?: Array<{ id: number; alias: string; type: 'ALIAS' | 'TAIGI' }>;
+}
+
+export interface LandmarkInput {
+  name: string;
+  lat: number;
+  lng: number;
+  address: string;
+  category: string;
+  district: string;
+  priority: number;
+  dropoff_lat?: number | null;
+  dropoff_lng?: number | null;
+  dropoff_address?: string | null;
+  aliases: string[];
+  taigi_aliases: string[];
+}
+
+export interface LandmarkAudit {
+  id: number;
+  landmark_id: number;
+  admin_id: string;
+  admin_username: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'RESTORE';
+  before_data: any;
+  after_data: any;
+  created_at: string;
+}
+
+export const landmarkAPI = {
+  list: (params: {
+    q?: string;
+    category?: string;
+    district?: string;
+    include_deleted?: boolean;
+    page?: number;
+    page_size?: number;
+  }) => api.get('/admin/landmarks', { params }),
+
+  get: (id: number) => api.get(`/admin/landmarks/${id}`),
+
+  audit: (id: number) => api.get(`/admin/landmarks/${id}/audit`),
+
+  create: (data: LandmarkInput) => api.post('/admin/landmarks', data),
+
+  update: (id: number, data: Partial<LandmarkInput>) =>
+    api.patch(`/admin/landmarks/${id}`, data),
+
+  remove: (id: number) => api.delete(`/admin/landmarks/${id}`),
+
+  restore: (id: number) => api.post(`/admin/landmarks/${id}/restore`),
+
+  rebuildIndex: () => api.post('/admin/landmarks/rebuild-index'),
+};
+
+// 待補齊地標 API（Phase 2.2）
+export interface AddressLookupFailure {
+  id: number;
+  query: string;
+  normalized: string;
+  source: 'LINE' | 'PHONE' | 'APP_VOICE';
+  best_match: any;
+  google_result: any;
+  final_coords: any;
+  hit_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolved_landmark_id: number | null;
+  resolved_at: string | null;
+}
+
+export const addressFailureAPI = {
+  list: (params: { source?: string; resolved?: boolean; page?: number; page_size?: number }) =>
+    api.get('/admin/address-failures', { params }),
+  markResolved: (id: number, landmarkId: number) =>
+    api.post(`/admin/address-failures/${id}/resolve`, { landmark_id: landmarkId }),
+  dismiss: (id: number) => api.delete(`/admin/address-failures/${id}`),
+};
+
 export default api;

@@ -12,6 +12,7 @@ import { CallFieldExtractor, ParsedFields, CallEventType } from './CallFieldExtr
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getSocketIO, driverSockets, notifyAdmins } from '../socket';
 import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } from './HualienAddressDB';
+import { recordFailedQuery, attachGoogleResult, shouldLogFailure } from './AddressFailureLogger';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
 import { getNotificationService } from './NotificationService';
 
@@ -493,6 +494,10 @@ export class PhoneCallProcessor {
     // 街道門牌不允許 SUBSTRING 命中，避免「吉安路一段16號」誤判為「吉安鄉」
     const isStreetAddress = /[路街道巷弄號]/.test(addr);
     const dbResult = hualienAddressDB.lookup(addr);
+    // 記錄未能高信心命中的查詢（fire-and-forget，不影響主流程）
+    if (shouldLogFailure(dbResult)) {
+      recordFailedQuery(address, 'PHONE', dbResult).catch(() => {});
+    }
     if (dbResult && dbResult.entry.lat !== null && dbResult.entry.lng !== null) {
       if (isStreetAddress && dbResult.matchType === 'SUBSTRING') {
         console.log(`[HualienAddressDB] 街道地址跳過 SUBSTRING 命中: ${addr} → ${dbResult.entry.name}，改用 Geocoding API`);
@@ -538,6 +543,14 @@ export class PhoneCallProcessor {
       try {
         await cacheApiResponse(cacheKey, result, cacheTtl);
       } catch { /* Redis 失敗不阻斷 */ }
+      // 若 lookup 失敗但 google 補救成功，附加到失敗佇列供 Admin 查看
+      if (shouldLogFailure(dbResult)) {
+        attachGoogleResult(address, 'PHONE', {
+          lat: result.lat,
+          lng: result.lng,
+          formattedAddress: result.formattedAddress,
+        }).catch(() => {});
+      }
     }
 
     return result;

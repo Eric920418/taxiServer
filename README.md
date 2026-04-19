@@ -1,10 +1,90 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.6.0-MVP
-> 更新日期：2026-03-26
+> 版本：v1.7.0-MVP
+> 更新日期：2026-04-19
 
-## 📝 最新修改（2026-03-26）- LINE Messaging API 叫車串接
+## 📝 最新修改（2026-04-19）- 地標管理後台 + App 端動態同步
+
+### 解決的問題
+LINE / 電話 / App 語音叫車常遇到「找不到地點」— 以前要工程師改 `HualienAddressDB.ts` 與 Android `HualienLocalAddressDB.kt`（兩份 hardcoded）再重新部署 + 發 APK，運營沒辦法自己維護，變成「打地鼠」。
+
+### 功能
+1. **Admin Panel 新增兩個頁面**：
+   - 「地標管理」：列表 / 搜尋（名稱+別名）/ 分類篩選 / Leaflet 地圖點選座標 / 別名 Tag 管理 / 軟刪除+還原 / 審計歷史
+   - 「待補齊地標」：系統自動收集 LINE/電話/App 叫車時匹配失敗的查詢（含 Google 補救座標），按次數排序，一鍵轉為新地標
+2. **資料庫化**：`HualienAddressDB.ts` 原本 hardcoded 的 98 筆地標搬到 PostgreSQL `landmarks` + `landmark_aliases` 表；啟動時 load 進記憶體，Admin 儲存後自動原子重建索引（不需重啟 Server）
+3. **App 端動態同步**：App 啟動時呼叫 `GET /api/landmarks/sync`，把最新地標合併到 `HualienLocalAddressDB` 的動態索引；hardcoded 永遠保留作為離線 fallback
+4. **審計與安全**：所有寫入有 `before`/`after` JSONB diff；軟刪除可還原；座標強制花蓮縣地理圍籬驗證；角色權限（ADMIN 才能寫，OPERATOR 只能讀）
+
+### 新增檔案
+- `src/db/migrations/009-landmarks.sql` — landmarks / landmark_aliases / landmark_audit 表
+- `src/db/migrations/010-address-failures.sql` — address_lookup_failures 表
+- `src/db/landmarks_seed_data.ts` — 原 98 筆 LANDMARKS 資料，供 seed 使用
+- `src/db/seed_landmarks.ts` — 首次資料匯入腳本（冪等，ON CONFLICT DO NOTHING）
+- `src/services/AddressFailureLogger.ts` — 兩段式記錄器（recordFailedQuery + attachGoogleResult）
+- `src/api/admin-landmarks.ts` — Admin CRUD（掛在 `/api/admin/landmarks`）
+- `src/api/admin-address-failures.ts` — 待補齊地標 API
+- `src/api/landmarks.ts` — App 同步 API（`/api/landmarks/sync`，公開讀）
+- `admin-panel/src/pages/Landmarks.tsx` + `admin-panel/src/pages/AddressFailures.tsx`
+- `admin-panel/src/components/LandmarkMapPicker.tsx` — Leaflet 原生整合（免 Google Maps key）
+
+### 修改檔案
+- `src/services/HualienAddressDB.ts` — 移除 hardcoded LANDMARKS[]，改從 DB 載入，新增 `rebuildIndex()` 公開方法（原子替換 Map 參照，lookup 併發安全）
+- `src/services/LineMessageProcessor.ts`、`src/services/PhoneCallProcessor.ts` — 在 `geocodeAddress` 中掛 fire-and-forget 失敗記錄
+- `src/api/admin.ts` — export `AdminRole` 供新 router 使用
+- `src/db/migrate.ts` — 新增兩個 migration 路徑
+- `src/index.ts` — 掛新 router + 啟動時 `hualienAddressDB.rebuildIndex()`
+- `admin-panel/src/services/api.ts` — 新增 `landmarkAPI` / `addressFailureAPI`
+- `admin-panel/src/layouts/MainLayout.tsx` + `admin-panel/src/App.tsx` — 加入側邊選單與路由
+
+### 部署步驟
+
+```bash
+# 1. 跑新 migrations（冪等）
+pnpm tsx src/db/migrate.ts landmarks
+pnpm tsx src/db/migrate.ts address-failures
+
+# 2. 首次匯入 98 筆地標（冪等，已存在會跳過）
+pnpm tsx src/db/seed_landmarks.ts
+
+# 3. Admin Panel 依賴
+cd admin-panel && pnpm install && pnpm build
+
+# 4. 重啟 Server
+pnpm dev   # 或 pm2 restart
+```
+
+### 驗證步驟
+
+**地標管理**：
+1. 登入 Admin Panel → 側邊「地標管理」
+2. 看到 98 筆現有資料
+3. 點「新增地標」→ 在地圖上點一個點（花蓮市範圍內）→ 填名稱、別名 → 儲存
+4. 不重啟 Server，用 `curl /api/admin/landmarks?q=新地標名` 驗證索引已包含
+5. 編輯同一筆，改座標 → 儲存後看「審計歷史」Drawer 有完整 before/after diff
+
+**失敗佇列**：
+1. 用 LINE 或 Asterisk 電話模擬叫車「我要從未收錄的 XYZ 到花蓮火車站」
+2. Admin Panel → 側邊「待補齊地標」→ 看到該查詢
+3. 同一查詢再做一次 → `hit_count` = 2
+4. 點「轉為地標」→ 預填 Modal（已自動帶入 Google 猜測座標）→ 儲存 → 狀態變「已處理」
+
+**App 同步**：
+1. Admin Panel 新增「ZZZ 測試館」座標在花蓮
+2. App 完全重啟 → `adb logcat -s LandmarkSync` 看到 `同步完成：收到 N 筆`
+3. App 語音搜尋「ZZZ 測試館」應直接本地命中，不呼叫 Google
+4. App 斷網重啟 → 仍可搜到原有 hardcoded 地標（fallback 正常）
+
+### 注意事項
+- **hardcoded 永遠不刪**：App 端保留 `LANDMARKS` 常數作為離線 fallback；同名時 Server 版本 override
+- **非 ADMIN 無寫權**：OPERATOR 只能讀，但可以看到失敗佇列並提醒 ADMIN 處理
+- **台語別名**：Server 端獨有（Whisper STT 容錯），App 不需要（App 無 Whisper）
+- **索引重建成本**：100 筆重建 < 10ms，Admin 高頻修改也不會造成壓力
+
+---
+
+## 📝 歷史修改（2026-03-26）- LINE Messaging API 叫車串接
 
 ### 功能
 客戶可以透過 LINE Official Account 進行叫車、取消、預約叫車。

@@ -15,6 +15,8 @@ import Analytics from './pages/Analytics';
 import AdminManagement from './pages/AdminManagement';
 import Settings from './pages/Settings';
 import PhoneCalls from './pages/PhoneCalls';
+import Landmarks from './pages/Landmarks';
+import AddressFailures from './pages/AddressFailures';
 import './App.css';
 
 // 私有路由組件
@@ -54,6 +56,8 @@ function AppContent() {
           <Route path="admins" element={<AdminManagement />} />
           <Route path="settings" element={<Settings />} />
           <Route path="phonecalls" element={<PhoneCalls />} />
+          <Route path="landmarks" element={<Landmarks />} />
+          <Route path="address-failures" element={<AddressFailures />} />
         </Route>
       </Routes>
     </Router>

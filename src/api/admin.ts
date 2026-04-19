@@ -21,7 +21,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 const JWT_EXPIRY = '24h';
 
 // 管理員角色定義
-enum AdminRole {
+export enum AdminRole {
   SUPER_ADMIN = 'super_admin',
   ADMIN = 'admin',
   OPERATOR = 'operator'

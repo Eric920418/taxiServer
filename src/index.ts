@@ -13,6 +13,9 @@ import dispatchRouter from './api/dispatch';
 import dispatchV2Router from './api/dispatch-v2';
 import authRouter from './api/auth';
 import adminRouter from './api/admin';
+import adminLandmarksRouter from './api/admin-landmarks';
+import adminAddressFailuresRouter from './api/admin-address-failures';
+import landmarksSyncRouter from './api/landmarks';
 import ratingsRouter from './api/ratings';
 import whisperRouter from './api/whisper';
 import configRouter from './api/config';
@@ -30,6 +33,7 @@ import { initPhoneCallProcessor } from './services/PhoneCallProcessor';
 import { initLineMessageProcessor } from './services/LineMessageProcessor';
 import { initLineNotifier } from './services/LineNotifier';
 import { initScheduledOrderService } from './services/ScheduledOrderService';
+import { hualienAddressDB } from './services/HualienAddressDB';
 import pool from './db/connection';
 
 // 載入環境變數
@@ -185,7 +189,10 @@ console.log('[系統] Whisper 語音服務已初始化');
 
 // API路由
 app.use('/api/auth', authRouter);
+app.use('/api/admin/landmarks', adminLandmarksRouter);
+app.use('/api/admin/address-failures', adminAddressFailuresRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/landmarks', landmarksSyncRouter);
 app.use('/api/drivers', driversRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/dispatch', dispatchRouter);
@@ -605,6 +612,11 @@ io.on('connection', (socket) => {
 app.get('/admin{/*path}', (req, res) => {
   res.sendFile(path.join(adminPanelPath, 'index.html'));
 });
+
+// 啟動前先從 DB 載入地標索引（失敗則以空索引啟動，LINE/電話/語音叫車會降級到 Google API）
+hualienAddressDB.rebuildIndex()
+  .then(() => console.log('[系統] 地標索引初始化完成'))
+  .catch((err) => console.error('[系統] 地標索引初始化失敗:', err));
 
 // 啟動伺服器
 httpServer.listen(PORT, () => {

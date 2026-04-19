@@ -13,6 +13,8 @@ import {
   BellOutlined,
   TeamOutlined,
   PhoneOutlined,
+  EnvironmentOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -66,6 +68,16 @@ const MainLayout: React.FC = () => {
       key: '/phonecalls',
       icon: <PhoneOutlined />,
       label: '電話記錄',
+    },
+    {
+      key: '/landmarks',
+      icon: <EnvironmentOutlined />,
+      label: '地標管理',
+    },
+    {
+      key: '/address-failures',
+      icon: <QuestionCircleOutlined />,
+      label: '待補齊地標',
     },
     {
       key: '/admins',
