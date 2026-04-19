@@ -541,19 +541,28 @@ router.post(
 // ============================================================
 // GET /api/admin/landmarks/config/gmaps-key
 // 回傳 Google Maps API Key 供 Admin Panel 前端使用
-// （已 authenticateAdmin 保護，只有登入管理員取得；key 本身也應在
-//  Google Cloud Console 以 HTTP referrer 限制只允許 api.hualientaxi.taxi）
+//
+// 優先使用 GOOGLE_MAPS_BROWSER_KEY — 這個 key 應在 Google Cloud Console 設定
+// HTTP referrer 限制（只允許 api.hualientaxi.taxi/*），外洩也無法被他人濫用。
+//
+// Fallback 到 GOOGLE_MAPS_API_KEY（Server 用的 key），但那個 key 通常沒
+// referrer 限制（因為 Node fetch 沒 Referer header），出現在前端等於裸奔，
+// 只建議在本地開發 fallback 時用。
 // ============================================================
 router.get('/config/gmaps-key', async (_req: AuthedRequest, res: Response) => {
   try {
-    const key = process.env.GOOGLE_MAPS_API_KEY;
+    const key = process.env.GOOGLE_MAPS_BROWSER_KEY || process.env.GOOGLE_MAPS_API_KEY;
     if (!key) {
       return res.status(500).json({
         success: false,
-        error: 'Server 未設定 GOOGLE_MAPS_API_KEY 環境變數',
+        error: 'Server 未設定 GOOGLE_MAPS_BROWSER_KEY（或 GOOGLE_MAPS_API_KEY）環境變數',
       });
     }
-    res.json({ success: true, api_key: key });
+    res.json({
+      success: true,
+      api_key: key,
+      has_referrer_restriction: !!process.env.GOOGLE_MAPS_BROWSER_KEY,
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message, stack: error.stack });
   }
