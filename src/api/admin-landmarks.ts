@@ -189,7 +189,7 @@ router.get('/', async (req: AuthedRequest, res: Response) => {
 // ============================================================
 // GET /api/admin/landmarks/:id
 // ============================================================
-router.get('/:id(\\d+)', async (req: AuthedRequest, res: Response) => {
+router.get('/:id', async (req: AuthedRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const row = await fetchLandmarkById(id);
@@ -207,7 +207,7 @@ router.get('/:id(\\d+)', async (req: AuthedRequest, res: Response) => {
 // GET /api/admin/landmarks/:id/audit
 // 審計歷史
 // ============================================================
-router.get('/:id(\\d+)/audit', async (req: AuthedRequest, res: Response) => {
+router.get('/:id/audit', async (req: AuthedRequest, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const result = await pool.query(
@@ -328,7 +328,7 @@ router.post(
 // PATCH /api/admin/landmarks/:id
 // ============================================================
 router.patch(
-  '/:id(\\d+)',
+  '/:id',
   requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
   async (req: AuthedRequest, res: Response) => {
     const client = await pool.connect();
@@ -441,7 +441,7 @@ router.patch(
 // DELETE /api/admin/landmarks/:id（軟刪除）
 // ============================================================
 router.delete(
-  '/:id(\\d+)',
+  '/:id',
   requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
   async (req: AuthedRequest, res: Response) => {
     const client = await pool.connect();
@@ -491,7 +491,7 @@ router.delete(
 // POST /api/admin/landmarks/:id/restore（還原軟刪除）
 // ============================================================
 router.post(
-  '/:id(\\d+)/restore',
+  '/:id/restore',
   requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
   async (req: AuthedRequest, res: Response) => {
     const client = await pool.connect();

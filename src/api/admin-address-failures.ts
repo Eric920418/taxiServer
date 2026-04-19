@@ -82,7 +82,7 @@ router.get('/', async (req: AuthedRequest, res: Response) => {
 // 標記為已處理（需指定對應到哪個 landmark）
 // ============================================================
 router.post(
-  '/:id(\\d+)/resolve',
+  '/:id/resolve',
   requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
   async (req: AuthedRequest, res: Response) => {
     try {
@@ -126,7 +126,7 @@ router.post(
 // 標記為忽略（垃圾輸入/非地標）
 // ============================================================
 router.delete(
-  '/:id(\\d+)',
+  '/:id',
   requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
   async (req: AuthedRequest, res: Response) => {
     try {
