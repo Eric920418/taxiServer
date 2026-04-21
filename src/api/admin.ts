@@ -724,8 +724,13 @@ router.get('/passengers', authenticateAdmin, async (req: AuthenticatedRequest, r
         name,
         phone as "phoneNumber",
         email,
+        total_rides as "totalRides",
+        total_spent as "totalSpent",
+        rating,
+        is_blocked as "isBlocked",
+        block_reason as "blockReason",
         created_at as "createdAt",
-        last_login as "lastLogin"
+        updated_at as "lastLogin"
       FROM passengers
       ${whereClause}
       ORDER BY created_at DESC
@@ -768,8 +773,13 @@ router.get('/passengers/:passengerId', authenticateAdmin, async (req: Authentica
         name,
         phone as "phoneNumber",
         email,
+        total_rides as "totalRides",
+        total_spent as "totalSpent",
+        rating,
+        is_blocked as "isBlocked",
+        block_reason as "blockReason",
         created_at as "createdAt",
-        last_login as "lastLogin"
+        updated_at as "lastLogin"
       FROM passengers WHERE passenger_id = $1`,
       [passengerId]
     );
