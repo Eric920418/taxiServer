@@ -738,10 +738,18 @@ router.get('/passengers', authenticateAdmin, async (req: AuthenticatedRequest, r
       params
     );
 
+    // pg 的 numeric 型別會回成 string，前端 .toFixed 會炸，統一轉 number
+    const processedPassengers = passengers.rows.map((p: any) => ({
+      ...p,
+      rating: p.rating != null ? parseFloat(p.rating) : null,
+      totalRides: p.totalRides != null ? parseInt(p.totalRides) : 0,
+      totalSpent: p.totalSpent != null ? parseInt(p.totalSpent) : 0,
+    }));
+
     res.json({
       success: true,
       data: {
-        items: passengers.rows,
+        items: processedPassengers,
         pagination: {
           page: Number(page),
           pageSize: Number(pageSize),
