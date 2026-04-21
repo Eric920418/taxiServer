@@ -125,6 +125,35 @@ export function normalizeSegmentDigits(input: string): string {
   );
 }
 
+// ========== 顯示地址清理（去郵遞區號 + 台灣前綴） ==========
+
+/**
+ * 去掉 Google Geocoding 常見的「郵遞區號 + 台灣」前綴
+ *
+ * 範例：
+ *   "973台灣花蓮縣吉安鄉..."  → "花蓮縣吉安鄉..."
+ *   "970 台灣 花蓮縣..."      → "花蓮縣..."
+ *   "台灣花蓮縣..."           → "花蓮縣..."
+ *   "花蓮縣..."               → "花蓮縣..."（無變化）
+ *   "973花蓮縣..."            → "花蓮縣..."
+ */
+export function trimAddressPrefix(input: string): string {
+  if (!input) return input;
+  return input
+    .replace(/^\s*\d{3,6}\s*[,，]?\s*/, '')         // 去掉開頭郵遞區號（3-6 碼）
+    .replace(/^\s*(台灣|Taiwan)\s*[,，]?\s*/i, '')  // 去掉開頭的「台灣」/「Taiwan」
+    .trim();
+}
+
+/**
+ * 顯示用地址清理：段數正規化 + 去掉郵遞區號/台灣前綴
+ * 用於所有送給 LINE 使用者 / 司機端顯示的地址
+ */
+export function cleanupDisplayAddress(input: string): string {
+  if (!input) return input;
+  return trimAddressPrefix(normalizeSegmentDigits(input));
+}
+
 // ========== HualienAddressDB Class ==========
 
 class HualienAddressDB {
@@ -224,6 +253,13 @@ class HualienAddressDB {
    */
   normalizeSegment(input: string): string {
     return normalizeSegmentDigits(input);
+  }
+
+  /**
+   * 顯示用地址清理：段數正規化 + 去掉郵遞區號/台灣前綴
+   */
+  cleanupDisplay(input: string): string {
+    return cleanupDisplayAddress(input);
   }
 
   /**

@@ -519,7 +519,7 @@ export class PhoneCallProcessor {
         if (geocoded && !this.isDefaultCoords(geocoded.lat, geocoded.lng)) {
           result = {
             ...geocoded,
-            formattedAddress: hualienAddressDB.normalizeSegment(geocoded.formattedAddress),
+            formattedAddress: hualienAddressDB.cleanupDisplay(geocoded.formattedAddress),
           };
         } else {
           console.warn(`[PhoneCallProcessor] Geocoding 無效結果，改用 Places Search: ${addr}`);
@@ -533,7 +533,7 @@ export class PhoneCallProcessor {
       if (placesResult) {
         result = {
           ...placesResult,
-          formattedAddress: hualienAddressDB.normalizeSegment(placesResult.formattedAddress),
+          formattedAddress: hualienAddressDB.cleanupDisplay(placesResult.formattedAddress),
         };
       }
     }
@@ -611,7 +611,7 @@ export class PhoneCallProcessor {
         return {
           lat,
           lng,
-          formattedAddress: hualienAddressDB.normalizeSegment(hasDetail ? googleAddr : fullAddress)
+          formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : fullAddress)
         };
       }
 
@@ -664,7 +664,7 @@ export class PhoneCallProcessor {
         return {
           lat,
           lng,
-          formattedAddress: hualienAddressDB.normalizeSegment(hasDetail ? googleAddr : address)
+          formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : address)
         };
       }
 

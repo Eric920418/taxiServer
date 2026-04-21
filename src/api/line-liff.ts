@@ -98,8 +98,8 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
   }
 
   // 段數正規化：1段→一段
-  const normalizedPickupAddress = pickupAddress ? hualienAddressDB.normalizeSegment(pickupAddress) : pickupAddress;
-  const normalizedDestAddress = destAddress ? hualienAddressDB.normalizeSegment(destAddress) : destAddress;
+  const normalizedPickupAddress = pickupAddress ? hualienAddressDB.cleanupDisplay(pickupAddress) : pickupAddress;
+  const normalizedDestAddress = destAddress ? hualienAddressDB.cleanupDisplay(destAddress) : destAddress;
 
   try {
     // 確保 LINE 使用者和乘客記錄存在

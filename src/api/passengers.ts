@@ -119,8 +119,8 @@ router.post('/request-ride', async (req, res) => {
     }
 
     // 段數正規化：1段→一段，確保 DB 儲存的地址格式統一
-    const normalizedPickupAddress = hualienAddressDB.normalizeSegment(pickupAddress);
-    const normalizedDestAddress = destAddress ? hualienAddressDB.normalizeSegment(destAddress) : destAddress;
+    const normalizedPickupAddress = hualienAddressDB.cleanupDisplay(pickupAddress);
+    const normalizedDestAddress = destAddress ? hualienAddressDB.cleanupDisplay(destAddress) : destAddress;
 
     // 【重要】檢查乘客是否已有進行中的訂單（防止重複叫車）
     const existingOrder = await queryOne(`

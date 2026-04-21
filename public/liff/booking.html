@@ -211,7 +211,11 @@
       geocoder.geocode({ location: { lat, lng } }, (results, status) => {
         let addr = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         if (status === 'OK' && results[0]) {
-          addr = results[0].formatted_address.replace(/^\d{3}台灣/, '').trim();
+          // 去掉郵遞區號 + 台灣前綴（與後端 cleanupDisplayAddress 一致）
+          addr = results[0].formatted_address
+            .replace(/^\s*\d{3,6}\s*[,，]?\s*/, '')
+            .replace(/^\s*(台灣|Taiwan)\s*[,，]?\s*/i, '')
+            .trim();
         }
         updateLocation(lat, lng, addr);
       });

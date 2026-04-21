@@ -931,7 +931,7 @@ export class LineMessageProcessor {
           const geo: GeocodingResult = {
             lat,
             lng,
-            formattedAddress: hualienAddressDB.normalizeSegment(result.formatted_address || fullAddress),
+            formattedAddress: hualienAddressDB.cleanupDisplay(result.formatted_address || fullAddress),
           };
           try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
           // 附加到失敗佇列（讓 Admin 看到 Google 建議座標）
@@ -998,7 +998,7 @@ export class LineMessageProcessor {
       return {
         lat,
         lng,
-        formattedAddress: hualienAddressDB.normalizeSegment(hasDetail ? googleAddr : address),
+        formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : address),
       };
     } catch (error) {
       console.error('[LINE] Places Search 失敗:', error);
