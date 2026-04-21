@@ -2,9 +2,49 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-04-19
+> 更新日期：2026-04-21
 
-## 📝 最新修改（2026-04-19）- 地標管理後台 + App 端動態同步
+## 📝 最新修改（2026-04-21）- 後台白屏 `Cannot GET /login` 根治
+
+### 解決的問題
+後台使用中按瀏覽器**返回鍵 / 刷新鍵**偶發白屏，網址列變成 `https://api.hualientaxi.taxi/login`（**沒有 `/admin` 前綴**），頁面顯示 `Cannot GET /login`。此問題存在已久，只在 token 過期（1 小時）時觸發，所以不易複現但用久必踩。
+
+### 根因
+`admin-panel/src/services/api.ts` 的 axios 401 攔截器使用 `window.location.href = '/login'` 跳轉，**繞過了 React Router 的 `basename="/admin"`**。瀏覽器直接打伺服器的裸 `/login`，Express 的 SPA catch-all（`app.get('/admin{/*path}', ...)`）不接這條路徑，所以回 `Cannot GET /login`，且這個壞網址會寫進瀏覽器歷史，之後任何返回/刷新都重現。
+
+另外 `admin-panel/src/pages/Dashboard.tsx` 的 `<a href="/orders">` 也有同樣繞過 basename 的問題（點「查看全部」會整頁打到裸 `/orders`）。
+
+### 修改檔案
+- `admin-panel/src/services/api.ts` — 401 攔截器的跳轉路徑改為完整 `/admin/login`
+- `admin-panel/src/pages/Dashboard.tsx` — `<a href="/orders">` 改為 `<Link to="/orders">`（`react-router-dom`），自動套 basename 且為 SPA 切換不整頁刷新
+
+### 為什麼不在 Express 加「裸 `/login` 重定向」
+伺服器層補丁會把前端責任漏進 API 命名空間，未來若再有其他路徑漏前綴（例：`/orders`、`/dashboard`）就要一條條補，防不勝防。從源頭修前端是唯一根本解。
+
+### 部署步驟
+
+```bash
+# 在 Lightsail 15.164.245.47
+cd /var/www/taxiServer/admin-panel
+git pull
+pnpm install
+pnpm build
+# Server 不需重啟（只改了前端靜態檔案），但若要保險也可 pm2 restart
+```
+
+### 驗證步驟
+1. 登入後台，DevTools 把 `localStorage.admin_token` 改成無效字串
+2. 操作任一頁觸發 API 呼叫 → 應自動跳到 `https://api.hualientaxi.taxi/admin/login`（**不是裸 `/login`**）
+3. 按返回鍵、按刷新鍵 → 不再出現 `Cannot GET /login` 白屏
+4. Dashboard 點「查看全部」→ 網址 `/admin/orders`，且無整頁刷新（SPA 切換）
+
+### 開發規範（往後新增代碼請遵守）
+- **後台前端禁止使用 `window.location.href = '/xxx'` 跳到內部頁面** — interceptor 等非 React 環境也必須寫完整路徑 `/admin/xxx`
+- **`<a href>` 連到後台內部頁面一律改用 `<Link to="xxx">`** — 否則繞過 basename + 失去 SPA 體驗
+
+---
+
+## 📝 歷史修改（2026-04-19）- 地標管理後台 + App 端動態同步
 
 ### 解決的問題
 LINE / 電話 / App 語音叫車常遇到「找不到地點」— 以前要工程師改 `HualienAddressDB.ts` 與 Android `HualienLocalAddressDB.kt`（兩份 hardcoded）再重新部署 + 發 APK，運營沒辦法自己維護，變成「打地鼠」。

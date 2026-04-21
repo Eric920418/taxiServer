@@ -24,6 +24,7 @@ import {
 } from '@ant-design/icons';
 import { Line, Column, Pie } from '@ant-design/plots';
 import { useDispatch, useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 import {
   fetchDashboardStats,
   fetchRealtimeStats,
@@ -332,7 +333,7 @@ const Dashboard: React.FC = () => {
         <Card
           title="最近訂單"
           bordered={false}
-          extra={<a href="/orders">查看全部</a>}
+          extra={<Link to="/orders">查看全部</Link>}
         >
           <Table
             columns={orderColumns}

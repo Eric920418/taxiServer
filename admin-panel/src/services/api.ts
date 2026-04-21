@@ -31,8 +31,10 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       // Token 過期或無效，清除並跳轉到登入頁
+      // 必須用完整路徑 /admin/login — interceptor 是普通函數無法用 useNavigate Hook，
+      // 裸 /login 會繞過 React Router basename，導致伺服器回 Cannot GET /login 白屏
       localStorage.removeItem('admin_token');
-      window.location.href = '/login';
+      window.location.href = '/admin/login';
     }
     return Promise.reject(error);
   }
