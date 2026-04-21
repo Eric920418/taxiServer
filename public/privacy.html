@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoGoCha — 隱私政策</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; max-width: 780px; margin: 40px auto; padding: 0 20px; line-height: 1.75; color: #222; }
+  h1 { border-bottom: 3px solid #FFC107; padding-bottom: 10px; margin-bottom: 8px; }
+  h2 { margin-top: 36px; color: #333; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 15px; }
+  th, td { border: 1px solid #e0e0e0; padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { background: #fafafa; font-weight: 600; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 14px; }
+  .meta { color: #777; font-size: 14px; margin-bottom: 20px; }
+  a { color: #1976d2; }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>GoGoCha 隱私政策</h1>
+<p class="meta">最後更新：2026-04-21　｜　生效日：2026-04-21　｜　品牌：GoGoCha（花蓮計程車叫車服務）</p>
+
+<p>GoGoCha（以下稱「本服務」）由個人開發者 Eric 營運，提供花蓮地區計程車叫車媒合服務。本政策說明我們如何蒐集、使用、儲存與保護您的個人資料，適用於本服務的 Android 應用程式（套件名稱：<code>com.hualien.taxidriver</code>）及相關網站。</p>
+
+<h2>1. 我們蒐集的資料</h2>
+<table>
+<thead><tr><th>資料類型</th><th>用途</th><th>是否分享第三方</th></tr></thead>
+<tbody>
+<tr><td>手機號碼</td><td>Firebase Authentication 身份驗證（SMS OTP）</td><td>否（僅用於驗證）</td></tr>
+<tr><td>暱稱</td><td>訂單上顯示給媒合對方</td><td>否</td></tr>
+<tr><td>精確位置（GPS）</td><td>司機端：持續回傳供媒合；乘客端：叫車位置、路線規劃</td><td>否</td></tr>
+<tr><td>粗略位置（WiFi / 基站）</td><td>GPS 無訊號時備援定位</td><td>否</td></tr>
+<tr><td>相機</td><td>司機端拍攝里程表結帳憑證、大頭照</td><td>否（僅上傳至本服務伺服器）</td></tr>
+<tr><td>麥克風</td><td>語音助理輸入地址（即時處理，不保存錄音）</td><td>否</td></tr>
+<tr><td>FCM Token</td><td>訂單狀態推播通知</td><td>否</td></tr>
+</tbody>
+</table>
+
+<h2>2. 資料的使用目的</h2>
+<ul>
+  <li>媒合乘客與附近司機</li>
+  <li>計算車資、規劃最短路線</li>
+  <li>傳送即時訂單狀態（接單、到達、完成）</li>
+  <li>客服查詢與糾紛處理</li>
+  <li>系統穩定性與濫用防治</li>
+</ul>
+
+<h2>3. 第三方服務</h2>
+<p>本服務使用以下第三方服務處理部分功能。這些服務有各自的隱私政策，請視需要查閱：</p>
+<ul>
+  <li><strong>Firebase Authentication</strong>（Google）— 手機號碼驗證</li>
+  <li><strong>Firebase Cloud Messaging</strong>（Google）— 推播通知</li>
+  <li><strong>Google Maps / Places / Directions API</strong>（Google）— 地圖顯示、地點搜尋、路線規劃</li>
+</ul>
+<p><strong>本服務不使用廣告 SDK、不販售使用者資料、不做跨網站追蹤</strong>。</p>
+
+<h2>4. 資料保留與刪除</h2>
+<ul>
+  <li>訂單紀錄保留 2 年供稅務與客服查詢</li>
+  <li>位置紀錄僅於訂單進行中暫存，訂單完成後 30 天內刪除原始軌跡</li>
+  <li>您可隨時於 App 內「個人資料」頁面登出；如需永久刪除帳號，請來信 <a href="mailto:26416387.re@gmail.com">26416387.re@gmail.com</a>，我們將於 7 天內刪除所有可識別資料</li>
+</ul>
+
+<h2>5. 資料安全</h2>
+<ul>
+  <li>所有 API 通訊使用 HTTPS / TLS 加密</li>
+  <li>手機端 token 透過 Android DataStore 儲存，並排除 Android Auto-Backup 避免雲端同步</li>
+  <li>伺服器位於 AWS Lightsail，定期更新系統安全修補</li>
+  <li>不儲存任何信用卡或支付資訊（車資現場交付司機，不經本服務）</li>
+</ul>
+
+<h2>6. 兒童隱私</h2>
+<p>本服務不針對 13 歲以下兒童設計，亦不主動蒐集兒童資料。若您為兒童的監護人並發現您的兒童使用本服務，請來信要求刪除。</p>
+
+<h2>7. 背景位置使用說明（Foreground Service Location）</h2>
+<p>司機端為即時媒合乘客，需在 App 進入背景時仍持續回傳位置。此功能僅在司機「上線接單」期間啟用，司機「下線」或關閉 App 後立即停止。前景服務會顯示常駐通知，讓使用者清楚知道位置正在被使用。</p>
+
+<h2>8. 政策變更</h2>
+<p>本政策如有重大變更將透過 App 內通知告知。繼續使用本服務即視為同意更新後之政策。歷史版本可來信索取。</p>
+
+<h2>9. 聯絡我們</h2>
+<p>
+  Email：<a href="mailto:26416387.re@gmail.com">26416387.re@gmail.com</a><br>
+  適用法律：中華民國（台灣）
+</p>
+</body>
+</html>

@@ -56,6 +56,16 @@ const PORT = process.env.PORT || 3000;
 const liffPath = path.join(__dirname, '../public/liff');
 app.use('/liff', express.static(liffPath));
 
+// 隱私政策頁面（Google Play / App Store 需求）
+app.get('/privacy', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../public/privacy.html'));
+});
+
+// 刪除帳戶頁面（Google Play Data Safety 必填）
+app.get('/delete-account', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../public/delete-account.html'));
+});
+
 // Helmet 安全頭 - 配置適合管理後台的 CSP
 // 已加 Google Maps JS SDK 白名單（Admin Panel 地標管理頁面用）
 app.use(helmet({

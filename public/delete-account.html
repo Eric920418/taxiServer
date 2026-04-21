@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoGoCha — 刪除帳戶 / Delete Account</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; max-width: 780px; margin: 40px auto; padding: 0 20px; line-height: 1.75; color: #222; }
+  h1 { border-bottom: 3px solid #FFC107; padding-bottom: 10px; margin-bottom: 8px; }
+  h2 { margin-top: 32px; color: #333; }
+  .meta { color: #777; font-size: 14px; margin-bottom: 20px; }
+  .box { background: #fff8e1; border-left: 4px solid #FFC107; padding: 16px 20px; border-radius: 4px; margin: 20px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 15px; }
+  th, td { border: 1px solid #e0e0e0; padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { background: #fafafa; font-weight: 600; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 14px; }
+  a { color: #1976d2; }
+  ol { padding-left: 22px; }
+  ol li { margin: 6px 0; }
+  .mail-btn { display: inline-block; background: #1976d2; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 12px 0; }
+  .mail-btn:hover { background: #1565c0; }
+  hr { border: none; border-top: 1px solid #e0e0e0; margin: 40px 0; }
+</style>
+</head>
+<body>
+
+<h1>刪除 GoGoCha 帳戶</h1>
+<p class="meta">適用於 App：GoGoCha（套件名稱 <code>com.hualien.taxidriver</code>） · 開發者：Eric</p>
+
+<div class="box">
+  <strong>本頁符合 Google Play 資料安全政策的帳戶刪除要求，適用於花蓮計程車叫車服務 GoGoCha 的乘客端與司機端使用者。</strong>
+</div>
+
+<h2>如何要求刪除帳戶</h2>
+
+<p>您可以透過以下方式要求刪除 GoGoCha 帳戶與關聯資料：</p>
+
+<ol>
+  <li>
+    <strong>以註冊本 App 的手機門號寄信至</strong>
+    <a href="mailto:26416387.re@gmail.com?subject=GoGoCha%20%E5%B8%B3%E6%88%B6%E5%88%AA%E9%99%A4%E7%94%B3%E8%AB%8B&body=%E6%82%A8%E5%A5%BD%EF%BC%8C%0A%0A%E6%88%91%E6%84%8F%E5%88%AA%E9%99%A4%E6%88%91%E7%9A%84%20GoGoCha%20%E5%B8%B3%E6%88%B6%E8%88%87%E6%89%80%E6%9C%89%E9%97%9C%E8%81%AF%E8%B3%87%E6%96%99%E3%80%82%0A%0A%E6%88%91%E7%9A%84%E6%B3%A8%E5%86%8A%E6%89%8B%E6%A9%9F%E5%8F%B7%E7%A2%BC%EF%BC%9A%0A%E8%A7%92%E8%89%B2%EF%BC%88%E4%B9%98%E5%AE%A2%EF%BC%8F%E5%8F%B8%E6%A9%9F%EF%BC%89%EF%BC%9A%0A%E5%A7%93%E5%90%8D%EF%BC%9A%0A%0A%E8%AC%9D%E8%AC%9D%E3%80%82">26416387.re@gmail.com</a>
+    <br>
+    <a class="mail-btn" href="mailto:26416387.re@gmail.com?subject=GoGoCha%20%E5%B8%B3%E6%88%B6%E5%88%AA%E9%99%A4%E7%94%B3%E8%AB%8B">📧 點此寄出刪除申請</a>
+  </li>
+  <li>信件主旨請寫：<code>GoGoCha 帳戶刪除申請</code></li>
+  <li>內文請提供：
+    <ul>
+      <li>您註冊時使用的台灣手機門號（如 09xx-xxx-xxx）</li>
+      <li>您的角色：乘客或司機</li>
+      <li>您的暱稱（供核對）</li>
+    </ul>
+  </li>
+  <li>我們會在 <strong>7 個工作天內</strong> 確認您的身份並完成刪除，完成後寄送確認信給您。</li>
+</ol>
+
+<h2>會被刪除的資料</h2>
+<table>
+<thead><tr><th>資料類型</th><th>動作</th></tr></thead>
+<tbody>
+<tr><td>手機號碼、暱稱、使用者 ID</td><td>立即刪除</td></tr>
+<tr><td>Firebase Authentication 帳戶</td><td>立即刪除（無法再登入）</td></tr>
+<tr><td>FCM 推播 Token</td><td>立即刪除</td></tr>
+<tr><td>位置紀錄、即時軌跡</td><td>立即刪除</td></tr>
+<tr><td>個人大頭照、相機上傳圖片</td><td>立即刪除</td></tr>
+<tr><td>司機車牌、車輛資料（司機帳戶）</td><td>立即刪除</td></tr>
+</tbody>
+</table>
+
+<h2>會保留的資料（為符合稅務與法律義務）</h2>
+<table>
+<thead><tr><th>資料類型</th><th>保留期限</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>訂單交易紀錄（金額、起訖點、時間戳）</td><td>2 年</td><td>依中華民國稅捐稽徵法要求保留交易紀錄</td></tr>
+<tr><td>客訴 / 糾紛相關訊息</td><td>事件結束後 1 年</td><td>紛爭處理舉證</td></tr>
+</tbody>
+</table>
+<p>保留的訂單紀錄會進行<strong>去識別化處理</strong>（移除可識別您本人的欄位，僅保留統計與金額），並於保留期限屆滿後自動刪除。</p>
+
+<h2>只刪除部分資料（不刪帳戶）</h2>
+<p>如果您只想刪除特定資料（例如位置歷史紀錄、大頭照）但保留帳戶，請同樣來信說明要求，我們會在 7 個工作天內處理。</p>
+
+<hr>
+
+<h1 style="margin-top:48px;">Delete your GoGoCha Account (English)</h1>
+<p class="meta">For users requesting account deletion in English.</p>
+
+<h2>How to request deletion</h2>
+<ol>
+  <li>Send an email from any address to
+    <a href="mailto:26416387.re@gmail.com?subject=GoGoCha%20Account%20Deletion%20Request">26416387.re@gmail.com</a>
+    with subject <code>GoGoCha Account Deletion Request</code>.
+  </li>
+  <li>Include: the Taiwan phone number you registered with, your role (passenger or driver), and your display name for verification.</li>
+  <li>We delete your account and personal data within <strong>7 business days</strong> and send a confirmation email.</li>
+</ol>
+
+<h2>What gets deleted immediately</h2>
+<p>Phone number, display name, Firebase Auth account, FCM token, location history, uploaded photos, vehicle plate (drivers).</p>
+
+<h2>What we retain (legal obligations)</h2>
+<ul>
+  <li><strong>Order transaction records</strong> — retained for 2 years (Taiwan tax law), de-identified before retention.</li>
+  <li><strong>Dispute / complaint messages</strong> — retained for 1 year after case closure.</li>
+</ul>
+
+<h2>Partial deletion</h2>
+<p>You may request deletion of specific data (location history, photos, etc.) without deleting your account. Email us with details.</p>
+
+<hr>
+<p class="meta">最後更新 / Last updated: 2026-04-21 · 聯絡 / Contact: <a href="mailto:26416387.re@gmail.com">26416387.re@gmail.com</a></p>
+
+</body>
+</html>
