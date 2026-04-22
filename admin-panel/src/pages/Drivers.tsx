@@ -9,7 +9,7 @@ import {
   Tag,
   Modal,
   Form,
-  message,
+  App as AntdApp,
   Drawer,
   Descriptions,
   Badge,
@@ -119,6 +119,9 @@ const AVAILABILITY_COLOR: Record<string, string> = {
 // ===================================================================
 
 const Drivers: React.FC = () => {
+  // Ant Design 5 建議用 App.useApp() 取得 context-aware message，
+  // 靜態 import { message } from 'antd' 在某些 ConfigProvider 下 toast 不顯示。
+  const { message, modal } = AntdApp.useApp();
   const dispatch = useDispatch<AppDispatch>();
   const { drivers, loading, pagination, selectedDriver } = useSelector(
     (state: RootState) => state.drivers
@@ -261,7 +264,7 @@ const Drivers: React.FC = () => {
   };
 
   const handleBlockDriver = async (driver: Driver) => {
-    Modal.confirm({
+    modal.confirm({
       title: '封鎖司機',
       content: (
         <Form layout="vertical">
