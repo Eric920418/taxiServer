@@ -163,7 +163,7 @@ const Passengers: React.FC = () => {
       title: '總花費',
       dataIndex: 'totalSpent',
       key: 'totalSpent',
-      render: (spent: number) => `$${(spent || 0).toLocaleString()}`,
+      render: (spent: number) => `NT$${(spent || 0).toLocaleString()}`,
     },
     {
       title: '評分',
@@ -314,7 +314,7 @@ const Passengers: React.FC = () => {
             <Descriptions title="使用統計" bordered column={1} style={{ marginTop: 24 }}>
               <Descriptions.Item label="總行程數">{selectedPassenger.totalTrips || 0}</Descriptions.Item>
               <Descriptions.Item label="總花費">
-                ${(selectedPassenger.totalSpent || 0).toLocaleString()}
+                NT${(selectedPassenger.totalSpent || 0).toLocaleString()}
               </Descriptions.Item>
               <Descriptions.Item label="評分">
                 {selectedPassenger.rating ? selectedPassenger.rating.toFixed(1) : 'N/A'}

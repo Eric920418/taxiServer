@@ -255,7 +255,7 @@ const Drivers: React.FC = () => {
       title: '總收入',
       dataIndex: 'totalEarnings',
       key: 'totalEarnings',
-      render: (earnings: number) => `$${(earnings || 0).toLocaleString()}`,
+      render: (earnings: number) => `NT$${(earnings || 0).toLocaleString()}`,
     },
     {
       title: '操作',
@@ -508,7 +508,7 @@ const Drivers: React.FC = () => {
               </Descriptions.Item>
               <Descriptions.Item label="總行程數">{selectedDriver.totalTrips || 0}</Descriptions.Item>
               <Descriptions.Item label="總收入">
-                ${(selectedDriver.totalEarnings || 0).toLocaleString()}
+                NT${(selectedDriver.totalEarnings || 0).toLocaleString()}
               </Descriptions.Item>
               <Descriptions.Item label="註冊時間">{selectedDriver.createdAt}</Descriptions.Item>
               <Descriptions.Item label="最後活動時間">{selectedDriver.lastActive}</Descriptions.Item>

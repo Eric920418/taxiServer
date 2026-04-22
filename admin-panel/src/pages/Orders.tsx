@@ -183,7 +183,7 @@ const Orders: React.FC = () => {
       title: '車資',
       dataIndex: 'fare',
       key: 'fare',
-      render: (fare: number) => fare > 0 ? `$${fare}` : '-',
+      render: (fare: number) => fare > 0 ? `NT$${fare}` : '-',
     },
     {
       title: '支付',

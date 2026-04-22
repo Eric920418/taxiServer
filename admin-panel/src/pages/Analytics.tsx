@@ -110,7 +110,7 @@ const Analytics: React.FC = () => {
       dataIndex: 'revenue',
       key: 'revenue',
       sorter: (a: any, b: any) => a.revenue - b.revenue,
-      render: (revenue: number) => `$${revenue.toLocaleString()}`,
+      render: (revenue: number) => `NT$${revenue.toLocaleString()}`,
     },
     {
       title: '評分',
@@ -150,13 +150,13 @@ const Analytics: React.FC = () => {
       dataIndex: 'revenue',
       key: 'revenue',
       sorter: (a: any, b: any) => a.revenue - b.revenue,
-      render: (revenue: number) => `$${revenue.toLocaleString()}`,
+      render: (revenue: number) => `NT$${revenue.toLocaleString()}`,
     },
     {
       title: '平均車資',
       key: 'avgFare',
       render: (_: any, record: any) =>
-        record.orders > 0 ? `$${Math.round(record.revenue / record.orders)}` : '-',
+        record.orders > 0 ? `NT$${Math.round(record.revenue / record.orders)}` : '-',
     },
   ];
 
