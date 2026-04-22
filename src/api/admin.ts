@@ -771,6 +771,115 @@ router.put('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER
 });
 
 /**
+ * 刪除司機（硬刪除 — 用於清理測試資料）
+ * DELETE /api/admin/drivers/:driverId
+ *
+ * 依 FK 拓樸順序清除所有相關記錄：
+ *   ratings (refs orders) → dispatch_logs / driver_locations (refs orders + drivers)
+ *   → daily_earnings / driver_patterns (refs drivers) → orders → drivers
+ *   （auto_accept_logs / daily_auto_accept_stats / driver_auto_accept_settings
+ *    / hot_zone_orders / hot_zone_queue 有 ON DELETE CASCADE 會自動清；
+ *    phone_calls.order_id 有 ON DELETE SET NULL）
+ */
+router.delete('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { driverId } = req.params;
+    const client = await getPool().connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 確認司機存在
+      const driverRow = await client.query(
+        'SELECT driver_id, name, phone, plate, total_trips FROM drivers WHERE driver_id = $1',
+        [driverId]
+      );
+      if (driverRow.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, error: '司機不存在' });
+      }
+      const driver = driverRow.rows[0];
+
+      // 暫存該司機的 order_id 清單（後面多表要用）
+      await client.query(
+        `CREATE TEMP TABLE tmp_driver_orders ON COMMIT DROP AS
+         SELECT order_id FROM orders WHERE driver_id = $1`,
+        [driverId]
+      );
+      const orderIdsRow = await client.query('SELECT COUNT(*)::int AS c FROM tmp_driver_orders');
+      const ordersCount = orderIdsRow.rows[0].c;
+
+      // 先刪 orders 的 child（ratings / dispatch_logs / driver_locations）
+      const ratingsDel = await client.query(
+        'DELETE FROM ratings WHERE order_id IN (SELECT order_id FROM tmp_driver_orders) RETURNING 1'
+      );
+      const dispatchLogsDel = await client.query(
+        `DELETE FROM dispatch_logs
+         WHERE order_id IN (SELECT order_id FROM tmp_driver_orders)
+            OR dispatched_to = $1 RETURNING 1`,
+        [driverId]
+      );
+      const driverLocationsDel = await client.query(
+        `DELETE FROM driver_locations
+         WHERE order_id IN (SELECT order_id FROM tmp_driver_orders)
+            OR driver_id = $1 RETURNING 1`,
+        [driverId]
+      );
+
+      // drivers 的其他 child
+      const dailyEarningsDel = await client.query(
+        'DELETE FROM daily_earnings WHERE driver_id = $1 RETURNING 1',
+        [driverId]
+      );
+      const driverPatternsDel = await client.query(
+        'DELETE FROM driver_patterns WHERE driver_id = $1 RETURNING 1',
+        [driverId]
+      );
+
+      // orders 本身（phone_calls.order_id 會 SET NULL，其他 hot_zone_* CASCADE）
+      const ordersDel = await client.query(
+        'DELETE FROM orders WHERE driver_id = $1 RETURNING 1',
+        [driverId]
+      );
+
+      // 最後 driver 本身（auto_accept_logs/stats/settings 會 CASCADE）
+      await client.query('DELETE FROM drivers WHERE driver_id = $1', [driverId]);
+
+      await client.query('COMMIT');
+
+      console.log(`[Admin API] Driver ${driverId} (${driver.name}) deleted by admin ${req.admin!.username}`);
+
+      res.json({
+        success: true,
+        message: `已刪除司機「${driver.name}」及關聯資料`,
+        deleted: {
+          driver: { driver_id: driver.driver_id, name: driver.name, phone: driver.phone, plate: driver.plate },
+          counts: {
+            orders: ordersDel.rowCount ?? 0,
+            ratings: ratingsDel.rowCount ?? 0,
+            dispatch_logs: dispatchLogsDel.rowCount ?? 0,
+            driver_locations: driverLocationsDel.rowCount ?? 0,
+            daily_earnings: dailyEarningsDel.rowCount ?? 0,
+            driver_patterns: driverPatternsDel.rowCount ?? 0,
+          },
+          had_trips: driver.total_trips,
+          pre_counted_orders: ordersCount,
+        },
+      });
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('[Admin API] Delete driver error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * 封鎖司機
  * POST /api/admin/drivers/:driverId/block
  */

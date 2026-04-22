@@ -33,6 +33,7 @@ import {
   IdcardOutlined,
   UserOutlined,
   TeamOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { useDispatch, useSelector } from 'react-redux';
 import {
@@ -45,7 +46,7 @@ import {
 } from '../store/slices/driversSlice';
 import { type RootState, type AppDispatch } from '../store';
 import { type Driver, type Team } from '../types';
-import { teamsAPI } from '../services/api';
+import { teamsAPI, driverAPI } from '../services/api';
 
 const { Search, TextArea } = Input;
 const { Option } = Select;
@@ -302,6 +303,24 @@ const Drivers: React.FC = () => {
     }
   };
 
+  const handleDeleteDriver = async (driver: Driver) => {
+    try {
+      const res = await driverAPI.deleteDriver(driver.driver_id);
+      if ((res as any)?.success === false) {
+        throw new Error((res as any).error || '刪除失敗');
+      }
+      const counts = (res as any)?.deleted?.counts;
+      const extra =
+        counts && counts.orders > 0
+          ? `（連帶刪除 ${counts.orders} 筆訂單、${counts.ratings} 筆評分、${counts.dispatch_logs} 筆派單紀錄）`
+          : '';
+      message.success(`已刪除司機「${driver.name}」${extra}`);
+      loadDrivers();
+    } catch (err: any) {
+      message.error(err?.response?.data?.error || err?.message || '刪除失敗');
+    }
+  };
+
   const getStatusTag = (status: string, isBlocked: boolean) => {
     if (isBlocked) {
       return <Tag color="red">已封鎖</Tag>;
@@ -395,7 +414,7 @@ const Drivers: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      width: 240,
       render: (_: any, record: Driver) => (
         <Space size="small">
           <Button
@@ -430,6 +449,24 @@ const Drivers: React.FC = () => {
               onClick={() => handleBlockDriver(record)}
             />
           )}
+          <Popconfirm
+            title={`永久刪除司機「${record.name}」？`}
+            description={
+              <div>
+                <div>手機：{record.phoneNumber}</div>
+                <div>車牌：{record.carPlate}</div>
+                <div style={{ color: '#cf1322', marginTop: 4 }}>
+                  ⚠ 此操作無法復原，將一併清除該司機所有訂單、評分、派單紀錄
+                </div>
+              </div>
+            }
+            onConfirm={() => handleDeleteDriver(record)}
+            okText="確定刪除"
+            okType="danger"
+            cancelText="取消"
+          >
+            <Button size="small" icon={<DeleteOutlined />} danger type="text" />
+          </Popconfirm>
         </Space>
       ),
     },
