@@ -7,6 +7,8 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
   HistoryOutlined, SearchOutlined, UndoOutlined, EnvironmentOutlined,
+  TagOutlined, AppstoreOutlined, HomeOutlined, AimOutlined,
+  StarOutlined, FileTextOutlined, ClockCircleOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { landmarkAPI, type Landmark, type LandmarkInput, type LandmarkAudit } from '../services/api';
@@ -253,9 +255,10 @@ const Landmarks: React.FC = () => {
 
   const columns: ColumnsType<Landmark> = [
     {
-      title: '名稱',
+      title: <><TagOutlined /> 名稱</>,
       dataIndex: 'name',
       width: 180,
+      sorter: (a, b) => (a.name || '').localeCompare(b.name || '', 'zh-Hant'),
       render: (name, row) => (
         <Space>
           <Text strong={!row.deleted_at} delete={!!row.deleted_at}>{name}</Text>
@@ -264,22 +267,25 @@ const Landmarks: React.FC = () => {
       ),
     },
     {
-      title: '分類',
+      title: <><AppstoreOutlined /> 分類</>,
       dataIndex: 'category',
-      width: 80,
+      width: 90,
+      sorter: (a, b) => (a.category || '').localeCompare(b.category || ''),
       render: (cat) => {
         const opt = CATEGORY_OPTIONS.find((o) => o.value === cat);
         return <Tag color={opt?.color}>{opt?.label || cat}</Tag>;
       },
     },
     {
-      title: '行政區',
+      title: <><HomeOutlined /> 行政區</>,
       dataIndex: 'district',
-      width: 100,
+      width: 110,
+      sorter: (a, b) => (a.district || '').localeCompare(b.district || '', 'zh-Hant'),
     },
     {
-      title: '座標',
+      title: <><AimOutlined /> 座標</>,
       width: 180,
+      sorter: (a, b) => parseFloat(a.lat as string) - parseFloat(b.lat as string),
       render: (_, row) => (
         <Text copyable style={{ fontFamily: 'monospace', fontSize: 12 }}>
           {parseFloat(row.lat as string).toFixed(6)}, {parseFloat(row.lng as string).toFixed(6)}
@@ -287,22 +293,26 @@ const Landmarks: React.FC = () => {
       ),
     },
     {
-      title: '優先級',
+      title: <><StarOutlined /> 優先級</>,
       dataIndex: 'priority',
-      width: 80,
+      width: 90,
       align: 'center',
+      sorter: (a, b) => (a.priority || 0) - (b.priority || 0),
     },
     {
-      title: '別名數',
+      title: <><FileTextOutlined /> 別名數</>,
       dataIndex: 'alias_count',
-      width: 80,
+      width: 90,
       align: 'center',
+      sorter: (a, b) => (a.alias_count || 0) - (b.alias_count || 0),
     },
     {
-      title: '最後更新',
+      title: <><ClockCircleOutlined /> 最後更新</>,
       dataIndex: 'updated_at',
-      width: 140,
-      render: (date) => dayjs(date).format('MM-DD HH:mm'),
+      width: 150,
+      sorter: (a, b) => dayjs(a.updated_at).unix() - dayjs(b.updated_at).unix(),
+      defaultSortOrder: 'descend',
+      render: (date) => dayjs(date).format('YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',
