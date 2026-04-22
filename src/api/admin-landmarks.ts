@@ -488,6 +488,67 @@ router.delete(
 );
 
 // ============================================================
+// DELETE /api/admin/landmarks/:id/hard（永久刪除 — 只允許已軟刪除的地標）
+// 設計：二階段硬刪除。必須先 soft delete，然後在「顯示已刪除」畫面再按永久刪除。
+// - landmark_aliases 透過 FK ON DELETE CASCADE 自動清
+// - landmark_audit 保留歷史紀錄（不受 FK 連動）
+// - 另寫一筆 audit 記錄永久刪除行為
+// ============================================================
+router.delete(
+  '/:id/hard',
+  requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
+  async (req: AuthedRequest, res: Response) => {
+    const client = await pool.connect();
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ success: false, error: 'id 必須是數字' });
+      }
+
+      await client.query('BEGIN');
+
+      const before = await fetchLandmarkByIdInTx(client, id);
+      if (!before) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, error: '找不到此地標' });
+      }
+      // 必須先軟刪除過才能永久刪除（防誤操作）
+      if (!before.deleted_at) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          error: '此地標尚未軟刪除，請先按「刪除」再執行永久刪除',
+        });
+      }
+
+      // 先寫 audit（地標刪掉後還要留可追溯記錄）
+      await client.query(
+        `INSERT INTO landmark_audit (landmark_id, admin_id, action, before_data, after_data)
+         VALUES ($1, $2, 'DELETE', $3::jsonb, '{"hard_deleted":true}'::jsonb)`,
+        [id, req.admin!.admin_id, JSON.stringify(before)]
+      );
+
+      // 真正 DELETE（aliases 會 CASCADE 自動清）
+      await client.query(`DELETE FROM landmarks WHERE id = $1`, [id]);
+
+      await client.query('COMMIT');
+
+      hualienAddressDB.rebuildIndex().catch((err) =>
+        console.error('[Admin Landmarks] rebuildIndex 失敗:', err)
+      );
+
+      res.json({ success: true, message: '已永久刪除（不可復原）' });
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('[Admin Landmarks] 永久刪除失敗:', error);
+      res.status(500).json({ success: false, error: error.message, stack: error.stack });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// ============================================================
 // POST /api/admin/landmarks/:id/restore（還原軟刪除）
 // ============================================================
 router.post(

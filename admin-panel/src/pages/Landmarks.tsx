@@ -213,6 +213,19 @@ const Landmarks: React.FC = () => {
     }
   };
 
+  const handleHardDelete = async (id: number, name: string) => {
+    try {
+      const res = await landmarkAPI.hardRemove(id);
+      if (res.data?.success === false) {
+        throw new Error(res.data.error || '永久刪除失敗');
+      }
+      message.success(`「${name}」已永久刪除（不可復原）`);
+      fetchList();
+    } catch (err: any) {
+      message.error(err.response?.data?.error || err.message);
+    }
+  };
+
   const handleRebuildIndex = async () => {
     try {
       const res = await landmarkAPI.rebuildIndex();
@@ -313,9 +326,23 @@ const Landmarks: React.FC = () => {
               </Popconfirm>
             </>
           ) : (
-            <Button type="link" size="small" icon={<UndoOutlined />} onClick={() => handleRestore(row.id)}>
-              復原
-            </Button>
+            <>
+              <Button type="link" size="small" icon={<UndoOutlined />} onClick={() => handleRestore(row.id)}>
+                復原
+              </Button>
+              <Popconfirm
+                title={`永久刪除「${row.name}」？`}
+                description="此操作無法復原！將從資料庫徹底移除，包含所有別名。"
+                okText="我確定"
+                okType="danger"
+                cancelText="取消"
+                onConfirm={() => handleHardDelete(row.id, row.name)}
+              >
+                <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                  永久刪除
+                </Button>
+              </Popconfirm>
+            </>
           )}
           <Tooltip title="審計歷史">
             <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => openAudit(row)} />

@@ -441,6 +441,8 @@ export const landmarkAPI = {
 
   remove: (id: number) => api.delete(`/admin/landmarks/${id}`),
 
+  hardRemove: (id: number) => api.delete(`/admin/landmarks/${id}/hard`),
+
   restore: (id: number) => api.post(`/admin/landmarks/${id}/restore`),
 
   rebuildIndex: () => api.post('/admin/landmarks/rebuild-index'),
