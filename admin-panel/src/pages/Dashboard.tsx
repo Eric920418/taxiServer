@@ -119,77 +119,58 @@ const Dashboard: React.FC = () => {
     },
   ];
 
-  // 線圖配置
+  // 線圖配置（@ant-design/plots v2 相容）
   const lineConfig = {
     data: revenueTrend || [],
     xField: 'date',
     yField: 'value',
-    seriesField: 'type',
+    colorField: 'type',
     smooth: true,
-    animation: {
-      appear: {
-        animation: 'path-in',
-        duration: 1000,
-      },
-    },
   };
 
-  // 圓餅圖配置
+  // 圓餅圖配置（@ant-design/plots v2 相容，移除 v1 專屬 label/interactions/statistic）
   const totalOrders = orderStatus.reduce((sum: number, item: any) => sum + item.value, 0);
   const pieConfig = {
-    appendPadding: 10,
     data: orderStatus || [],
     angleField: 'value',
     colorField: 'type',
     radius: 1,
     innerRadius: 0.6,
     label: {
-      type: 'inner',
-      offset: '-50%',
-      content: '{value}',
-      style: {
-        textAlign: 'center',
-        fontSize: 14,
-      },
+      text: 'value',
+      position: 'inside',
     },
-    interactions: [
+    annotations: [
       {
-        type: 'element-selected',
-      },
-      {
-        type: 'element-active',
+        type: 'text',
+        style: {
+          text: `訂單總數\n${totalOrders}`,
+          x: '50%',
+          y: '50%',
+          textAlign: 'center',
+          fontSize: 16,
+          fontWeight: 'bold',
+        },
       },
     ],
-    statistic: {
-      title: false,
-      content: {
-        style: {
-          whiteSpace: 'pre-wrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        },
-        content: `訂單總數\n${totalOrders}`,
-      },
-    },
   };
 
-  // 柱狀圖配置
+  // 柱狀圖配置（@ant-design/plots v2 相容）
   const columnConfig = {
     data: peakHours || [],
     xField: 'hour',
     yField: 'orders',
     label: {
-      position: 'middle' as const,
+      text: 'orders',
+      position: 'inside',
       style: {
         fill: '#FFFFFF',
-        opacity: 0.6,
+        fillOpacity: 0.7,
       },
     },
-    xAxis: {
-      label: {
-        autoHide: true,
-        autoRotate: false,
-      },
+    axis: {
+      x: { title: '時段' },
+      y: { title: '訂單數' },
     },
     meta: {
       hour: {
