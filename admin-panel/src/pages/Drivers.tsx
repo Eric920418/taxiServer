@@ -228,9 +228,31 @@ const Drivers: React.FC = () => {
       setIsModalVisible(false);
       loadDrivers();
     } catch (error: any) {
-      // 把後端回傳的具體錯誤訊息顯示出來（符合「錯誤完整顯示在前端」規則）
+      // 1) Ant Design Form validateFields 擋下 → 把第一個欄位錯誤明確顯示
+      //    （原本直接吃掉變成「操作失敗」，使用者以為按鈕壞了）
+      if (error?.errorFields && Array.isArray(error.errorFields) && error.errorFields.length > 0) {
+        const first = error.errorFields[0];
+        const fieldName = Array.isArray(first.name) ? first.name[0] : '';
+        const errMsg = first.errors?.[0] || '請確認所有必填欄位';
+        const FIELD_LABEL: Record<string, string> = {
+          name: '司機姓名',
+          phoneNumber: '手機號碼',
+          carPlate: '車牌號碼',
+          carModel: '車型',
+          carColor: '車色',
+          licenseNumber: '駕照號碼',
+          teamId: '所屬車隊',
+          driverType: '司機類型',
+          accountStatus: '司機狀態',
+        };
+        const label = FIELD_LABEL[fieldName] || fieldName || '欄位';
+        message.error(`${errMsg}（${label}）`);
+        return;
+      }
+      // 2) Redux thunk rejected → throw Error(response.error || 'Failed to ...')
+      //    所以 error.message 會是 server 的 error 訊息
+      // 3) axios 錯誤 → error.response.data.error
       const detail =
-        error?.payload?.error ||
         error?.response?.data?.error ||
         error?.message ||
         '操作失敗';
