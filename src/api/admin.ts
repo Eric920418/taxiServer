@@ -3,6 +3,15 @@ import { query, queryOne, getPool } from '../db/connection';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getHotZoneQuotaService, HotZoneConfig } from '../services/HotZoneQuotaService';
+import {
+    validateTaiwanPhone,
+    validatePlate,
+    validateEnumArray,
+    ORDER_TYPES,
+    REBATE_LEVELS,
+    ACCOUNT_STATUSES,
+    DRIVER_TYPES,
+} from '../utils/validators';
 
 const router = Router();
 
@@ -294,9 +303,9 @@ router.get('/drivers', authenticateAdmin, async (req: AuthenticatedRequest, res:
     const params: any[] = [];
     let paramIndex = 1;
 
-    // 搜尋條件
+    // 搜尋條件（prefix d. 避免跟 teams.name 衝突）
     if (search) {
-      whereClause += ` AND (name ILIKE $${paramIndex} OR phone ILIKE $${paramIndex} OR plate ILIKE $${paramIndex})`;
+      whereClause += ` AND (d.name ILIKE $${paramIndex} OR d.phone ILIKE $${paramIndex} OR d.plate ILIKE $${paramIndex})`;
       params.push(`%${search}%`);
       paramIndex++;
     }
@@ -304,9 +313,9 @@ router.get('/drivers', authenticateAdmin, async (req: AuthenticatedRequest, res:
     // 狀態篩選
     if (status && status !== 'all') {
       if (status === 'blocked') {
-        whereClause += ` AND is_blocked = true`;
+        whereClause += ` AND d.is_blocked = true`;
       } else {
-        whereClause += ` AND availability = $${paramIndex} AND is_blocked = false`;
+        whereClause += ` AND d.availability = $${paramIndex} AND d.is_blocked = false`;
         params.push(status);
         paramIndex++;
       }
@@ -314,44 +323,54 @@ router.get('/drivers', authenticateAdmin, async (req: AuthenticatedRequest, res:
 
     // 取得總數
     const countResult = await queryOne(
-      `SELECT COUNT(*) as total FROM drivers ${whereClause}`,
+      `SELECT COUNT(*) as total FROM drivers d ${whereClause}`,
       params
     );
 
-    // 取得司機列表
+    // 取得司機列表（LEFT JOIN teams 拿車隊名稱）
     params.push(Number(pageSize), offset);
     const drivers = await query(
       `SELECT
-        driver_id,
-        name,
-        phone as "phoneNumber",
-        plate as "carPlate",
-        NULL as "carModel",
-        NULL as "carColor",
-        NULL as "licenseNumber",
-        availability as status,
-        is_blocked as "isBlocked",
-        block_reason as "blockReason",
-        rating,
-        total_trips as "totalTrips",
-        total_earnings as "totalEarnings",
-        current_lat as latitude,
-        current_lng as longitude,
-        last_heartbeat as "lastLocationUpdate",
-        created_at as "createdAt",
-        last_heartbeat as "lastActive"
-      FROM drivers
+        d.driver_id,
+        d.name,
+        d.phone as "phoneNumber",
+        d.plate as "carPlate",
+        d.car_model as "carModel",
+        d.car_color as "carColor",
+        d.license_number as "licenseNumber",
+        d.availability as status,
+        d.account_status as "accountStatus",
+        d.driver_type as "driverType",
+        d.team_id as "teamId",
+        t.name as "teamName",
+        d.accepted_order_types as "acceptedOrderTypes",
+        d.accepted_rebate_levels as "acceptedRebateLevels",
+        d.note,
+        d.is_blocked as "isBlocked",
+        d.block_reason as "blockReason",
+        d.rating,
+        d.total_trips as "totalTrips",
+        d.total_earnings as "totalEarnings",
+        d.current_lat as latitude,
+        d.current_lng as longitude,
+        d.last_heartbeat as "lastLocationUpdate",
+        d.created_at as "createdAt",
+        d.last_heartbeat as "lastActive"
+      FROM drivers d
+      LEFT JOIN teams t ON t.team_id = d.team_id
       ${whereClause}
-      ORDER BY created_at DESC
+      ORDER BY d.created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       params
     );
 
-    // 處理司機資料
+    // 處理司機資料（pg numeric → number / 整理地點欄位）
     const processedDrivers = drivers.rows.map((driver: any) => ({
       ...driver,
-      rating: driver.rating ? parseFloat(driver.rating) : null,
-      totalEarnings: driver.totalEarnings ? parseFloat(driver.totalEarnings) : 0,
+      rating: driver.rating != null ? parseFloat(driver.rating) : null,
+      totalEarnings: driver.totalEarnings != null ? parseFloat(driver.totalEarnings) : 0,
+      acceptedRebateLevels: Array.isArray(driver.acceptedRebateLevels) ? driver.acceptedRebateLevels : [],
+      acceptedOrderTypes: Array.isArray(driver.acceptedOrderTypes) ? driver.acceptedOrderTypes : [],
       location: (driver.latitude && driver.longitude) ? {
         latitude: driver.latitude,
         longitude: driver.longitude,
@@ -390,26 +409,35 @@ router.get('/drivers/:driverId', authenticateAdmin, async (req: AuthenticatedReq
   try {
     const driver = await queryOne(
       `SELECT
-        driver_id,
-        name,
-        phone as "phoneNumber",
-        plate as "carPlate",
-        car_model as "carModel",
-        car_color as "carColor",
-        license_number as "licenseNumber",
-        availability as status,
-        is_blocked as "isBlocked",
-        block_reason as "blockReason",
-        rating,
-        total_trips as "totalTrips",
-        total_earnings as "totalEarnings",
-        latitude,
-        longitude,
-        last_location_update as "lastLocationUpdate",
-        created_at as "createdAt",
-        last_heartbeat as "lastActive",
-        firebase_uid as "firebaseUid"
-      FROM drivers WHERE driver_id = $1`,
+        d.driver_id,
+        d.name,
+        d.phone as "phoneNumber",
+        d.plate as "carPlate",
+        d.car_model as "carModel",
+        d.car_color as "carColor",
+        d.license_number as "licenseNumber",
+        d.availability as status,
+        d.account_status as "accountStatus",
+        d.driver_type as "driverType",
+        d.team_id as "teamId",
+        t.name as "teamName",
+        d.accepted_order_types as "acceptedOrderTypes",
+        d.accepted_rebate_levels as "acceptedRebateLevels",
+        d.note,
+        d.is_blocked as "isBlocked",
+        d.block_reason as "blockReason",
+        d.rating,
+        d.total_trips as "totalTrips",
+        d.total_earnings as "totalEarnings",
+        d.current_lat as latitude,
+        d.current_lng as longitude,
+        d.last_heartbeat as "lastLocationUpdate",
+        d.created_at as "createdAt",
+        d.last_heartbeat as "lastActive",
+        d.firebase_uid as "firebaseUid"
+      FROM drivers d
+      LEFT JOIN teams t ON t.team_id = d.team_id
+      WHERE d.driver_id = $1`,
       [driverId]
     );
 
@@ -420,11 +448,13 @@ router.get('/drivers/:driverId', authenticateAdmin, async (req: AuthenticatedReq
       });
     }
 
-    // 處理司機資料
+    // 處理司機資料（pg numeric → number / 陣列保底）
     const processedDriver = {
       ...driver,
-      rating: driver.rating ? parseFloat(driver.rating) : null,
-      totalEarnings: driver.totalEarnings ? parseFloat(driver.totalEarnings) : 0,
+      rating: driver.rating != null ? parseFloat(driver.rating) : null,
+      totalEarnings: driver.totalEarnings != null ? parseFloat(driver.totalEarnings) : 0,
+      acceptedRebateLevels: Array.isArray(driver.acceptedRebateLevels) ? driver.acceptedRebateLevels : [],
+      acceptedOrderTypes: Array.isArray(driver.acceptedOrderTypes) ? driver.acceptedOrderTypes : [],
       location: (driver.latitude && driver.longitude) ? {
         latitude: driver.latitude,
         longitude: driver.longitude,
@@ -451,55 +481,132 @@ router.get('/drivers/:driverId', authenticateAdmin, async (req: AuthenticatedReq
  */
 router.post('/drivers', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
   async (req: AuthenticatedRequest, res: Response) => {
-    const { name, phoneNumber, licenseNumber, carPlate, carModel, carColor } = req.body;
+    const {
+      name,
+      phoneNumber,
+      carPlate,
+      carModel,
+      carColor,
+      licenseNumber,
+      teamId,
+      driverType,
+      accountStatus,
+      acceptedOrderTypes,
+      acceptedRebateLevels,
+      note,
+    } = req.body;
 
     try {
-      // 驗證必要欄位
-      if (!name || !phoneNumber || !licenseNumber || !carPlate) {
+      // 1) 必填欄位檢查（licenseNumber / note 等選填）
+      if (!name || !phoneNumber || !carPlate || !carModel || !carColor) {
         return res.status(400).json({
           success: false,
-          error: 'Missing required fields'
+          error: '缺少必填欄位：name, phoneNumber, carPlate, carModel, carColor'
         });
       }
 
-      // 檢查手機號碼是否已存在
-      const existingDriver = await queryOne(
+      // 2) 手機格式驗證 + normalize（+886xxxxxxxxx）
+      const phoneCheck = validateTaiwanPhone(phoneNumber);
+      if (!phoneCheck.ok) {
+        return res.status(400).json({ success: false, error: phoneCheck.reason });
+      }
+      const normalizedPhone = phoneCheck.normalized!;
+
+      // 3) 車牌格式驗證 + normalize（大寫、有連字號）
+      const plateCheck = validatePlate(carPlate);
+      if (!plateCheck.ok) {
+        return res.status(400).json({ success: false, error: plateCheck.reason });
+      }
+      const normalizedPlate = plateCheck.normalized!;
+
+      // 4) enum 白名單檢查
+      if (driverType && !(DRIVER_TYPES as readonly string[]).includes(driverType)) {
+        return res.status(400).json({ success: false, error: `driverType 不在允許範圍：${DRIVER_TYPES.join(', ')}` });
+      }
+      if (accountStatus && !(ACCOUNT_STATUSES as readonly string[]).includes(accountStatus)) {
+        return res.status(400).json({ success: false, error: `accountStatus 不在允許範圍：${ACCOUNT_STATUSES.join(', ')}` });
+      }
+      const orderTypesCheck = validateEnumArray(acceptedOrderTypes, ORDER_TYPES, 'acceptedOrderTypes');
+      if (!orderTypesCheck.ok) {
+        return res.status(400).json({ success: false, error: orderTypesCheck.reason });
+      }
+      const rebateLevelsCheck = validateEnumArray(acceptedRebateLevels, REBATE_LEVELS, 'acceptedRebateLevels');
+      if (!rebateLevelsCheck.ok) {
+        return res.status(400).json({ success: false, error: rebateLevelsCheck.reason });
+      }
+
+      // 5) 手機號碼重複檢查
+      const existingByPhone = await queryOne(
         'SELECT driver_id FROM drivers WHERE phone = $1',
-        [phoneNumber]
+        [normalizedPhone]
       );
-
-      if (existingDriver) {
-        return res.status(409).json({
-          success: false,
-          error: 'Phone number already registered'
-        });
+      if (existingByPhone) {
+        return res.status(409).json({ success: false, error: '此手機號碼已註冊為司機' });
       }
 
-      // 產生司機 ID
-      const driverId = `DRV${Date.now().toString().slice(-8)}`;
+      // 6) 車牌重複檢查
+      const existingByPlate = await queryOne(
+        'SELECT driver_id FROM drivers WHERE plate = $1',
+        [normalizedPlate]
+      );
+      if (existingByPlate) {
+        return res.status(409).json({ success: false, error: '此車牌已註冊為其他司機' });
+      }
 
-      // 新增司機
+      // 7) 若有帶 teamId，驗證 team 存在
+      if (teamId != null) {
+        const team = await queryOne('SELECT team_id FROM teams WHERE team_id = $1 AND is_active = true', [teamId]);
+        if (!team) {
+          return res.status(400).json({ success: false, error: '指定的車隊不存在或已停用' });
+        }
+      }
+
+      // 8) 產生司機 ID + INSERT
+      const driverId = `DRV${Date.now().toString().slice(-8)}`;
       const result = await query(
         `INSERT INTO drivers (
-          driver_id, name, phone, license_number, plate, car_model, car_color, availability
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'offline') RETURNING *`,
-        [driverId, name, phoneNumber, licenseNumber, carPlate, carModel || '', carColor || '']
+          driver_id, name, phone, plate, car_model, car_color, license_number,
+          team_id, driver_type, account_status, accepted_order_types, accepted_rebate_levels, note,
+          availability
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'OFFLINE') RETURNING *`,
+        [
+          driverId,
+          name,
+          normalizedPhone,
+          normalizedPlate,
+          carModel,
+          carColor,
+          licenseNumber || null,
+          teamId ?? null,
+          driverType || 'HIGH_VOLUME',
+          accountStatus || 'ACTIVE',
+          acceptedOrderTypes ?? [],
+          acceptedRebateLevels ?? [],
+          note || null,
+        ]
       );
 
       console.log(`[Admin API] New driver created: ${driverId} by admin ${req.admin!.username}`);
 
+      const row = result.rows[0];
       res.json({
         success: true,
         data: {
-          driver_id: result.rows[0].driver_id,
-          name: result.rows[0].name,
-          phoneNumber: result.rows[0].phone,
-          carPlate: result.rows[0].plate,
-          carModel: result.rows[0].car_model,
-          carColor: result.rows[0].car_color,
-          licenseNumber: result.rows[0].license_number,
-          status: result.rows[0].availability,
-          createdAt: result.rows[0].created_at
+          driverId: row.driver_id,
+          name: row.name,
+          phoneNumber: row.phone,
+          carPlate: row.plate,
+          carModel: row.car_model,
+          carColor: row.car_color,
+          licenseNumber: row.license_number,
+          teamId: row.team_id,
+          driverType: row.driver_type,
+          accountStatus: row.account_status,
+          acceptedOrderTypes: row.accepted_order_types || [],
+          acceptedRebateLevels: row.accepted_rebate_levels || [],
+          note: row.note,
+          status: row.availability,
+          createdAt: row.created_at
         }
       });
     } catch (error) {
@@ -534,22 +641,103 @@ router.put('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER
         });
       }
 
-      // 建立更新查詢
+      // 欄位對應：camelCase request → snake_case DB column
+      // 新增/編輯要一致支援的新欄位都列進來
+      const fieldMap: Record<string, string> = {
+        name: 'name',
+        phone: 'phone',
+        phoneNumber: 'phone',
+        plate: 'plate',
+        carPlate: 'plate',
+        carModel: 'car_model',
+        car_model: 'car_model',
+        carColor: 'car_color',
+        car_color: 'car_color',
+        licenseNumber: 'license_number',
+        license_number: 'license_number',
+        teamId: 'team_id',
+        team_id: 'team_id',
+        driverType: 'driver_type',
+        driver_type: 'driver_type',
+        accountStatus: 'account_status',
+        account_status: 'account_status',
+        acceptedOrderTypes: 'accepted_order_types',
+        accepted_order_types: 'accepted_order_types',
+        acceptedRebateLevels: 'accepted_rebate_levels',
+        accepted_rebate_levels: 'accepted_rebate_levels',
+        note: 'note',
+      };
+
       const updateFields: string[] = [];
       const values: any[] = [];
       let paramIndex = 1;
 
-      const allowedFields = ['name', 'phone', 'license_number', 'plate', 'car_model', 'car_color'];
+      // 依需要先驗證 + normalize
+      const normalized: Record<string, any> = {};
 
-      for (const field of allowedFields) {
-        if (updates[field] !== undefined) {
-          const dbField = field === 'phone' ? 'phone' :
-                          field === 'plate' ? 'plate' :
-                          field;
-          updateFields.push(`${dbField} = $${paramIndex}`);
-          values.push(updates[field]);
-          paramIndex++;
-        }
+      // 手機
+      if (updates.phoneNumber !== undefined || updates.phone !== undefined) {
+        const raw = updates.phoneNumber ?? updates.phone;
+        const check = validateTaiwanPhone(raw);
+        if (!check.ok) return res.status(400).json({ success: false, error: check.reason });
+        // 排除自己之後檢查重複
+        const dup = await queryOne(
+          'SELECT driver_id FROM drivers WHERE phone = $1 AND driver_id <> $2',
+          [check.normalized, driverId]
+        );
+        if (dup) return res.status(409).json({ success: false, error: '此手機號碼已註冊為其他司機' });
+        normalized.phone = check.normalized;
+      }
+
+      // 車牌
+      if (updates.carPlate !== undefined || updates.plate !== undefined) {
+        const raw = updates.carPlate ?? updates.plate;
+        const check = validatePlate(raw);
+        if (!check.ok) return res.status(400).json({ success: false, error: check.reason });
+        const dup = await queryOne(
+          'SELECT driver_id FROM drivers WHERE plate = $1 AND driver_id <> $2',
+          [check.normalized, driverId]
+        );
+        if (dup) return res.status(409).json({ success: false, error: '此車牌已註冊為其他司機' });
+        normalized.plate = check.normalized;
+      }
+
+      // enum 白名單
+      if (updates.driverType !== undefined && !(DRIVER_TYPES as readonly string[]).includes(updates.driverType)) {
+        return res.status(400).json({ success: false, error: `driverType 不在允許範圍：${DRIVER_TYPES.join(', ')}` });
+      }
+      if (updates.accountStatus !== undefined && !(ACCOUNT_STATUSES as readonly string[]).includes(updates.accountStatus)) {
+        return res.status(400).json({ success: false, error: `accountStatus 不在允許範圍：${ACCOUNT_STATUSES.join(', ')}` });
+      }
+      if (updates.acceptedOrderTypes !== undefined) {
+        const c = validateEnumArray(updates.acceptedOrderTypes, ORDER_TYPES, 'acceptedOrderTypes');
+        if (!c.ok) return res.status(400).json({ success: false, error: c.reason });
+      }
+      if (updates.acceptedRebateLevels !== undefined) {
+        const c = validateEnumArray(updates.acceptedRebateLevels, REBATE_LEVELS, 'acceptedRebateLevels');
+        if (!c.ok) return res.status(400).json({ success: false, error: c.reason });
+      }
+
+      // 若有帶 teamId，驗證 team 存在
+      if (updates.teamId != null) {
+        const team = await queryOne('SELECT team_id FROM teams WHERE team_id = $1 AND is_active = true', [updates.teamId]);
+        if (!team) return res.status(400).json({ success: false, error: '指定的車隊不存在或已停用' });
+      }
+
+      // 構建 UPDATE SET
+      const seenColumns = new Set<string>();
+      for (const key of Object.keys(updates)) {
+        const dbField = fieldMap[key];
+        if (!dbField || seenColumns.has(dbField)) continue;
+
+        let value = updates[key];
+        if (dbField === 'phone' && normalized.phone !== undefined) value = normalized.phone;
+        if (dbField === 'plate' && normalized.plate !== undefined) value = normalized.plate;
+
+        updateFields.push(`${dbField} = $${paramIndex}`);
+        values.push(value);
+        seenColumns.add(dbField);
+        paramIndex++;
       }
 
       if (updateFields.length === 0) {
@@ -2229,6 +2417,25 @@ router.post('/notifications', authenticateAdmin, async (req: AuthenticatedReques
       success: false,
       error: 'Internal server error'
     });
+  }
+});
+
+/**
+ * 取得啟用中的車隊清單（Drivers 新增表單的 Select option 用）
+ * GET /api/admin/teams
+ */
+router.get('/teams', authenticateAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { rows } = await query(
+      `SELECT team_id as "teamId", name, note, is_active as "isActive"
+       FROM teams
+       WHERE is_active = true
+       ORDER BY name`
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error('[Admin API] Get teams error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 

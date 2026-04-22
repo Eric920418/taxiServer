@@ -8,16 +8,33 @@ export interface Admin {
   lastLogin: string;
 }
 
+// 車隊（Fleet / Team）
+export interface Team {
+  teamId: number;
+  name: string;
+  note?: string | null;
+  isActive: boolean;
+}
+
 // 司機相關類型
 export interface Driver {
   driver_id: string;
   phoneNumber: string;
-  licenseNumber: string;
+  licenseNumber?: string;
   name: string;
   carPlate: string;
   carModel: string;
   carColor: string;
-  status: 'available' | 'busy' | 'offline' | 'blocked';
+  // runtime 狀態（司機 App 自己控制）
+  status: 'AVAILABLE' | 'REST' | 'ON_TRIP' | 'OFFLINE' | 'available' | 'busy' | 'offline' | 'blocked';
+  // 管理員設定的帳號狀態
+  accountStatus?: 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'ARCHIVED';
+  driverType?: 'HIGH_VOLUME' | 'REGULAR' | 'PART_TIME' | 'CONTRACT';
+  teamId?: number | null;
+  teamName?: string | null;
+  acceptedOrderTypes?: string[];
+  acceptedRebateLevels?: number[];
+  note?: string | null;
   isBlocked: boolean;
   blockReason?: string;
   rating: number;

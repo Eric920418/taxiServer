@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { Admin, Driver, Passenger, Order, Statistics, ApiResponse, PaginatedResponse, FilterOptions } from '../types';
+import { Admin, Driver, Passenger, Order, Statistics, ApiResponse, PaginatedResponse, FilterOptions, Team } from '../types';
 
 // 從環境變數讀取 API 基礎 URL
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
@@ -104,6 +104,14 @@ export const driverAPI = {
 
   getDriverStatistics: async (driverId: string): Promise<ApiResponse<any>> => {
     const response = await api.get(`/admin/drivers/${driverId}/statistics`);
+    return response.data;
+  },
+};
+
+// 車隊（Fleet / Team）API
+export const teamsAPI = {
+  getTeams: async (): Promise<ApiResponse<Team[]>> => {
+    const response = await api.get('/admin/teams');
     return response.data;
   },
 };
