@@ -58,26 +58,21 @@ export function validatePlate(input: string | null | undefined): ValidateResult 
     // 去空白與連字號，轉大寫
     const cleaned = input.replace(/[\s-]/g, '').toUpperCase();
 
-    // 總長 4-8 碼、只允許 A-Z 0-9
+    // 總長 4-8 碼、只允許 A-Z 0-9（台灣車牌包含老式純數字、新式英數混合）
     if (!/^[A-Z0-9]{4,8}$/.test(cleaned)) {
         return { ok: false, reason: '車牌號碼格式錯誤（只允許英數字，總長 4-8 碼）' };
     }
 
-    // 必須含英文字母（否則像純數字身份證會誤判）
-    if (!/[A-Z]/.test(cleaned)) {
-        return { ok: false, reason: '車牌號碼至少要含一個英文字母' };
-    }
-
     // Normalize：依常見台灣車牌拆分規則
-    // - 8 碼：4-4（例如 ABCD-1234、1234-ABCD）
-    // - 7 碼：3-4 或 4-3（例如 ABC-1234 / 1234-ABC / AB-1234 / 1234-ABC）
-    // - 6 碼：3-3 或 2-4 或 4-2
-    // - 5 碼：2-3 或 3-2
-    // - 4 碼：2-2
+    // 注意 — 不同年份 / 車種有不同規則，以下覆蓋絕大多數情境：
+    // - 4 碼：維持原樣（老式小車牌 "2328"）
+    // - 5 碼：2-3 或 3-2（罕見）
+    // - 6 碼：3-3（"ABC-123"）或老式 4-2（"1234-56"）
+    // - 7 碼：字母開頭 3-4（"ABC-1234"）；數字開頭 4-3（"1234-ABC"）
+    // - 8 碼：4-4（"ABCD-1234" 或 "1234-ABCD"）
     let normalized = cleaned;
     const len = cleaned.length;
     if (len === 7) {
-        // 數字開頭 → 前 4 後 3（例 1234-ABC）；字母開頭 → 前 3 後 4（例 ABC-1234）
         normalized = /^\d/.test(cleaned)
             ? `${cleaned.slice(0, 4)}-${cleaned.slice(4)}`
             : `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
@@ -87,9 +82,8 @@ export function validatePlate(input: string | null | undefined): ValidateResult 
         normalized = `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
     } else if (len === 5) {
         normalized = `${cleaned.slice(0, 2)}-${cleaned.slice(2)}`;
-    } else if (len === 4) {
-        normalized = `${cleaned.slice(0, 2)}-${cleaned.slice(2)}`;
     }
+    // len === 4 不加連字號（純數字或純字母老式車牌保留原貌）
 
     return { ok: true, normalized };
 }

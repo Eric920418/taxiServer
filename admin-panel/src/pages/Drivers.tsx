@@ -616,8 +616,9 @@ const Drivers: React.FC = () => {
                 name="carPlate"
                 rules={[
                   { required: true, message: '請輸入車牌號碼' },
-                  { pattern: /^[A-Za-z0-9-\s]{4,10}$/, message: '車牌格式錯誤' },
+                  { pattern: /^[A-Za-z0-9\-\s]{4,10}$/, message: '車牌格式錯誤（4-10 碼英數字）' },
                 ]}
+                tooltip="支援台灣各式車牌：ABC-1234、1234-ABC、4 碼純數字 2328、8 碼 ABCD-1234 等"
               >
                 <Input prefix={<CarOutlined />} placeholder="例：ABC-1234" />
               </Form.Item>
