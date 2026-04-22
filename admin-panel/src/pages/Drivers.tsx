@@ -514,56 +514,56 @@ const Drivers: React.FC = () => {
         />
       </Card>
 
-      {/* 新增/編輯司機 Modal */}
+      {/* 新增/編輯司機 Modal — 寬度 960，三欄網格避免下滑 */}
       <Modal
         title={editingDriver ? '編輯司機' : '新增司機'}
         open={isModalVisible}
         onOk={handleModalOk}
         onCancel={() => setIsModalVisible(false)}
-        width={720}
+        width={960}
         destroyOnClose
       >
         <Form form={form} layout="vertical">
-          {/* ============ 一、基本資料 ============ */}
-          <Title level={5} style={{ marginTop: 0 }}>一、基本資料</Title>
+          {/* ============ 一、基本資料（3 欄 × 2 列）============ */}
+          <Title level={5} style={{ marginTop: 0, marginBottom: 12 }}>一、基本資料</Title>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="司機姓名"
                 name="name"
-                rules={[{ required: true, message: '請輸入司機姓名' }]}
+                rules={[{ required: true, message: '請輸入姓名' }]}
               >
                 <Input prefix={<UserOutlined />} placeholder="司機姓名" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="手機號碼"
                 name="phoneNumber"
                 rules={[
                   { required: true, message: '請輸入手機號碼' },
-                  { pattern: /^09\d{8}$|^\+8869\d{8}$/, message: '格式：09xxxxxxxx 或 +8869xxxxxxxx' },
+                  { pattern: /^09\d{8}$|^\+8869\d{8}$/, message: '09xxxxxxxx 或 +8869xxxxxxxx' },
                 ]}
               >
                 <Input prefix={<PhoneOutlined />} placeholder="09xxxxxxxx" />
               </Form.Item>
             </Col>
-          </Row>
-
-          <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="車牌號碼"
                 name="carPlate"
                 rules={[
                   { required: true, message: '請輸入車牌號碼' },
-                  { pattern: /^[A-Za-z0-9-\s]{4,10}$/, message: '車牌格式錯誤（英數字 + 連字號）' },
+                  { pattern: /^[A-Za-z0-9-\s]{4,10}$/, message: '車牌格式錯誤' },
                 ]}
               >
                 <Input prefix={<CarOutlined />} placeholder="例：ABC-1234" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={8}>
               <Form.Item
                 label="車型（可自由輸入）"
                 name="carModel"
@@ -572,10 +572,7 @@ const Drivers: React.FC = () => {
                 <Input placeholder="例：Toyota Altis" />
               </Form.Item>
             </Col>
-          </Row>
-
-          <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="車色"
                 name="carColor"
@@ -588,7 +585,7 @@ const Drivers: React.FC = () => {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="駕照號碼（選填）"
                 name="licenseNumber"
@@ -598,12 +595,12 @@ const Drivers: React.FC = () => {
             </Col>
           </Row>
 
-          <Divider />
+          <Divider style={{ margin: '8px 0 16px' }} />
 
-          {/* ============ 二、派遣與分類 ============ */}
-          <Title level={5}>二、派遣與分類</Title>
+          {/* ============ 二、派遣與分類（3 欄 × 1 列）============ */}
+          <Title level={5} style={{ marginBottom: 12 }}>二、派遣與分類</Title>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="所屬車隊"
                 name="teamId"
@@ -616,7 +613,7 @@ const Drivers: React.FC = () => {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 label="司機類型"
                 name="driverType"
@@ -629,15 +626,12 @@ const Drivers: React.FC = () => {
                 </Select>
               </Form.Item>
             </Col>
-          </Row>
-
-          <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
-                label="司機狀態（帳號啟用狀態）"
+                label="司機狀態"
                 name="accountStatus"
                 rules={[{ required: true, message: '請選擇狀態' }]}
-                tooltip="這是管理員設定的帳號狀態；司機上下線狀態由司機端 App 控制"
+                tooltip="管理員設定的帳號狀態；司機上下線狀態由司機端 App 控制"
               >
                 <Select placeholder="請選擇狀態">
                   {ACCOUNT_STATUS_OPTIONS.map((o) => (
@@ -648,35 +642,42 @@ const Drivers: React.FC = () => {
             </Col>
           </Row>
 
-          <Form.Item
-            label="可接案件類型（多選）"
-            name="acceptedOrderTypes"
-            tooltip="勾選此司機能夠接的訂單類別，派單系統會據此過濾"
-          >
-            <Select mode="multiple" placeholder="請選擇可接案件類型" allowClear>
-              {ORDER_TYPE_OPTIONS.map((o) => (
-                <Option key={o.value} value={o.value}>{o.label}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="可接受回饋金折減（多選）"
-            name="acceptedRebateLevels"
-            tooltip="司機能接受的價位級距，用於依案件條件自動篩選符合價格範圍的司機"
-          >
-            <Select mode="multiple" placeholder="請選擇可接受的折減級距" allowClear>
-              {REBATE_LEVEL_OPTIONS.map((o) => (
-                <Option key={o.value} value={o.value}>{o.label}</Option>
-              ))}
-            </Select>
-          </Form.Item>
+          {/* 可接案件 & 可接回饋金：多選並排 2 欄 */}
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                label="可接案件類型（多選）"
+                name="acceptedOrderTypes"
+                tooltip="勾選此司機能夠接的訂單類別，派單系統會據此過濾"
+              >
+                <Select mode="multiple" placeholder="請選擇可接案件類型" allowClear maxTagCount="responsive">
+                  {ORDER_TYPE_OPTIONS.map((o) => (
+                    <Option key={o.value} value={o.value}>{o.label}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                label="可接受回饋金折減（多選）"
+                name="acceptedRebateLevels"
+                tooltip="司機能接受的價位級距，用於依案件條件自動篩選符合價格範圍的司機"
+              >
+                <Select mode="multiple" placeholder="請選擇可接受的折減級距" allowClear maxTagCount="responsive">
+                  {REBATE_LEVEL_OPTIONS.map((o) => (
+                    <Option key={o.value} value={o.value}>{o.label}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item
             label="備註"
             name="note"
+            style={{ marginBottom: 0 }}
           >
-            <TextArea rows={3} placeholder="司機備註（可多行）" />
+            <TextArea rows={2} placeholder="司機備註（可多行）" />
           </Form.Item>
         </Form>
       </Modal>
