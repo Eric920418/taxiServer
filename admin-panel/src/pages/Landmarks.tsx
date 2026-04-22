@@ -146,23 +146,39 @@ const Landmarks: React.FC = () => {
         taigi_aliases: values.taigi_aliases || [],
       };
 
+      // axios 對 4xx/5xx 會直接 throw 進 catch，所以能走到這裡代表 2xx 成功。
+      // 先前用 `if (res.data.success)` 判定，某些情況 success 為 falsy 會
+      // 導致資料已存 DB 但 UI 無反應（看起來像「沒儲存」）。改為直接信 HTTP 狀態。
       if (editing) {
         const res = await landmarkAPI.update(editing.id, payload);
-        if (res.data.success) {
-          message.success('地標已更新，記憶體索引已重建');
-          setModalOpen(false);
-          fetchList();
+        if (res.data?.success === false) {
+          throw new Error(res.data.error || '更新失敗');
         }
+        message.success('地標已更新，記憶體索引已重建');
       } else {
         const res = await landmarkAPI.create(payload);
-        if (res.data.success) {
-          message.success('地標已新增');
-          setModalOpen(false);
-          fetchList();
+        if (res.data?.success === false) {
+          throw new Error(res.data.error || '新增失敗');
         }
+        message.success('地標已新增');
       }
+      setModalOpen(false);
+      fetchList();
     } catch (err: any) {
-      if (err.errorFields) return; // antd 表單驗證錯誤，已在欄位顯示
+      // antd 表單驗證錯誤：hidden 欄位（lat/lng）錯誤用戶看不到紅字，會顯得「沒反應」
+      // 改為明確把第一個錯誤 toast 出來，讓用戶知道該做什麼
+      if (err.errorFields && err.errorFields.length > 0) {
+        const first = err.errorFields[0];
+        const fieldName = Array.isArray(first.name) ? first.name[0] : '';
+        const errMsg = first.errors?.[0] || '請確認所有必填欄位';
+        // lat / lng 是 hidden 的，改用更白話提示
+        const humanMsg =
+          fieldName === 'lat' || fieldName === 'lng'
+            ? '請先在下方地圖點擊或搜尋地點以自動填入座標'
+            : `${errMsg}（欄位：${fieldName || '未知'}）`;
+        message.error(humanMsg);
+        return;
+      }
       const detail = err.response?.data?.error || err.message;
       const stack = err.response?.data?.stack || '';
       message.error({
