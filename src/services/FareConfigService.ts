@@ -232,9 +232,28 @@ class FareConfigService {
     };
   }
 
+  /**
+   * 取得指定時間在台北（Asia/Taipei, UTC+8）的「日期 + 小時」
+   *
+   * 為什麼不用 at.getHours() / at.getDate()：production server 時區是 UTC，
+   * Date 物件的 local time 方法會回 UTC 值 → 「台北 23:00」變成 UTC 15:00 → 不算夜間。
+   * 為什麼不依賴系統 TZ 環境變數：避免「換主機 / 改 systemd 設定」就靜默改變計費。
+   * 為什麼不用 Intl.DateTimeFormat：台北無夏令時，固定 +8 偏移，手算最簡單可靠。
+   */
+  private toTaipei(at: Date): { year: number; month: number; day: number; hour: number } {
+    const taipeiMs = at.getTime() + 8 * 60 * 60 * 1000;
+    const t = new Date(taipeiMs);
+    return {
+      year: t.getUTCFullYear(),
+      month: t.getUTCMonth() + 1,
+      day: t.getUTCDate(),
+      hour: t.getUTCHours(),
+    };
+  }
+
   private isNightTime(at: Date): boolean {
     const { startHour, endHour } = this.config.night;
-    const hour = at.getHours();
+    const hour = this.toTaipei(at).hour;
     if (startHour > endHour) {
       return hour >= startHour || hour < endHour;
     }
@@ -244,7 +263,8 @@ class FareConfigService {
   private isSpringFestival(at: Date): boolean {
     const sf = this.config.springFestival;
     if (!sf.enabled) return false;
-    const today = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`;
+    const tp = this.toTaipei(at);
+    const today = `${tp.year}-${String(tp.month).padStart(2, '0')}-${String(tp.day).padStart(2, '0')}`;
     return today >= sf.startDate && today <= sf.endDate;
   }
 }
