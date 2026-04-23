@@ -90,6 +90,41 @@ export const locationTrackingQueue = new Bull('location-tracking', {
 });
 
 // ============================================
+// Layer 2 防護：Bull queue Redis error 消音
+// ============================================
+// 問題：Bull constructor 是 lazy connect，但 connect 失敗（例如 NOAUTH）會 emit
+// 'error' event。沒人接的 promise reject 會變成 unhandledRejection，被 Layer 1
+// 防護網接成噪音 log。每個 queue 各自加 .on('error') 把錯誤直接 log，避免噪音。
+//
+// 'failed' event 是 job 重試全部失敗後觸發 — 也接起來方便除錯。
+//
+// 健康狀態追蹤：caller 端目前不檢查（Bull attempts 機制會 retry）。如果未來要做
+// 「Redis 不健康時跳過 add job」可參考下方 queueHealth flag 擴充。
+const allQueues = [
+  { name: 'order', queue: orderQueue },
+  { name: 'notification', queue: notificationQueue },
+  { name: 'analytics', queue: analyticsQueue },
+  { name: 'batchUpdate', queue: batchUpdateQueue },
+  { name: 'locationTracking', queue: locationTrackingQueue }
+];
+
+export const queueHealth: Record<string, boolean> = {};
+for (const { name, queue } of allQueues) {
+  queueHealth[name] = true;
+  queue.on('error', (err) => {
+    queueHealth[name] = false;
+    logger.warn(`[Queue:${name}] Redis 連線錯誤（功能 degraded）: ${err.message}`);
+  });
+  queue.on('ready', () => {
+    if (!queueHealth[name]) logger.info(`[Queue:${name}] Redis 連線恢復`);
+    queueHealth[name] = true;
+  });
+  queue.on('failed', (job, err) => {
+    logger.error(`[Queue:${name}] Job ${job.id} 失敗 (after ${job.attemptsMade} attempts): ${err.message}`);
+  });
+}
+
+// ============================================
 // 工作處理器
 // ============================================
 

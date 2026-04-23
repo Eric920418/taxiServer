@@ -148,61 +148,86 @@ const IP_WHITELIST_KEY = 'security:whitelist:ip';
 
 /**
  * IP 黑名單中間件
+ *
+ * Layer 2 防護：Redis 不可用時 fail-open（讓 request 過）
+ * 安全 trade-off：寧可短暫不檢查 IP 黑名單也不要整個 site 503。
+ * 黑名單通常只擋特定攻擊 IP，短暫漏掉影響有限；503 影響所有使用者。
  */
 export const ipBlacklist = async (req: Request, res: Response, next: NextFunction) => {
   const ip = req.ip || '';
 
-  // 檢查白名單
-  const isWhitelisted = await redis.sismember(IP_WHITELIST_KEY, ip);
-  if (isWhitelisted) {
-    return next();
+  try {
+    // 檢查白名單
+    const isWhitelisted = await redis.sismember(IP_WHITELIST_KEY, ip);
+    if (isWhitelisted) {
+      return next();
+    }
+
+    // 檢查黑名單
+    const isBlacklisted = await redis.sismember(IP_BLACKLIST_KEY, ip);
+    if (isBlacklisted) {
+      auditLogger.logSecurityEvent('BLOCKED_IP', {
+        ip,
+        path: req.path,
+        method: req.method
+      });
+
+      return res.status(403).json({
+        error: 'ACCESS_DENIED',
+        message: '訪問被拒絕'
+      });
+    }
+
+    next();
+  } catch (err: any) {
+    // Redis 失敗 → fail-open，log 但放行
+    logger.warn('[Security] IP 黑名單檢查 Redis 失敗，fail-open 放行:', err?.message);
+    next();
   }
-
-  // 檢查黑名單
-  const isBlacklisted = await redis.sismember(IP_BLACKLIST_KEY, ip);
-  if (isBlacklisted) {
-    auditLogger.logSecurityEvent('BLOCKED_IP', {
-      ip,
-      path: req.path,
-      method: req.method
-    });
-
-    return res.status(403).json({
-      error: 'ACCESS_DENIED',
-      message: '訪問被拒絕'
-    });
-  }
-
-  next();
 };
 
 /**
  * 添加 IP 到黑名單
+ * Layer 2 防護：Redis 失敗時 throw 給 caller 處理（admin 操作應該知道沒成功）
  */
 export async function blockIP(ip: string, reason: string, duration?: number) {
-  await redis.sadd(IP_BLACKLIST_KEY, ip);
+  try {
+    await redis.sadd(IP_BLACKLIST_KEY, ip);
 
-  if (duration) {
-    // 設定自動過期
-    setTimeout(async () => {
-      await redis.srem(IP_BLACKLIST_KEY, ip);
-      logger.info('IP unblocked automatically', { ip });
-    }, duration * 1000);
+    if (duration) {
+      // 設定自動過期
+      setTimeout(async () => {
+        try {
+          await redis.srem(IP_BLACKLIST_KEY, ip);
+          logger.info('IP unblocked automatically', { ip });
+        } catch (err: any) {
+          logger.warn('[Security] 自動 unblock IP 失敗:', err?.message);
+        }
+      }, duration * 1000);
+    }
+
+    auditLogger.logSecurityEvent('IP_BLOCKED', {
+      ip,
+      reason,
+      duration: duration ? `${duration}s` : 'permanent'
+    });
+  } catch (err: any) {
+    logger.error('[Security] blockIP 失敗（Redis 不可用）:', err?.message);
+    throw err;  // admin 操作應該收到失敗
   }
-
-  auditLogger.logSecurityEvent('IP_BLOCKED', {
-    ip,
-    reason,
-    duration: duration ? `${duration}s` : 'permanent'
-  });
 }
 
 /**
  * 從黑名單移除 IP
  */
 export async function unblockIP(ip: string) {
-  await redis.srem(IP_BLACKLIST_KEY, ip);
-  auditLogger.logSecurityEvent('IP_UNBLOCKED', { ip });
+  try {
+    await redis.srem(IP_BLACKLIST_KEY, ip);
+    auditLogger.logSecurityEvent('IP_UNBLOCKED', { ip });
+  } catch (err: any) {
+    logger.error('[Security] unblockIP 失敗（Redis 不可用）:', err?.message);
+    throw err;
+  }
 }
 
 // ============================================

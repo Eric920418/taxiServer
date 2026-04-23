@@ -34,8 +34,19 @@ export class ScheduledOrderService {
       redis: { host: redisHost, port: redisPort },
     });
 
+    // Layer 2 防護：Bull connect/job error 消音，避免 unhandledRejection 噪音
+    this.queue.on('error', (err) => {
+      console.warn(`[ScheduledOrderService] Redis 連線錯誤（預約排程功能 degraded）: ${err.message}`);
+    });
+    this.queue.on('failed', (job, err) => {
+      console.error(`[ScheduledOrderService] Job ${job.id} 失敗: ${err.message}`);
+    });
+
     this.setupProcessor();
-    this.restorePendingSchedules();
+    // restorePendingSchedules 失敗不擋啟動（DB 沒建好、Redis 沒接好都會失敗）
+    this.restorePendingSchedules().catch((err) => {
+      console.warn('[ScheduledOrderService] 恢復預約排程失敗（startup 不阻擋）:', err.message);
+    });
 
     console.log('[ScheduledOrderService] 預約排程服務已初始化');
   }
