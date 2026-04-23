@@ -377,7 +377,7 @@ const AdminManagement: React.FC = () => {
       {/* 新增/編輯管理員 Modal */}
       <Modal
         title={editingAdmin ? '編輯管理員' : '新增管理員'}
-        visible={isModalVisible}
+        open={isModalVisible}
         onOk={handleModalOk}
         onCancel={() => {
           setIsModalVisible(false);
@@ -499,7 +499,7 @@ const AdminManagement: React.FC = () => {
       <Drawer
         title="管理員詳細資料"
         width={600}
-        visible={isDrawerVisible}
+        open={isDrawerVisible}
         onClose={() => setIsDrawerVisible(false)}
       >
         {selectedAdmin && (

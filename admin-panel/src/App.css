@@ -295,14 +295,17 @@
   border-radius: 8px;
 }
 
-/* Loading 樣式 */
+/* Loading 樣式
+ *
+ * 移除自訂 .ant-spin-blur override：
+ * Ant Design 5 的 Spin children 原生會套 opacity: 0.5 + user-select: none，
+ * 但不會套 pointer-events: none。這裡曾經覆蓋加上 pointer-events: none，
+ * 導致任何 Spin state 卡住時整頁點不了（例如某個 thunk reducer 崩 →
+ * loading 永遠 true → .ant-spin-blur class 卡在 children → pointer-events
+ * 永久禁用）。恢復 antd 預設：即便 Spin 卡著，使用者仍可點擊操作逃脫。
+ */
 .ant-spin-container {
   transition: opacity 0.3s;
-}
-
-.ant-spin-blur {
-  opacity: 0.5;
-  pointer-events: none;
 }
 
 /* 表單樣式增強 */

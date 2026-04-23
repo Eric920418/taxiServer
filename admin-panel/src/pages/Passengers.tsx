@@ -298,7 +298,7 @@ const Passengers: React.FC = () => {
       <Drawer
         title="乘客詳細資料"
         width={600}
-        visible={isDrawerVisible}
+        open={isDrawerVisible}
         onClose={() => setIsDrawerVisible(false)}
       >
         {selectedPassenger && (
