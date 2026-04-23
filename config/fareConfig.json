@@ -1,0 +1,27 @@
+{
+  "day": {
+    "basePrice": 100,
+    "baseDistanceMeters": 1000,
+    "jumpDistanceMeters": 230,
+    "jumpPrice": 5,
+    "slowTrafficSeconds": 120,
+    "slowTrafficPrice": 5
+  },
+  "night": {
+    "basePrice": 100,
+    "baseDistanceMeters": 834,
+    "jumpDistanceMeters": 192,
+    "jumpPrice": 5,
+    "slowTrafficSeconds": 100,
+    "slowTrafficPrice": 5,
+    "startHour": 22,
+    "endHour": 6
+  },
+  "springFestival": {
+    "enabled": false,
+    "startDate": "2026-02-16",
+    "endDate": "2026-02-22",
+    "perTripSurcharge": 50
+  },
+  "loveCardSubsidyAmount": 73
+}

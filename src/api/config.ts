@@ -10,7 +10,7 @@ const router = express.Router();
 
 /**
  * GET /api/config/fare
- * 取得車資費率配置
+ * 取得車資費率配置（巢狀結構：day / night / springFestival / loveCardSubsidyAmount）
  */
 router.get('/fare', (req, res) => {
   try {
@@ -31,92 +31,32 @@ router.get('/fare', (req, res) => {
 /**
  * PUT /api/config/fare
  * 更新車資費率配置（Admin 後台使用）
+ * Body 為 Partial<FareConfig> — 巢狀結構，可只送要改的子組
+ * 詳細驗證委派 FareConfigService.updateConfig()
  */
 router.put('/fare', async (req, res) => {
   try {
     const updates: Partial<FareConfig> = {};
-    
-    // 驗證並提取更新的欄位
-    if (req.body.basePrice !== undefined) {
-      const val = parseInt(req.body.basePrice);
-      if (isNaN(val) || val < 0) {
-        return res.status(400).json({ success: false, error: 'basePrice 必須是正整數' });
-      }
-      updates.basePrice = val;
-    }
-    
-    if (req.body.baseDistanceMeters !== undefined) {
-      const val = parseInt(req.body.baseDistanceMeters);
-      if (isNaN(val) || val < 0) {
-        return res.status(400).json({ success: false, error: 'baseDistanceMeters 必須是正整數' });
-      }
-      updates.baseDistanceMeters = val;
-    }
-    
-    if (req.body.jumpDistanceMeters !== undefined) {
-      const val = parseInt(req.body.jumpDistanceMeters);
-      if (isNaN(val) || val <= 0) {
-        return res.status(400).json({ success: false, error: 'jumpDistanceMeters 必須是正整數' });
-      }
-      updates.jumpDistanceMeters = val;
-    }
-    
-    if (req.body.jumpPrice !== undefined) {
-      const val = parseInt(req.body.jumpPrice);
-      if (isNaN(val) || val < 0) {
-        return res.status(400).json({ success: false, error: 'jumpPrice 必須是正整數' });
-      }
-      updates.jumpPrice = val;
-    }
-    
-    if (req.body.nightSurchargeRate !== undefined) {
-      const val = parseFloat(req.body.nightSurchargeRate);
-      if (isNaN(val) || val < 0 || val > 1) {
-        return res.status(400).json({ success: false, error: 'nightSurchargeRate 必須介於 0-1' });
-      }
-      updates.nightSurchargeRate = val;
-    }
-    
-    if (req.body.nightStartHour !== undefined) {
-      const val = parseInt(req.body.nightStartHour);
-      if (isNaN(val) || val < 0 || val > 23) {
-        return res.status(400).json({ success: false, error: 'nightStartHour 必須介於 0-23' });
-      }
-      updates.nightStartHour = val;
-    }
-    
-    if (req.body.nightEndHour !== undefined) {
-      const val = parseInt(req.body.nightEndHour);
-      if (isNaN(val) || val < 0 || val > 23) {
-        return res.status(400).json({ success: false, error: 'nightEndHour 必須介於 0-23' });
-      }
-      updates.nightEndHour = val;
-    }
-
-    if (req.body.loveCardSubsidyAmount !== undefined) {
-      const val = parseInt(req.body.loveCardSubsidyAmount);
-      if (isNaN(val) || val < 0) {
-        return res.status(400).json({ success: false, error: 'loveCardSubsidyAmount 必須是非負整數' });
-      }
-      updates.loveCardSubsidyAmount = val;
-    }
+    if (req.body.day !== undefined) updates.day = req.body.day;
+    if (req.body.night !== undefined) updates.night = req.body.night;
+    if (req.body.springFestival !== undefined) updates.springFestival = req.body.springFestival;
+    if (req.body.loveCardSubsidyAmount !== undefined) updates.loveCardSubsidyAmount = req.body.loveCardSubsidyAmount;
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ success: false, error: '沒有提供要更新的欄位' });
     }
 
     const newConfig = await fareConfigService.updateConfig(updates);
-    
     res.json({
       success: true,
       message: '費率配置已更新',
       data: newConfig,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Config] 更新費率配置失敗:', error);
-    res.status(500).json({
+    res.status(400).json({
       success: false,
-      error: '更新費率配置失敗',
+      error: error?.message || '更新費率配置失敗',
     });
   }
 });
@@ -124,32 +64,55 @@ router.put('/fare', async (req, res) => {
 /**
  * POST /api/config/fare/calculate
  * 計算車資（供測試用）
+ *
+ * Body:
+ *   - distanceMeters: number (必填)
+ *   - at?: ISO datetime string，例如 "2026-04-22T23:00:00+08:00"
+ *          指定計算當下時間（用於驗證夜間 / 春節），未指定則用 server now
+ *   - slowTrafficSeconds?: number 低速累積秒數，預設 0
  */
 router.post('/fare/calculate', (req, res) => {
   try {
-    const { distanceMeters, isNightTime } = req.body;
-    
-    if (!distanceMeters || typeof distanceMeters !== 'number') {
+    const { distanceMeters, at, slowTrafficSeconds } = req.body;
+
+    if (typeof distanceMeters !== 'number' || distanceMeters < 0) {
       return res.status(400).json({
         success: false,
-        error: 'distanceMeters 必須是數字',
+        error: 'distanceMeters 必須是非負數字',
       });
     }
 
-    const result = fareConfigService.calculateFare(distanceMeters, isNightTime);
+    let atDate: Date = new Date();
+    if (at !== undefined) {
+      const parsed = new Date(at);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: 'at 必須是合法的 ISO datetime 字串',
+        });
+      }
+      atDate = parsed;
+    }
+
+    const slowSec = typeof slowTrafficSeconds === 'number' && slowTrafficSeconds >= 0
+      ? slowTrafficSeconds
+      : 0;
+
+    const result = fareConfigService.calculateFare(distanceMeters, atDate, slowSec);
     res.json({
       success: true,
       data: {
         ...result,
         distanceKm: distanceMeters / 1000,
-        isNightTime: isNightTime ?? false,
+        at: atDate.toISOString(),
+        slowTrafficSeconds: slowSec,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Config] 計算車資失敗:', error);
     res.status(500).json({
       success: false,
-      error: '計算車資失敗',
+      error: error?.message || '計算車資失敗',
     });
   }
 });

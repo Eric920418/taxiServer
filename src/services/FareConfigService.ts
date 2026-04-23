@@ -1,167 +1,252 @@
 /**
  * 車資費率配置服務
- * 統一管理計程車跳錶費率，供 Server 和 Android 端使用
- * 支援運行時動態更新 + .env 持久化
+ * 對齊花蓮縣政府計程車費率公告：
+ *   - 日費率：起跳 100 元/1000m、每跳 5 元/230m、低速 120 秒/5 元
+ *   - 夜費率（22:00–06:00）：起跳距離 834m、每跳距離 192m、低速 100 秒/5 元
+ *     （起跳價與每跳金額沿用日費率 100/5 元）
+ *   - 春節加成：期間內全日套用夜費率 + 每趟加收 50 元
+ *
+ * 持久化：config/fareConfig.json（巢狀結構，admin UI 可改）
+ * 時區：以伺服器本地時間判斷夜間 / 春節（系統部署於 Asia/Taipei）
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-export interface FareConfig {
+export interface DayFareConfig {
   basePrice: number;           // 起跳價（元）
   baseDistanceMeters: number;  // 起跳距離（公尺）
   jumpDistanceMeters: number;  // 每跳距離（公尺）
   jumpPrice: number;           // 每跳價格（元）
-  nightSurchargeRate: number;  // 夜間加成比例
-  nightStartHour: number;      // 夜間開始時間
-  nightEndHour: number;        // 夜間結束時間
+  slowTrafficSeconds: number;  // 低速計時門檻（秒）— Phase A 只存欄位，Phase C 才接 GPS
+  slowTrafficPrice: number;    // 每段低速金額（元）
+}
+
+export interface NightFareConfig extends DayFareConfig {
+  startHour: number;           // 夜間開始時間（0-23）
+  endHour: number;             // 夜間結束時間（0-23），跨日支援（startHour > endHour）
+}
+
+export interface SpringFestivalConfig {
+  enabled: boolean;            // 是否啟用春節加成
+  startDate: string;           // ISO date "YYYY-MM-DD"
+  endDate: string;             // ISO date "YYYY-MM-DD"（含當日）
+  perTripSurcharge: number;    // 每趟加收（元）
+}
+
+export interface FareConfig {
+  day: DayFareConfig;
+  night: NightFareConfig;
+  springFestival: SpringFestivalConfig;
   loveCardSubsidyAmount: number;  // 愛心卡每趟補貼金額（元）
 }
 
+export interface FareCalculationResult {
+  baseFare: number;
+  distanceFare: number;
+  slowTrafficFare: number;
+  springFestivalSurcharge: number;
+  totalFare: number;
+  meterJumps: number;
+  isNight: boolean;
+  isSpringFestival: boolean;
+  appliedSchedule: 'day' | 'night';
+}
+
+const DEFAULT_CONFIG: FareConfig = {
+  day: {
+    basePrice: 100,
+    baseDistanceMeters: 1000,
+    jumpDistanceMeters: 230,
+    jumpPrice: 5,
+    slowTrafficSeconds: 120,
+    slowTrafficPrice: 5,
+  },
+  night: {
+    basePrice: 100,
+    baseDistanceMeters: 834,
+    jumpDistanceMeters: 192,
+    jumpPrice: 5,
+    slowTrafficSeconds: 100,
+    slowTrafficPrice: 5,
+    startHour: 22,
+    endHour: 6,
+  },
+  springFestival: {
+    enabled: false,
+    startDate: '2026-02-16',
+    endDate: '2026-02-22',
+    perTripSurcharge: 50,
+  },
+  loveCardSubsidyAmount: 73,
+};
+
 class FareConfigService {
   private config: FareConfig;
-  private envPath: string;
+  private jsonPath: string;
 
   constructor() {
-    this.envPath = path.join(__dirname, '../../.env');
-    this.config = this.loadFromEnv();
-    console.log('[FareConfig] 費率配置已載入:', this.config);
+    this.jsonPath = path.join(__dirname, '../../config/fareConfig.json');
+    this.config = this.loadFromJson();
+    console.log('[FareConfig] 費率配置已載入:', JSON.stringify(this.config, null, 2));
   }
 
-  private loadFromEnv(): FareConfig {
+  private loadFromJson(): FareConfig {
+    try {
+      if (fs.existsSync(this.jsonPath)) {
+        const raw = fs.readFileSync(this.jsonPath, 'utf-8');
+        const parsed = JSON.parse(raw) as Partial<FareConfig>;
+        return this.mergeWithDefaults(parsed);
+      }
+    } catch (error) {
+      console.error('[FareConfig] 讀取 fareConfig.json 失敗，使用預設值:', error);
+    }
+    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  }
+
+  private mergeWithDefaults(partial: Partial<FareConfig>): FareConfig {
     return {
-      basePrice: parseInt(process.env.FARE_BASE_PRICE || '100'),
-      baseDistanceMeters: parseInt(process.env.FARE_BASE_DISTANCE_METERS || '1250'),
-      jumpDistanceMeters: parseInt(process.env.FARE_JUMP_DISTANCE_METERS || '200'),
-      jumpPrice: parseInt(process.env.FARE_JUMP_PRICE || '5'),
-      nightSurchargeRate: parseFloat(process.env.FARE_NIGHT_SURCHARGE_RATE || '0.2'),
-      nightStartHour: parseInt(process.env.FARE_NIGHT_START_HOUR || '23'),
-      nightEndHour: parseInt(process.env.FARE_NIGHT_END_HOUR || '6'),
-      loveCardSubsidyAmount: parseInt(process.env.LOVE_CARD_SUBSIDY_AMOUNT || '73'),
+      day: { ...DEFAULT_CONFIG.day, ...(partial.day ?? {}) },
+      night: { ...DEFAULT_CONFIG.night, ...(partial.night ?? {}) },
+      springFestival: { ...DEFAULT_CONFIG.springFestival, ...(partial.springFestival ?? {}) },
+      loveCardSubsidyAmount: partial.loveCardSubsidyAmount ?? DEFAULT_CONFIG.loveCardSubsidyAmount,
     };
   }
 
   getConfig(): FareConfig {
-    return { ...this.config };
+    return JSON.parse(JSON.stringify(this.config));
   }
 
-  /**
-   * 更新費率配置（運行時 + 持久化到 .env）
-   */
   async updateConfig(newConfig: Partial<FareConfig>): Promise<FareConfig> {
-    // 更新記憶體中的配置
-    this.config = {
-      ...this.config,
-      ...newConfig,
-    };
-
-    // 持久化到 .env 文件
-    await this.saveToEnv();
-
-    console.log('[FareConfig] 費率配置已更新:', this.config);
+    this.validate(newConfig);
+    this.config = this.mergeWithDefaults({ ...this.config, ...newConfig });
+    await this.saveToJson();
+    console.log('[FareConfig] 費率配置已更新:', JSON.stringify(this.config, null, 2));
     return this.getConfig();
   }
 
-  /**
-   * 將配置寫入 .env 文件
-   */
-  private async saveToEnv(): Promise<void> {
-    try {
-      let envContent = fs.readFileSync(this.envPath, 'utf-8');
-
-      const updates: Record<string, string | number> = {
-        'FARE_BASE_PRICE': this.config.basePrice,
-        'FARE_BASE_DISTANCE_METERS': this.config.baseDistanceMeters,
-        'FARE_JUMP_DISTANCE_METERS': this.config.jumpDistanceMeters,
-        'FARE_JUMP_PRICE': this.config.jumpPrice,
-        'FARE_NIGHT_SURCHARGE_RATE': this.config.nightSurchargeRate,
-        'FARE_NIGHT_START_HOUR': this.config.nightStartHour,
-        'FARE_NIGHT_END_HOUR': this.config.nightEndHour,
-        'LOVE_CARD_SUBSIDY_AMOUNT': this.config.loveCardSubsidyAmount,
-      };
-
-      for (const [key, value] of Object.entries(updates)) {
-        const regex = new RegExp(`^=.*$`, 'm');
-        if (regex.test(envContent)) {
-          envContent = envContent.replace(regex, `=`);
-        } else {
-          envContent += `\n=`;
-        }
+  private validate(partial: Partial<FareConfig>): void {
+    const validateFareGroup = (label: string, group: Partial<DayFareConfig>) => {
+      if (group.basePrice !== undefined && (!Number.isInteger(group.basePrice) || group.basePrice < 0)) {
+        throw new Error(`${label}.basePrice 必須是非負整數`);
       }
+      if (group.baseDistanceMeters !== undefined && (!Number.isInteger(group.baseDistanceMeters) || group.baseDistanceMeters < 0)) {
+        throw new Error(`${label}.baseDistanceMeters 必須是非負整數`);
+      }
+      if (group.jumpDistanceMeters !== undefined && (!Number.isInteger(group.jumpDistanceMeters) || group.jumpDistanceMeters <= 0)) {
+        throw new Error(`${label}.jumpDistanceMeters 必須是正整數`);
+      }
+      if (group.jumpPrice !== undefined && (!Number.isInteger(group.jumpPrice) || group.jumpPrice < 0)) {
+        throw new Error(`${label}.jumpPrice 必須是非負整數`);
+      }
+      if (group.slowTrafficSeconds !== undefined && (!Number.isInteger(group.slowTrafficSeconds) || group.slowTrafficSeconds <= 0)) {
+        throw new Error(`${label}.slowTrafficSeconds 必須是正整數`);
+      }
+      if (group.slowTrafficPrice !== undefined && (!Number.isInteger(group.slowTrafficPrice) || group.slowTrafficPrice < 0)) {
+        throw new Error(`${label}.slowTrafficPrice 必須是非負整數`);
+      }
+    };
 
-      fs.writeFileSync(this.envPath, envContent);
-      console.log('[FareConfig] .env 文件已更新');
-    } catch (error) {
-      console.error('[FareConfig] 寫入 .env 失敗:', error);
-      throw error;
+    if (partial.day) validateFareGroup('day', partial.day);
+    if (partial.night) {
+      validateFareGroup('night', partial.night);
+      if (partial.night.startHour !== undefined && (partial.night.startHour < 0 || partial.night.startHour > 23)) {
+        throw new Error('night.startHour 必須介於 0-23');
+      }
+      if (partial.night.endHour !== undefined && (partial.night.endHour < 0 || partial.night.endHour > 23)) {
+        throw new Error('night.endHour 必須介於 0-23');
+      }
+    }
+    if (partial.springFestival) {
+      const sf = partial.springFestival;
+      if (sf.perTripSurcharge !== undefined && (!Number.isInteger(sf.perTripSurcharge) || sf.perTripSurcharge < 0)) {
+        throw new Error('springFestival.perTripSurcharge 必須是非負整數');
+      }
+      if (sf.startDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(sf.startDate)) {
+        throw new Error('springFestival.startDate 必須是 YYYY-MM-DD 格式');
+      }
+      if (sf.endDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(sf.endDate)) {
+        throw new Error('springFestival.endDate 必須是 YYYY-MM-DD 格式');
+      }
+    }
+    if (partial.loveCardSubsidyAmount !== undefined && (!Number.isInteger(partial.loveCardSubsidyAmount) || partial.loveCardSubsidyAmount < 0)) {
+      throw new Error('loveCardSubsidyAmount 必須是非負整數');
     }
   }
 
-  /**
-   * 四捨五入到最接近的 5 元
-   */
-  private roundToNearest5(value: number): number {
-    return Math.round(value / 5) * 5;
+  private async saveToJson(): Promise<void> {
+    const dir = path.dirname(this.jsonPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(this.jsonPath, JSON.stringify(this.config, null, 2), 'utf-8');
+    console.log('[FareConfig] config/fareConfig.json 已更新');
   }
 
   /**
    * 計算車資（跳錶制）
-   * - 車資尾數只會是 0 或 5
+   * 車資尾數只會是 0 或 5
+   *
+   * @param distanceMeters 行駛距離（公尺）
+   * @param at 計算當下時間（預設為 new Date()），可指定以測試夜間/春節情境
+   * @param slowTrafficSeconds 低速累積秒數（Phase A 預設 0，Phase C 接 GPS）
    */
-  calculateFare(distanceMeters: number, isNightTime?: boolean): {
-    baseFare: number;
-    distanceFare: number;
-    nightSurcharge: number;
-    totalFare: number;
-    meterJumps: number;
-  } {
-    const { basePrice, baseDistanceMeters, jumpDistanceMeters, jumpPrice, nightSurchargeRate, nightStartHour, nightEndHour } = this.config;
+  calculateFare(
+    distanceMeters: number,
+    at: Date = new Date(),
+    slowTrafficSeconds: number = 0,
+  ): FareCalculationResult {
+    const isSpringFestival = this.isSpringFestival(at);
+    const isNight = this.isNightTime(at);
 
-    // 計算超出起跳距離的部分
-    const extraDistanceMeters = Math.max(0, distanceMeters - baseDistanceMeters);
+    // 春節期間強制套用夜費率（公告：全日套夜間費率）
+    const useNightSchedule = isSpringFestival || isNight;
+    const schedule = useNightSchedule ? this.config.night : this.config.day;
 
-    // 計算跳錶次數（無條件進位）
-    const meterJumps = extraDistanceMeters > 0 
-      ? Math.ceil(extraDistanceMeters / jumpDistanceMeters)
+    const extraDistanceMeters = Math.max(0, distanceMeters - schedule.baseDistanceMeters);
+    const meterJumps = extraDistanceMeters > 0
+      ? Math.ceil(extraDistanceMeters / schedule.jumpDistanceMeters)
       : 0;
+    const distanceFare = meterJumps * schedule.jumpPrice;
 
-    // 里程費 = 跳錶次數 × 每跳價格（尾數只會是 0 或 5）
-    const distanceFare = meterJumps * jumpPrice;
-    const fare = basePrice + distanceFare;
-
-    // 判斷是否為夜間時段
-    const nightTime = isNightTime ?? this.isCurrentlyNightTime();
-
-    // 夜間加成（四捨五入到 5 元）
-    const nightSurcharge = nightTime 
-      ? this.roundToNearest5(fare * nightSurchargeRate)
+    // 低速計時：每滿 schedule.slowTrafficSeconds 秒加 schedule.slowTrafficPrice 元
+    const slowTrafficUnits = slowTrafficSeconds > 0
+      ? Math.floor(slowTrafficSeconds / schedule.slowTrafficSeconds)
       : 0;
+    const slowTrafficFare = slowTrafficUnits * schedule.slowTrafficPrice;
 
-    const totalFare = fare + nightSurcharge;
+    const springFestivalSurcharge = isSpringFestival ? this.config.springFestival.perTripSurcharge : 0;
+
+    const totalFare = schedule.basePrice + distanceFare + slowTrafficFare + springFestivalSurcharge;
 
     return {
-      baseFare: basePrice,
+      baseFare: schedule.basePrice,
       distanceFare,
-      nightSurcharge,
+      slowTrafficFare,
+      springFestivalSurcharge,
       totalFare,
       meterJumps,
+      isNight,
+      isSpringFestival,
+      appliedSchedule: useNightSchedule ? 'night' : 'day',
     };
   }
 
-  /**
-   * 判斷當前是否為夜間時段
-   */
-  private isCurrentlyNightTime(): boolean {
-    const { nightStartHour, nightEndHour } = this.config;
-    const currentHour = new Date().getHours();
-
-    // 跨日情況（例如 23:00 - 06:00）
-    if (nightStartHour > nightEndHour) {
-      return currentHour >= nightStartHour || currentHour < nightEndHour;
+  private isNightTime(at: Date): boolean {
+    const { startHour, endHour } = this.config.night;
+    const hour = at.getHours();
+    if (startHour > endHour) {
+      return hour >= startHour || hour < endHour;
     }
-    return currentHour >= nightStartHour && currentHour < nightEndHour;
+    return hour >= startHour && hour < endHour;
+  }
+
+  private isSpringFestival(at: Date): boolean {
+    const sf = this.config.springFestival;
+    if (!sf.enabled) return false;
+    const today = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`;
+    return today >= sf.startDate && today <= sf.endDate;
   }
 }
 
-// 單例模式
 export const fareConfigService = new FareConfigService();

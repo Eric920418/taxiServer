@@ -2,9 +2,77 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-04-21
+> 更新日期：2026-04-22
 
-## 📝 最新修改（2026-04-21）- 後台白屏 `Cannot GET /login` 根治
+## 📝 最新修改（2026-04-22）- 費率對齊花蓮縣府公告 + admin schema 重構
+
+### 解決的問題
+- Admin Settings 費率頁面架構是「單組費率 + `nightSurchargeRate=0.2` 百分比加成」，**與花蓮縣政府公告的「日夜雙組獨立跳距」結構不相容**。直接套公告數字會導致夜間加成被算兩次。
+- 缺：低速計時欄位、春節加成欄位、admin UI 顯示愛心卡補貼欄位。
+- bug：`FareConfigService.saveToEnv()` 的 regex template literal `${key}` 不見了，按儲存會把 `.env` 寫壞。
+
+### 重構
+- **Schema 從扁平改為巢狀**：`day` / `night` / `springFestival` / `loveCardSubsidyAmount`，**移除 `nightSurchargeRate`**（不留向下相容 shim）。
+- **持久化從 `.env` 改為 `config/fareConfig.json`**：JSON 天然吻合巢狀結構，避免 `FARE_DAY_*` 前綴 hack。
+- **`calculateFare(distanceMeters, at?, slowTrafficSeconds?)`**：時間判斷優先級為「春節 → 夜間 → 日間」（春節期間強制套夜費率，吻合公告「全日套夜間費率」）。
+- **Admin UI 重構為四區**：日費率 / 夜費率 / 春節加成 / 愛心卡補貼，每區有即時試算 Alert。
+- **春節日期採 admin 手動設定**（DatePicker），不引入農曆函式庫。
+
+### 預設值（對齊花蓮縣府公告）
+| 區段 | 起跳價 | 起跳距離 | 每跳價 | 每跳距離 | 低速計時 | 低速金額 |
+|------|------|------|------|------|------|------|
+| 日費率 | 100 元 | 1000 m | 5 元 | 230 m | 120 秒 | 5 元 |
+| 夜費率 (22:00–06:00) | 100 元 | 834 m | 5 元 | 192 m | 100 秒 | 5 元 |
+| 春節加成 | — | — | — | — | — | 每趟 +50 元，全日套夜費率 |
+| 愛心卡補貼 | — | — | — | — | — | 每趟 73 元 |
+
+> **低速計時功能**：欄位已存於 schema，但 GPS 計時整合（追蹤車輛靜止時間）為下階段獨立 feature。目前計算傳入 `slowTrafficSeconds = 0`。
+
+### 修改檔案
+- `src/services/FareConfigService.ts` — 全部重寫（schema、calculateFare、persist）
+- `src/api/config.ts` — 新巢狀 PUT、calculate 加 `at` 參數
+- `admin-panel/src/pages/Settings.tsx` — UI 重構為四區
+- `config/fareConfig.json` — 新建（取代 `.env` 持久化）
+- Android 同步：`data/remote/dto/FareConfigDto.kt`、`utils/FareCalculator.kt`、`ui/screens/passenger/PassengerHomeScreen.kt`、`viewmodel/HomeViewModel.kt`
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install
+cd admin-panel && pnpm install && pnpm build
+cd ..
+pm2 restart taxi-server
+# 首次啟動會自動建立 config/fareConfig.json（用內建預設值）
+# 確認 .env 不再有 FARE_NIGHT_SURCHARGE_RATE 等舊變數（無則無事）
+```
+
+### 驗證步驟
+```bash
+# 日 1km — 預期 100
+curl -X POST http://localhost:3000/api/config/fare/calculate \
+  -H "Content-Type: application/json" \
+  -d '{"distanceMeters":1000,"at":"2026-04-22T14:00:00+08:00"}'
+
+# 日 2km — 預期 100 + ceil(1000/230)*5 = 100 + 25 = 125
+curl -X POST http://localhost:3000/api/config/fare/calculate \
+  -H "Content-Type: application/json" \
+  -d '{"distanceMeters":2000,"at":"2026-04-22T14:00:00+08:00"}'
+
+# 夜 1km (23:00) — 預期 100 + ceil(166/192)*5 = 105
+curl -X POST http://localhost:3000/api/config/fare/calculate \
+  -H "Content-Type: application/json" \
+  -d '{"distanceMeters":1000,"at":"2026-04-22T23:00:00+08:00"}'
+
+# 春節 + 1km (需先在 admin UI 啟用春節並設定日期) — 預期 105 + 50 = 155
+curl -X POST http://localhost:3000/api/config/fare/calculate \
+  -H "Content-Type: application/json" \
+  -d '{"distanceMeters":1000,"at":"2026-02-17T14:00:00+08:00"}'
+```
+
+---
+
+## 📝 歷史修改（2026-04-21）- 後台白屏 `Cannot GET /login` 根治
 
 ### 解決的問題
 後台使用中按瀏覽器**返回鍵 / 刷新鍵**偶發白屏，網址列變成 `https://api.hualientaxi.taxi/login`（**沒有 `/admin` 前綴**），頁面顯示 `Cannot GET /login`。此問題存在已久，只在 token 過期（1 小時）時觸發，所以不易複現但用久必踩。
@@ -616,7 +684,7 @@ HualienTaxiServer/
 │       ├── geo.ts            # 地理計算
 │       └── logger.ts         # 日誌
 ├── config/
-│   ├── tariff.json           # 費率設定
+│   ├── fareConfig.json       # 費率設定（巢狀：day / night / springFestival / loveCardSubsidyAmount）
 │   └── asterisk/
 │       └── extensions_taxi.conf  # Asterisk Dialplan 配置
 ├── .env                      # 環境變數 (不進git)
