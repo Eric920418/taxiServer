@@ -5,14 +5,23 @@ import { validateTaiwanPhone } from '../utils/validators';
 const router = Router();
 
 /**
- * normalize 手機 + 提供雙格式比對參數。
- * 既有 DB 裡 drivers/passengers.phone 格式混雜（早期 09xxxxxxxx、Admin Panel 新增的 +8869xxxxxxxx），
- * 為了登入時能 match 兩種情況，同時送 normalized 與 raw。
+ * 產出台灣手機所有等價格式，處理 DB 裡新舊混雜的狀況：
+ * - Admin Panel 新增司機用 validateTaiwanPhone normalize 成 +8869xxxxxxxx
+ * - 早期手動 seed 的司機可能存 09xxxxxxxx
+ * 兩個 endpoint 都要能雙向 match。
  */
-function getPhoneMatchParams(rawPhone: string): [string, string] {
+function getAllPhoneFormats(rawPhone: string): string[] {
+  const formats = new Set<string>([rawPhone]);
   const check = validateTaiwanPhone(rawPhone);
-  const normalized = check.ok ? check.normalized! : rawPhone;
-  return [normalized, rawPhone];
+  if (check.ok && check.normalized) {
+    formats.add(check.normalized); // +8869xxxxxxxx
+    // 逆推本地格式 0 + 後 9 碼
+    if (check.normalized.startsWith('+886')) {
+      const local = '0' + check.normalized.slice(4);
+      formats.add(local);
+    }
+  }
+  return Array.from(formats);
 }
 
 /**
@@ -39,11 +48,11 @@ router.post('/phone-verify-driver', async (req: Request, res: Response) => {
       });
     }
 
-    // 從資料庫查找司機（雙格式比對：Admin Panel 存 +8869..., 舊資料可能是 09...）
-    const [normalizedPhone, rawPhone] = getPhoneMatchParams(phone);
+    // 從資料庫查找司機（多格式比對：+886xxx 與 09xxx 等價）
+    const phoneFormats = getAllPhoneFormats(phone);
     const driver = await queryOne(
-      'SELECT * FROM drivers WHERE phone = $1 OR phone = $2',
-      [normalizedPhone, rawPhone]
+      'SELECT * FROM drivers WHERE phone = ANY($1::text[])',
+      [phoneFormats]
     );
 
     if (!driver) {
@@ -115,21 +124,22 @@ router.post('/phone-verify-passenger', async (req: Request, res: Response) => {
       });
     }
 
-    // 檢查是否已存在（雙格式比對處理舊資料）
-    const [normalizedPhone, rawPhone] = getPhoneMatchParams(phone);
+    // 檢查是否已存在（多格式比對處理舊資料）
+    const phoneFormats = getAllPhoneFormats(phone);
     let passenger = await queryOne(
-      'SELECT * FROM passengers WHERE phone = $1 OR phone = $2',
-      [normalizedPhone, rawPhone]
+      'SELECT * FROM passengers WHERE phone = ANY($1::text[])',
+      [phoneFormats]
     );
 
     // 如果不存在，自動註冊（新增時統一用 normalized +886 格式）
     if (!passenger) {
       const passengerId = `PASS${Date.now().toString().slice(-6)}`;
       const defaultName = name || `乘客 ${phone.slice(-4)}`;
+      const normalized = validateTaiwanPhone(phone).normalized || phone;
 
       const result = await query(
         'INSERT INTO passengers (passenger_id, phone, name, firebase_uid) VALUES ($1, $2, $3, $4) RETURNING *',
-        [passengerId, normalizedPhone, defaultName, firebaseUid]
+        [passengerId, normalized, defaultName, firebaseUid]
       );
 
       passenger = result.rows[0];
