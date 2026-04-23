@@ -1,13 +1,16 @@
 /**
  * ScheduledOrderService - 預約訂單排程服務
  *
- * 使用 Bull Queue (Redis) 排程預約訂單：
+ * 使用 BullMQ (via IQueueAdapter) 排程預約訂單：
  * - 提前 15 分鐘推送 LINE 提醒
  * - 提前 5 分鐘觸發 SmartDispatcherV2 派單
+ *
+ * 2026-04-23 Phase 1：從 Bull v4 遷移到 BullMQ（消除 floating promise rejection 噪音）
  */
 
 import { Pool } from 'pg';
-import Bull from 'bull';
+import { BullMQAdapter } from './queue/BullMQAdapter';
+import { IQueueAdapter } from './queue/IQueueAdapter';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getLineNotifier } from './LineNotifier';
 
@@ -22,24 +25,20 @@ interface ScheduledJobData {
 
 export class ScheduledOrderService {
   private pool: Pool;
-  private queue: Bull.Queue<ScheduledJobData>;
+  private queue: IQueueAdapter<ScheduledJobData>;
 
   constructor(pool: Pool) {
     this.pool = pool;
 
-    const redisHost = process.env.REDIS_HOST || 'localhost';
-    const redisPort = parseInt(process.env.REDIS_PORT || '6379');
-
-    this.queue = new Bull<ScheduledJobData>('scheduled-orders', {
-      redis: { host: redisHost, port: redisPort },
+    this.queue = new BullMQAdapter<ScheduledJobData>('scheduled-orders', {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      password: process.env.REDIS_PASSWORD,
     });
 
-    // Layer 2 防護：Bull connect/job error 消音，避免 unhandledRejection 噪音
-    this.queue.on('error', (err) => {
-      console.warn(`[ScheduledOrderService] Redis 連線錯誤（預約排程功能 degraded）: ${err.message}`);
-    });
-    this.queue.on('failed', (job, err) => {
-      console.error(`[ScheduledOrderService] Job ${job.id} 失敗: ${err.message}`);
+    // Job 失敗 log（retry 全失敗才觸發）
+    this.queue.onFailed((jobId, err) => {
+      console.error(`[ScheduledOrderService] Job ${jobId} 失敗: ${err.message}`);
     });
 
     this.setupProcessor();
@@ -48,11 +47,12 @@ export class ScheduledOrderService {
       console.warn('[ScheduledOrderService] 恢復預約排程失敗（startup 不阻擋）:', err.message);
     });
 
-    console.log('[ScheduledOrderService] 預約排程服務已初始化');
+    console.log('[ScheduledOrderService] 預約排程服務已初始化（BullMQ）');
   }
 
   /**
    * 加入預約排程
+   * jobId 去重：同 orderId 重複 add 會被 BullMQ 自動忽略（throw "already exists"）
    */
   async scheduleOrder(orderId: string, scheduledAt: Date): Promise<void> {
     const now = Date.now();
@@ -60,17 +60,19 @@ export class ScheduledOrderService {
 
     // 提前 5 分鐘派單
     const dispatchDelay = Math.max(0, scheduledTime - now - 5 * 60 * 1000);
-    await this.queue.add(
+    await this.tryAddJob(
       { orderId, type: 'DISPATCH' },
-      { delay: dispatchDelay, jobId: `dispatch-${orderId}`, removeOnComplete: true }
+      { delay: dispatchDelay, jobId: `dispatch-${orderId}`, removeOnComplete: true },
+      'DISPATCH'
     );
 
     // 提前 15 分鐘提醒
     const reminderDelay = scheduledTime - now - 15 * 60 * 1000;
     if (reminderDelay > 0) {
-      await this.queue.add(
+      await this.tryAddJob(
         { orderId, type: 'REMINDER' },
-        { delay: reminderDelay, jobId: `reminder-${orderId}`, removeOnComplete: true }
+        { delay: reminderDelay, jobId: `reminder-${orderId}`, removeOnComplete: true },
+        'REMINDER'
       );
     }
 
@@ -78,44 +80,48 @@ export class ScheduledOrderService {
   }
 
   /**
+   * add job + catch「已存在」(重複 schedule 或 restore 已有 job 時會發生)
+   * 其他錯誤照常 throw 讓 caller 處理
+   */
+  private async tryAddJob(
+    data: ScheduledJobData,
+    opts: { delay: number; jobId: string; removeOnComplete: boolean },
+    jobName: string
+  ): Promise<void> {
+    try {
+      await this.queue.add(data, opts, jobName);
+    } catch (err: any) {
+      const msg = String(err?.message ?? '');
+      if (msg.includes('already exists') || msg.includes('Duplicate')) {
+        // jobId 已存在 — restore / 重複 schedule，silently skip
+        return;
+      }
+      throw err;
+    }
+  }
+
+  /**
    * 取消預約
    */
   async cancelScheduled(orderId: string): Promise<void> {
-    try {
-      const dispatchJob = await this.queue.getJob(`dispatch-${orderId}`);
-      if (dispatchJob) await dispatchJob.remove();
-
-      const reminderJob = await this.queue.getJob(`reminder-${orderId}`);
-      if (reminderJob) await reminderJob.remove();
-
-      console.log(`[ScheduledOrderService] 訂單 ${orderId} 排程已取消`);
-    } catch (error) {
-      console.error(`[ScheduledOrderService] 取消排程失敗 (${orderId}):`, error);
-    }
+    await this.queue.cancel(`dispatch-${orderId}`);
+    await this.queue.cancel(`reminder-${orderId}`);
+    console.log(`[ScheduledOrderService] 訂單 ${orderId} 排程已取消`);
   }
 
   /**
    * 設定 Queue 處理器
    */
   private setupProcessor(): void {
-    this.queue.process(async (job) => {
+    this.queue.registerProcessor(async (job) => {
       const { orderId, type } = job.data;
       console.log(`[ScheduledOrderService] 處理排程任務: ${type} - ${orderId}`);
 
-      try {
-        if (type === 'DISPATCH') {
-          await this.dispatchScheduledOrder(orderId);
-        } else if (type === 'REMINDER') {
-          await this.sendReminder(orderId);
-        }
-      } catch (error) {
-        console.error(`[ScheduledOrderService] 排程任務失敗 (${type} - ${orderId}):`, error);
-        throw error; // Bull 會自動重試
+      if (type === 'DISPATCH') {
+        await this.dispatchScheduledOrder(orderId);
+      } else if (type === 'REMINDER') {
+        await this.sendReminder(orderId);
       }
-    });
-
-    this.queue.on('failed', (job, err) => {
-      console.error(`[ScheduledOrderService] Job 失敗 (${job.id}):`, err.message);
     });
   }
 
@@ -189,34 +195,35 @@ export class ScheduledOrderService {
 
   /**
    * 伺服器重啟時恢復待處理的預約
+   *
+   * 之前 Bull 版用 getJob() 檢查 job 是否存在避免重複 add。改 BullMQ 後簡化：
+   * scheduleOrder() 內部 tryAddJob 會 catch「already exists」error，直接呼叫即可。
    */
   private async restorePendingSchedules(): Promise<void> {
-    try {
-      const result = await this.pool.query(`
-        SELECT order_id, scheduled_at FROM orders
-        WHERE scheduled_at IS NOT NULL
-          AND status IN ('WAITING', 'OFFERED')
-          AND scheduled_at > NOW()
-        ORDER BY scheduled_at ASC
-      `);
+    const result = await this.pool.query(`
+      SELECT order_id, scheduled_at FROM orders
+      WHERE scheduled_at IS NOT NULL
+        AND status IN ('WAITING', 'OFFERED')
+        AND scheduled_at > NOW()
+      ORDER BY scheduled_at ASC
+    `);
 
-      for (const row of result.rows) {
-        const scheduledAt = new Date(row.scheduled_at);
-
-        // 檢查 job 是否已存在
-        const existingJob = await this.queue.getJob(`dispatch-${row.order_id}`);
-        if (!existingJob) {
-          await this.scheduleOrder(row.order_id, scheduledAt);
-          console.log(`[ScheduledOrderService] 恢復排程: ${row.order_id} → ${scheduledAt.toISOString()}`);
-        }
-      }
-
-      if (result.rows.length > 0) {
-        console.log(`[ScheduledOrderService] 共恢復 ${result.rows.length} 個預約排程`);
-      }
-    } catch (error) {
-      console.error('[ScheduledOrderService] 恢復排程失敗:', error);
+    for (const row of result.rows) {
+      const scheduledAt = new Date(row.scheduled_at);
+      await this.scheduleOrder(row.order_id, scheduledAt);
+      console.log(`[ScheduledOrderService] 恢復排程: ${row.order_id} → ${scheduledAt.toISOString()}`);
     }
+
+    if (result.rows.length > 0) {
+      console.log(`[ScheduledOrderService] 共恢復 ${result.rows.length} 個預約排程`);
+    }
+  }
+
+  /**
+   * Graceful shutdown — SIGTERM 時呼叫
+   */
+  async shutdown(): Promise<void> {
+    await this.queue.close();
   }
 }
 
