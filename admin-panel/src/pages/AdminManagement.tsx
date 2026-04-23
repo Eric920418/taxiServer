@@ -9,7 +9,7 @@ import {
   Input,
   Select,
   Tag,
-  message,
+  App as AntdApp,
   Popconfirm,
   Typography,
   Switch,
@@ -52,6 +52,8 @@ interface Admin {
 }
 
 const AdminManagement: React.FC = () => {
+  // Ant Design 5：hook 版 message/modal 避免切頁 mask 卡在 body
+  const { message, modal } = AntdApp.useApp();
   const [admins, setAdmins] = useState<Admin[]>([
     {
       admin_id: 'adm_001',
@@ -175,7 +177,7 @@ const AdminManagement: React.FC = () => {
   };
 
   const handleResetPassword = async (admin: Admin) => {
-    Modal.confirm({
+    modal.confirm({
       title: '重設密碼',
       content: `確定要重設管理員 ${admin.username} 的密碼嗎？系統將發送重設密碼連結到 ${admin.email}`,
       onOk: async () => {

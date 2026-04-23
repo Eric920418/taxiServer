@@ -6,15 +6,14 @@ import {
   Card,
   Input,
   Tag,
-  Modal,
   Drawer,
   Descriptions,
-  message,
   Popconfirm,
   Typography,
   Row,
   Col,
   Statistic,
+  App as AntdApp,
 } from 'antd';
 import {
   SearchOutlined,
@@ -38,6 +37,9 @@ const { Title } = Typography;
 
 const Passengers: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
+  // Ant Design 5：用 App.useApp() 拿 context-aware message / modal，
+  // 避免靜態 Modal.confirm 切頁時 mask 卡在 body 導致全畫面半透明
+  const { message, modal } = AntdApp.useApp();
   const { passengers, loading, pagination } = useSelector(
     (state: RootState) => state.passengers
   );
@@ -73,7 +75,7 @@ const Passengers: React.FC = () => {
   };
 
   const handleBlockPassenger = async (passenger: Passenger) => {
-    Modal.confirm({
+    modal.confirm({
       title: '封鎖乘客',
       content: (
         <div>
