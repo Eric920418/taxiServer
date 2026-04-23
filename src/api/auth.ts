@@ -1,7 +1,19 @@
 import { Router, Request, Response } from 'express';
 import { query, queryOne } from '../db/connection';
+import { validateTaiwanPhone } from '../utils/validators';
 
 const router = Router();
+
+/**
+ * normalize 手機 + 提供雙格式比對參數。
+ * 既有 DB 裡 drivers/passengers.phone 格式混雜（早期 09xxxxxxxx、Admin Panel 新增的 +8869xxxxxxxx），
+ * 為了登入時能 match 兩種情況，同時送 normalized 與 raw。
+ */
+function getPhoneMatchParams(rawPhone: string): [string, string] {
+  const check = validateTaiwanPhone(rawPhone);
+  const normalized = check.ok ? check.normalized! : rawPhone;
+  return [normalized, rawPhone];
+}
 
 /**
  * 手機號碼簡訊驗證登入（司機端）
@@ -27,10 +39,11 @@ router.post('/phone-verify-driver', async (req: Request, res: Response) => {
       });
     }
 
-    // 從資料庫查找司機
+    // 從資料庫查找司機（雙格式比對：Admin Panel 存 +8869..., 舊資料可能是 09...）
+    const [normalizedPhone, rawPhone] = getPhoneMatchParams(phone);
     const driver = await queryOne(
-      'SELECT * FROM drivers WHERE phone = $1',
-      [phone]
+      'SELECT * FROM drivers WHERE phone = $1 OR phone = $2',
+      [normalizedPhone, rawPhone]
     );
 
     if (!driver) {
@@ -102,20 +115,21 @@ router.post('/phone-verify-passenger', async (req: Request, res: Response) => {
       });
     }
 
-    // 檢查是否已存在
+    // 檢查是否已存在（雙格式比對處理舊資料）
+    const [normalizedPhone, rawPhone] = getPhoneMatchParams(phone);
     let passenger = await queryOne(
-      'SELECT * FROM passengers WHERE phone = $1',
-      [phone]
+      'SELECT * FROM passengers WHERE phone = $1 OR phone = $2',
+      [normalizedPhone, rawPhone]
     );
 
-    // 如果不存在，自動註冊
+    // 如果不存在，自動註冊（新增時統一用 normalized +886 格式）
     if (!passenger) {
       const passengerId = `PASS${Date.now().toString().slice(-6)}`;
       const defaultName = name || `乘客 ${phone.slice(-4)}`;
 
       const result = await query(
         'INSERT INTO passengers (passenger_id, phone, name, firebase_uid) VALUES ($1, $2, $3, $4) RETURNING *',
-        [passengerId, phone, defaultName, firebaseUid]
+        [passengerId, normalizedPhone, defaultName, firebaseUid]
       );
 
       passenger = result.rows[0];

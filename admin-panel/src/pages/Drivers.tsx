@@ -606,6 +606,7 @@ const Drivers: React.FC = () => {
                   { required: true, message: '請輸入手機號碼' },
                   { pattern: /^09\d{8}$|^\+8869\d{8}$/, message: '09xxxxxxxx 或 +8869xxxxxxxx' },
                 ]}
+                tooltip="新司機第一次登入需 Firebase Phone Auth 驗證。若司機回報 ERROR_APP_NOT_AUTHORIZED，請到 Firebase Console → 專案設定 → Android 應用程式，確認 App 的 SHA-1 指紋已登記（debug 和 release 兩把都要）。"
               >
                 <Input prefix={<PhoneOutlined />} placeholder="09xxxxxxxx" />
               </Form.Item>
