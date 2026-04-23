@@ -643,6 +643,31 @@ app.get('/admin{/*path}', (req, res) => {
   res.sendFile(path.join(adminPanelPath, 'index.html'));
 });
 
+// ============================================================
+// Process-level error handlers — last resort 防護網
+// ============================================================
+// 為什麼需要：Node 預設 uncaughtException → exit。某些 module（例如 ioredis 的
+// redis-parser）會 throw 而非 emit 'error' event，繞過 cache.ts 的 redis.on('error')
+// 攔截，把整個 server 帶倒。pm2 會 restart 但會在短時間內反覆崩潰（已觀察到 7 小時
+// 重啟 48 次）。
+//
+// 策略：log 完整錯誤但不 exit，讓 server 繼續運作。若狀態真的損毀，pm2 會偵測
+// 健康檢查失敗才介入 restart。SIGTERM / SIGINT 則正常處理 graceful shutdown。
+//
+// 注意：這只是 Layer 1 防護。長期應該每個 Redis 客戶端（cache.ts、queue.ts、
+// circuit-breaker.ts）都加 try/catch + Redis 不可用時退化。Layer 2 留 TODO。
+process.on('uncaughtException', (err) => {
+  console.error('[Process] ⚠️ uncaughtException:', err);
+  console.error('[Process] Stack:', err.stack);
+  // 不 exit — 讓 server 繼續運作
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] ⚠️ unhandledRejection at:', promise);
+  console.error('[Process] Reason:', reason);
+  // 不 exit
+});
+
 // 啟動前先從 DB 載入地標索引（失敗則以空索引啟動，LINE/電話/語音叫車會降級到 Google API）
 hualienAddressDB.rebuildIndex()
   .then(() => console.log('[系統] 地標索引初始化完成'))
