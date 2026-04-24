@@ -2,9 +2,84 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-04-22
+> 更新日期：2026-04-24
 
-## 📝 最新修改（2026-04-22）- 費率對齊花蓮縣府公告 + admin schema 重構
+## 📝 最新修改（2026-04-24）- 防護網雙層 + Bull → BullMQ 遷移 + dead code 清理
+
+### 解決的問題
+- pm2 觀察到 7 小時內重啟 48 次 — 多數是 **Bull queue 內部 floating promise rejection**：
+  ioredis 的 `client.subscribe`/`client setname` 失敗時 throw 而非 emit 'error'，
+  繞過 cache.ts 的 `redis.on('error')` 攔截，整個 server process 倒掉。
+- queue.ts 5 queue + aggregator.ts 整檔是 **dead code**（grep 確認 0 callers），
+  仍在 production 跑著浪費 20 個 Redis connection 並產生噪音 log。
+- 時區：本機 dev (Asia/Taipei) 寫的 `getHours()` 邏輯部署到 production (UTC) 後夜費率失效。
+
+### 三層防護架構
+1. **Layer 1 process-level 防護**（`src/index.ts`）：
+   `process.on('uncaughtException' / 'unhandledRejection')` 接住所有漏網錯誤，
+   log 但不 exit — 讓 server 即使遇到 module 內部 floating promise 也不會被 pm2 連鎖重啟。
+2. **Layer 2 service-level 防護**：
+   - `cache.ts` 14 個 export function 已全部 try/catch + return null/false（既存）
+   - `circuit-breaker.ts` 已有 `redisCircuitBreaker` with `() => null` fallback（既存）
+   - `services/queue.ts`、`services/ScheduledOrderService.ts` 加 `.on('error'/'failed')` 健康追蹤
+   - `middleware/security.ts` rate limiter / IP blacklist 包 try/catch + **fail-open**
+     （Redis 失敗時讓 request 過，避免整個 site 503）
+3. **BullMQ migration**：移除 Bull 套件，從根源消除 floating promise 噪音來源。
+
+### Bull → BullMQ 遷移（Option B → 簡化收尾）
+- 新增抽象層 `src/services/queue/IQueueAdapter.ts` + `BullMQAdapter.ts`
+  （為未來新增 queue 預備乾淨介面）
+- `ScheduledOrderService` 從 Bull 遷到 BullMQAdapter — 預約訂單派單 / 提醒邏輯不變，
+  Redis 連線錯誤不再 leak 為 unhandledRejection
+- 規劃 Phase 2 時 grep callers 發現 `queue.ts` 與 `aggregator.ts` 整體 dead：
+  | 元素 | Callers |
+  |------|---------|
+  | orderQueue / notificationQueue / batchUpdateQueue / locationTrackingQueue | 0 |
+  | analyticsQueue | 唯一 caller 是 dead 的 aggregator.ts |
+  | setupScheduledJobs / getQueueStats / cleanQueues / closeQueues | 0 |
+  | aggregator.ts 4 class + 2 instance + scheduleDailyAggregation | 0 |
+- **直接刪除取代漸進遷移** — 1220 行 dead code 一次性清掉，`pnpm remove bull`。
+- 結果：原 5-7 天的 Bull → BullMQ 遷移 → **1 小時收工**。
+
+### 時區修正
+`FareConfigService.calculateFare()` 之前用 `at.getHours()` 取本地小時。
+本機 dev macOS 系統時區是 Asia/Taipei 看似正常；部署到 production UTC server 後
+「23:00 +08:00」進來變 UTC 15:00 → `getHours()` 回 15 → 不算夜時段 → 夜費率永遠不生效。
+新增 `toTaipei(at)` helper 手算 UTC + 8 偏移（台北無夏令時，固定 +8 比 Intl.DateTimeFormat 更可靠）。
+
+### 影響檔案
+- `src/index.ts` — Layer 1 process handler + 註解更新
+- `src/services/queue/IQueueAdapter.ts` — 新增抽象介面（5-10 method）
+- `src/services/queue/BullMQAdapter.ts` — 新增 BullMQ 實作（Queue + Worker + QueueEvents 三件套）
+- `src/services/ScheduledOrderService.ts` — 改用 BullMQAdapter
+- `src/services/cache.ts` — 既有 try/catch（無改動，僅確認）
+- `src/middleware/security.ts` — rate limiter / IP blacklist fail-open
+- `src/services/FareConfigService.ts` — toTaipei() helper
+- `src/services/queue.ts` 🗑️ 刪除（dead code）
+- `src/services/aggregator.ts` 🗑️ 刪除（dead code）
+- `src/services/queue/BullAdapter.ts` 🗑️ 刪除（Phase 0 wrapper，dead 後不需）
+- `package.json` — pnpm remove bull 4.16.5
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install        # 移除 bull、保留 bullmq
+pnpm build          # tsc → dist/
+pm2 restart taxiserver
+pm2 logs taxiserver --lines 50   # 確認 [ScheduledOrderService] 預約排程服務已初始化（BullMQ）
+```
+
+### 驗證效果
+- ✅ `unhandledRejection` 從每次啟動 2-4 個 → **0**
+- ✅ Codebase 少 **1220 行**（commit diff `+7 / -1227`）
+- ✅ Production memory 預期下降（少 20 個閒置 Redis connection）
+- ✅ Bootstrap log 少 6 行 queue init 訊息
+- 🔬 觀察點：pm2 ↺ 重啟頻率應從 6.8/hr 降到接近 0
+
+---
+
+## 📝 歷史修改（2026-04-22）- 費率對齊花蓮縣府公告 + admin schema 重構
 
 ### 解決的問題
 - Admin Settings 費率頁面架構是「單組費率 + `nightSurchargeRate=0.2` 百分比加成」，**與花蓮縣政府公告的「日夜雙組獨立跳距」結構不相容**。直接套公告數字會導致夜間加成被算兩次。
@@ -211,7 +286,7 @@ pnpm dev   # 或 pm2 restart
 | `src/services/LineMessageProcessor.ts` | LINE 對話狀態機（叫車/取消/預約流程） |
 | `src/services/LineNotifier.ts` | 訂單狀態 Push Message 推播 |
 | `src/services/LineFlexTemplates.ts` | Flex Message 模板集 |
-| `src/services/ScheduledOrderService.ts` | Bull Queue 預約排程（提前5分鐘派單、15分鐘提醒） |
+| `src/services/ScheduledOrderService.ts` | BullMQ 預約排程（提前5分鐘派單、15分鐘提醒） |
 | `src/db/migrations/006-line-integration.sql` | DB Migration（line_users, line_messages, orders 擴展） |
 | `scripts/setup-line-richmenu.ts` | Rich Menu 設定腳本 |
 
@@ -227,7 +302,7 @@ pnpm dev   # 或 pm2 restart
 ### LINE 對話流程
 ```
 叫車：「叫車」→ 傳送位置 → 選目的地 → 確認 → 建單派單
-預約：「預約」→ 傳送位置 → 選目的地 → 選日期時間 → 確認 → Bull Queue 排程
+預約：「預約」→ 傳送位置 → 選目的地 → 選日期時間 → 確認 → BullMQ 排程
 取消：「取消」→ 顯示活動訂單 → 確認取消
 GPT：直接輸入「我在火車站要去太魯閣」→ GPT 解析 → 確認
 ```
@@ -261,7 +336,7 @@ pnpm run build && pm2 restart taxiserver
 
 ### 注意事項
 - LINE Webhook 要求 HTTPS，需確認伺服器有 SSL 證書
-- 預約功能依賴 Redis（Bull Queue），已確認伺服器 Redis 運行中
+- 預約功能依賴 Redis（BullMQ），已確認伺服器 Redis 運行中
 - 對話超時清理：30 分鐘未操作自動重置為 IDLE
 
 ---
