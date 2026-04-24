@@ -538,6 +538,160 @@ export function driverAcceptedCard(
   };
 }
 
+// ========== 司機已抵達通知 ==========
+
+/**
+ * 司機已到達上車點 — 提醒客人盡快前來
+ *
+ * 設計重點：醒目綠色標題 + 車牌放大（客人要對車牌）+ 上車點地址再確認
+ */
+export function driverArrivedCard(
+  driverName: string,
+  plate: string,
+  pickupAddress: string
+): FlexMessage {
+  const bubble: FlexBubble = {
+    type: 'bubble',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'text',
+          text: '🚕  司機已到達！',
+          weight: 'bold',
+          size: 'xl',
+          color: '#4CAF50',
+        },
+        {
+          type: 'text',
+          text: '請盡快前往上車點',
+          size: 'sm',
+          color: '#666666',
+          margin: 'xs',
+        },
+        { type: 'separator', margin: 'md' },
+        {
+          type: 'box',
+          layout: 'vertical',
+          margin: 'md',
+          contents: [
+            {
+              type: 'box',
+              layout: 'horizontal',
+              contents: [
+                { type: 'text', text: '車牌', size: 'sm', color: '#999999', flex: 2 },
+                { type: 'text', text: plate, size: 'xl', color: '#FF6B35', weight: 'bold', flex: 5 },
+              ],
+            },
+            {
+              type: 'box',
+              layout: 'horizontal',
+              margin: 'sm',
+              contents: [
+                { type: 'text', text: '司機', size: 'sm', color: '#999999', flex: 2 },
+                { type: 'text', text: driverName, size: 'md', color: '#333333', flex: 5 },
+              ],
+            },
+            {
+              type: 'box',
+              layout: 'vertical',
+              margin: 'lg',
+              backgroundColor: '#E8F5E9',
+              cornerRadius: '8px',
+              paddingAll: '12px',
+              contents: [
+                {
+                  type: 'text',
+                  text: '上車點',
+                  size: 'xs',
+                  color: '#999999',
+                },
+                {
+                  type: 'text',
+                  text: pickupAddress,
+                  size: 'md',
+                  color: '#2E7D32',
+                  weight: 'bold',
+                  wrap: true,
+                  margin: 'xs',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  return {
+    type: 'flex',
+    altText: `🚕 司機已到達！車牌 ${plate}，請盡快前往上車點`,
+    contents: bubble,
+  };
+}
+
+// ========== 等候中提醒（司機按「客人未到」後）==========
+
+/**
+ * 司機等候中 — 提醒客人還有多少時間，超過會自動取消
+ *
+ * 使用時機：
+ *   - 司機按「客人未到」後立刻推播一則（remainingMinutes = 總等候時長）
+ *   - 中段再推一則（remainingMinutes = 剩一半時間）
+ *   - 即將超時再推最後一則（remainingMinutes = 1）
+ */
+export function waitingForPassengerCard(remainingMinutes: number): FlexMessage {
+  const urgent = remainingMinutes <= 1;
+  const headlineColor = urgent ? '#F44336' : '#FF9800';
+  const headline = urgent ? '⚠️  即將自動取消！' : '司機正在等您';
+  const detail = urgent
+    ? `還剩 ${remainingMinutes} 分鐘，未到達將自動取消訂單`
+    : `司機已到上車點等候，還有 ${remainingMinutes} 分鐘`;
+
+  const bubble: FlexBubble = {
+    type: 'bubble',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'text',
+          text: headline,
+          weight: 'bold',
+          size: 'xl',
+          color: headlineColor,
+        },
+        { type: 'separator', margin: 'md' },
+        {
+          type: 'text',
+          text: detail,
+          size: 'md',
+          color: '#333333',
+          margin: 'md',
+          wrap: true,
+        },
+        {
+          type: 'text',
+          text: '如無法搭乘，請回覆「取消」通知司機',
+          size: 'xs',
+          color: '#999999',
+          margin: 'md',
+          wrap: true,
+        },
+      ],
+    },
+  };
+
+  return {
+    type: 'flex',
+    altText: urgent
+      ? `⚠️ 司機即將離開！還剩 ${remainingMinutes} 分鐘`
+      : `司機正在等您，還有 ${remainingMinutes} 分鐘`,
+    contents: bubble,
+  };
+}
+
 // ========== 行程完成通知 ==========
 
 export function tripCompletedCard(orderId: string, fare: number): FlexMessage {

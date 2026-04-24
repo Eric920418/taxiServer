@@ -641,6 +641,15 @@ router.patch('/:orderId/status', async (req, res) => {
       await notificationService.notifyOrderCancelled(orderId);
     }
 
+    // LINE 推播（非 LINE 訂單會被 LineNotifier 自動跳過）
+    const lineNotifier = getLineNotifier();
+    if (lineNotifier && (status === 'ARRIVED' || status === 'DONE' || status === 'CANCELLED')) {
+      lineNotifier.notifyOrderStatusChange(orderId, status, {
+        driverName: fullOrder.driver_name,
+        plate: fullOrder.plate,
+      }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+    }
+
     res.json({
       orderId: fullOrder.order_id,
       passengerId: fullOrder.passenger_id,
@@ -676,6 +685,143 @@ router.patch('/:orderId/status', async (req, res) => {
     });
   } catch (error) {
     console.error('[Update Status] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 司機等候中：推播 LINE 提醒客人
+ * POST /api/orders/:orderId/notify-waiting
+ *
+ * 使用時機：司機按「客人未到」後，App 倒數計時中每 N 分鐘呼叫一次
+ * 後端不改 DB，只推一則 LINE 訊息給客人（非 LINE 訂單會自動跳過）
+ *
+ * Body: { remainingMinutes: number } — 還剩幾分鐘會自動取消
+ */
+router.post('/:orderId/notify-waiting', async (req, res) => {
+  const { orderId } = req.params;
+  const { remainingMinutes } = req.body;
+
+  if (typeof remainingMinutes !== 'number' || remainingMinutes < 0) {
+    return res.status(400).json({ error: '缺少 remainingMinutes 或數值不合法' });
+  }
+
+  try {
+    // 狀態檢查：只有 ARRIVED 狀態才有意義推等候訊息
+    const order = await queryOne(
+      'SELECT status FROM orders WHERE order_id = $1',
+      [orderId]
+    );
+    if (!order) return res.status(404).json({ error: '訂單不存在' });
+    if (order.status !== 'ARRIVED') {
+      return res.status(400).json({
+        error: `訂單狀態為 ${order.status}，無法推送等候通知`,
+      });
+    }
+
+    const lineNotifier = getLineNotifier();
+    if (lineNotifier) {
+      await lineNotifier.notifyDriverWaitingForPassenger(orderId, remainingMinutes);
+    }
+
+    res.json({ success: true, remainingMinutes });
+  } catch (error) {
+    console.error('[Notify Waiting] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 客人未到 — 取消訂單並標記為 PASSENGER_NO_SHOW
+ * POST /api/orders/:orderId/cancel-no-show
+ *
+ * 使用時機：等候倒數結束，或司機手動放棄等候
+ *
+ * Body: { driverId: string, waitedMinutes?: number } — 司機實際等候了幾分鐘（供統計）
+ */
+router.post('/:orderId/cancel-no-show', async (req, res) => {
+  const { orderId } = req.params;
+  const { driverId, waitedMinutes } = req.body;
+
+  if (!driverId) {
+    return res.status(400).json({ error: '缺少 driverId' });
+  }
+
+  try {
+    // 只接受從 ARRIVED 狀態取消
+    const existing = await queryOne(
+      'SELECT status, driver_id FROM orders WHERE order_id = $1',
+      [orderId]
+    );
+    if (!existing) return res.status(404).json({ error: '訂單不存在' });
+    if (existing.driver_id !== driverId) {
+      return res.status(403).json({ error: '非此訂單司機' });
+    }
+    if (existing.status !== 'ARRIVED') {
+      return res.status(400).json({
+        error: `訂單狀態為 ${existing.status}，只能從 ARRIVED 標記 no-show`,
+      });
+    }
+
+    const reason = waitedMinutes
+      ? `客人未到（司機等候 ${waitedMinutes} 分鐘）`
+      : '客人未到';
+
+    const result = await query(
+      `UPDATE orders
+       SET status = 'CANCELLED',
+           cancelled_at = CURRENT_TIMESTAMP,
+           cancel_reason = $1
+       WHERE order_id = $2 AND status = 'ARRIVED'
+       RETURNING *`,
+      [reason, orderId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(409).json({ error: '訂單狀態已變更，無法取消' });
+    }
+
+    console.log(`[Order NoShow] 訂單 ${orderId} 被司機 ${driverId} 標記為客人未到 (等候 ${waitedMinutes ?? '?'} 分鐘)`);
+
+    // 通知乘客（WebSocket + LINE）
+    const fullOrder = await queryOne(`
+      SELECT o.*, p.name AS passenger_name, d.name AS driver_name, d.plate
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.order_id = $1
+    `, [orderId]);
+
+    // WebSocket
+    notifyPassengerOrderUpdate(fullOrder.passenger_id, {
+      orderId,
+      status: 'CANCELLED',
+      cancelReason: reason,
+    });
+
+    // LINE 推播（orderCancelledCard，附帶友善的取消原因）
+    const lineNotifier = getLineNotifier();
+    if (lineNotifier) {
+      lineNotifier.notifyOrderStatusChange(orderId, 'CANCELLED', {
+        reason: '因您未準時到達上車點，訂單已取消',
+      }).catch(err => console.error('[NoShow] LINE 推播失敗:', err));
+    }
+
+    // 清理派單追蹤
+    cancelOrderTracking(orderId);
+
+    // 管理後台通知
+    const notificationService = getNotificationService();
+    await notificationService.notifyOrderCancelled(orderId);
+
+    res.json({
+      success: true,
+      orderId,
+      status: 'CANCELLED',
+      cancelReason: reason,
+    });
+  } catch (error) {
+    console.error('[Cancel NoShow] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });

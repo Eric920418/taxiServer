@@ -69,6 +69,30 @@ export class LineNotifier {
           break;
         }
 
+        case 'ARRIVED': {
+          // 司機到達上車點 — 通知客人出來上車
+          let driverName = extraData?.driverName || '司機';
+          let plate = extraData?.plate || '';
+          let pickupAddress = '';
+
+          // 查詢訂單詳細資料（司機資訊 + 上車地址）
+          const detail = await this.pool.query(
+            `SELECT d.name AS driver_name, d.plate AS driver_plate, o.pickup_address
+             FROM orders o
+             LEFT JOIN drivers d ON o.driver_id = d.driver_id
+             WHERE o.order_id = $1`,
+            [orderId]
+          );
+          if (detail.rows[0]) {
+            driverName = extraData?.driverName || detail.rows[0].driver_name || driverName;
+            plate = extraData?.plate || detail.rows[0].driver_plate || plate;
+            pickupAddress = detail.rows[0].pickup_address || '';
+          }
+
+          message = templates.driverArrivedCard(driverName, plate, pickupAddress);
+          break;
+        }
+
         case 'DONE':
         case 'SETTLING': {
           const fare = extraData?.fare || 0;
@@ -96,6 +120,33 @@ export class LineNotifier {
     } catch (error: any) {
       // Push 失敗不影響主流程（使用者可能已封鎖）
       console.error(`[LineNotifier] 推播失敗 (${orderId}):`, error.message || error);
+    }
+  }
+
+  /**
+   * 司機等候中提醒 — 司機按「客人未到」後推送，告訴客人還有多少分鐘就自動取消
+   *
+   * @param orderId 訂單 ID
+   * @param remainingMinutes 距離自動取消還有幾分鐘（0 表即將取消）
+   */
+  async notifyDriverWaitingForPassenger(orderId: string, remainingMinutes: number): Promise<void> {
+    try {
+      const result = await this.pool.query(
+        'SELECT line_user_id FROM orders WHERE order_id = $1',
+        [orderId]
+      );
+      if (result.rows.length === 0) return;
+
+      const { line_user_id } = result.rows[0];
+      if (!line_user_id) return;
+
+      await this.lineClient.pushMessage({
+        to: line_user_id,
+        messages: [templates.waitingForPassengerCard(remainingMinutes)],
+      });
+      console.log(`[LineNotifier] 已推播等候中提醒 (訂單 ${orderId}, 剩 ${remainingMinutes} 分鐘)`);
+    } catch (error: any) {
+      console.error(`[LineNotifier] 等候提醒推播失敗 (${orderId}):`, error.message || error);
     }
   }
 
