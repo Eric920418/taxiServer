@@ -307,3 +307,67 @@ body {
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
   }
 }
+
+/* ===== 付款方式 / 備註 區塊（長輩友善：大按鈕、大字）===== */
+.option-section {
+  margin-top: 16px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.section-label {
+  display: block;
+  font-size: 16px;
+  font-weight: bold;
+  color: #555;
+  margin-bottom: 10px;
+}
+
+.radio-group {
+  display: flex;
+  gap: 10px;
+}
+
+.radio-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  border: 2px solid #ddd;
+  border-radius: 10px;
+  font-size: 17px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: #fafafa;
+}
+
+.radio-option input { display: none; }
+.radio-option.selected {
+  border-color: #2196F3;
+  background: #E3F2FD;
+  color: #1976D2;
+  font-weight: bold;
+}
+
+.notes-textarea {
+  width: 100%;
+  padding: 12px;
+  font-size: 17px;
+  line-height: 1.4;
+  font-family: inherit;
+  border: 2px solid #ddd;
+  border-radius: 10px;
+  resize: none;
+  outline: none;
+}
+.notes-textarea:focus { border-color: #2196F3; }
+
+.notes-counter {
+  text-align: right;
+  font-size: 13px;
+  color: #999;
+  margin-top: 4px;
+}

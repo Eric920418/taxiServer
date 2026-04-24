@@ -98,6 +98,13 @@ export interface Order {
   cancelReason?: string;
   rating?: number;
   feedback?: string;
+  // === 2026-04 擴充：付款方式 / 補貼 / 備註 / no-show 罰金 ===
+  paymentType?: string;          // 後端原始欄位 CASH / LOVE_CARD_PHYSICAL / OTHER
+  subsidyType?: string;          // NONE / SENIOR_CARD / LOVE_CARD / PENDING
+  subsidyConfirmed?: boolean;    // 司機是否已確認補貼卡
+  notes?: string;                // 客人備註（LIFF 叫車時填寫）
+  penaltyFare?: number;          // no-show 罰金（元）
+  source?: string;               // 叫車來源：APP / LINE / PHONE
 }
 
 // 統計數據類型

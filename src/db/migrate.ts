@@ -14,6 +14,7 @@ const MIGRATIONS = {
   'line-integration': '006-line-integration.sql',     // LINE 叫車系統
   'landmarks': '009-landmarks.sql',                   // 地標管理系統
   'address-failures': '010-address-failures.sql',     // 地址匹配失敗佇列
+  'no-show': '013-no-show-extensions.sql',            // no-show 罰金 + 備註 + 統計
 };
 
 /**

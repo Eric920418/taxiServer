@@ -130,6 +130,15 @@ const Orders: React.FC = () => {
     );
   };
 
+  // 後端 orders.payment_type + subsidy_type → 友善顯示標籤
+  const renderPaymentType = (paymentType?: string, subsidyType?: string) => {
+    if (subsidyType === 'LOVE_CARD') return <Tag color="magenta">愛心卡</Tag>;
+    if (subsidyType === 'SENIOR_CARD') return <Tag color="gold">敬老卡</Tag>;
+    if (paymentType === 'CASH' || !paymentType) return <Tag color="default">現金</Tag>;
+    if (paymentType === 'LOVE_CARD_PHYSICAL') return <Tag color="magenta">愛心卡（實體）</Tag>;
+    return <Tag>{paymentType}</Tag>;
+  };
+
   const columns = [
     {
       title: '訂單編號',
@@ -380,10 +389,32 @@ const Orders: React.FC = () => {
               <Descriptions.Item label="車資">
                 ${selectedOrder.fare || 0}
               </Descriptions.Item>
-              <Descriptions.Item label="支付方式">
-                {getPaymentTag(selectedOrder.paymentMethod, selectedOrder.paymentStatus)}
+              <Descriptions.Item label="付款方式">
+                {renderPaymentType(selectedOrder.paymentType, selectedOrder.subsidyType)}
               </Descriptions.Item>
+              {(selectedOrder.penaltyFare ?? 0) > 0 && (
+                <Descriptions.Item label="no-show 罰金" span={2}>
+                  <Text strong style={{ color: '#F44336' }}>NT$ {selectedOrder.penaltyFare}</Text>
+                </Descriptions.Item>
+              )}
             </Descriptions>
+
+            {(selectedOrder.source || selectedOrder.notes) && (
+              <Descriptions title="其他資訊" bordered column={1} style={{ marginTop: 24 }}>
+                {selectedOrder.source && (
+                  <Descriptions.Item label="叫車來源">
+                    <Tag color={selectedOrder.source === 'LINE' ? 'green' : selectedOrder.source === 'PHONE' ? 'orange' : 'blue'}>
+                      {selectedOrder.source}
+                    </Tag>
+                  </Descriptions.Item>
+                )}
+                {selectedOrder.notes && (
+                  <Descriptions.Item label="客人備註">
+                    <Text>{selectedOrder.notes}</Text>
+                  </Descriptions.Item>
+                )}
+              </Descriptions>
+            )}
 
             <Title level={5} style={{ marginTop: 24 }}>訂單時間軸</Title>
             <Timeline>

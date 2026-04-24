@@ -17,6 +17,7 @@ import Settings from './pages/Settings';
 import PhoneCalls from './pages/PhoneCalls';
 import Landmarks from './pages/Landmarks';
 import AddressFailures from './pages/AddressFailures';
+import NoShowOrders from './pages/NoShowOrders';
 import './App.css';
 
 // 私有路由組件
@@ -58,6 +59,7 @@ function AppContent() {
           <Route path="phonecalls" element={<PhoneCalls />} />
           <Route path="landmarks" element={<Landmarks />} />
           <Route path="address-failures" element={<AddressFailures />} />
+          <Route path="no-show" element={<NoShowOrders />} />
         </Route>
       </Routes>
     </Router>

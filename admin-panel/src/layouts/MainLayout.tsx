@@ -15,6 +15,7 @@ import {
   PhoneOutlined,
   EnvironmentOutlined,
   QuestionCircleOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -58,6 +59,11 @@ const MainLayout: React.FC = () => {
       key: '/orders',
       icon: <ShoppingCartOutlined />,
       label: '訂單管理',
+    },
+    {
+      key: '/no-show',
+      icon: <ExclamationCircleOutlined />,
+      label: '客人未到',
     },
     {
       key: '/analytics',

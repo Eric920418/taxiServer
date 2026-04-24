@@ -83,6 +83,11 @@ router.get('/config', (req, res) => {
  * POST /api/line/liff/create-order
  * 從 LIFF 地圖頁面建立訂單
  */
+// LIFF 允許的付款 / 補貼組合
+const ALLOWED_PAYMENT_TYPES = ['CASH', 'LOVE_CARD_PHYSICAL', 'OTHER'];
+const ALLOWED_SUBSIDY_TYPES = ['NONE', 'SENIOR_CARD', 'LOVE_CARD'];
+const MAX_NOTES_LENGTH = 200;
+
 router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Response) => {
   const userId = req.lineUserId!;
   const displayName = req.lineDisplayName!;
@@ -90,12 +95,22 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     pickupLat, pickupLng, pickupAddress,
     destLat, destLng, destAddress,
     mode, scheduledAt,
+    paymentType: rawPaymentType,
+    subsidyType: rawSubsidyType,
+    notes: rawNotes,
   } = req.body;
 
   if (!pickupLat || !pickupLng) {
     res.status(400).json({ error: '缺少上車地點座標' });
     return;
   }
+
+  // 驗證付款/補貼類型（白名單，防呆）
+  const paymentType = ALLOWED_PAYMENT_TYPES.includes(rawPaymentType) ? rawPaymentType : 'CASH';
+  const subsidyType = ALLOWED_SUBSIDY_TYPES.includes(rawSubsidyType) ? rawSubsidyType : 'NONE';
+  const notes = typeof rawNotes === 'string' && rawNotes.trim()
+    ? rawNotes.trim().substring(0, MAX_NOTES_LENGTH)
+    : null;
 
   // 段數正規化：1段→一段
   const normalizedPickupAddress = pickupAddress ? hualienAddressDB.cleanupDisplay(pickupAddress) : pickupAddress;
@@ -127,34 +142,35 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     const orderId = `ORD${Date.now()}`;
     const now = new Date();
     const isScheduled = mode === 'reserve' && scheduledAt;
+    const status = isScheduled ? 'WAITING' : 'OFFERED';
 
+    // 統一 INSERT（不再依 isScheduled 拼字串，改為欄位都一致，scheduled_at 可 null）
     await pool.query(`
       INSERT INTO orders (
         order_id, passenger_id, status,
         pickup_lat, pickup_lng, pickup_address,
         dest_lat, dest_lng, dest_address,
-        payment_type,
-        created_at, ${isScheduled ? '' : 'offered_at,'}
+        payment_type, subsidy_type, notes,
+        created_at, offered_at,
         hour_of_day, day_of_week,
-        source, line_user_id
-        ${isScheduled ? ', scheduled_at' : ''}
+        source, line_user_id, scheduled_at
       ) VALUES (
-        $1, $2, ${isScheduled ? "'WAITING'" : "'OFFERED'"},
-        $3, $4, $5,
-        $6, $7, $8,
-        'CASH',
-        CURRENT_TIMESTAMP, ${isScheduled ? '' : 'CURRENT_TIMESTAMP,'}
-        $9, $10,
-        'LINE', $11
-        ${isScheduled ? ', $12' : ''}
+        $1, $2, $3,
+        $4, $5, $6,
+        $7, $8, $9,
+        $10, $11, $12,
+        CURRENT_TIMESTAMP, $13,
+        $14, $15,
+        'LINE', $16, $17
       )
     `, [
-      orderId, passengerId,
+      orderId, passengerId, status,
       pickupLat, pickupLng, normalizedPickupAddress || `${pickupLat}, ${pickupLng}`,
       destLat || null, destLng || null, normalizedDestAddress || null,
+      paymentType, subsidyType, notes,
+      isScheduled ? null : new Date(), // offered_at：預約單先 null，到時間才派單
       now.getHours(), now.getDay(),
-      userId,
-      ...(isScheduled ? [scheduledAt] : []),
+      userId, isScheduled ? scheduledAt : null,
     ]);
 
     // 更新 LINE 使用者統計

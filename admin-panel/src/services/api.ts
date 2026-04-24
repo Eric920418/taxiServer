@@ -181,6 +181,33 @@ export const orderAPI = {
   },
 };
 
+// No-Show 訂單 API（直接走 /api/orders/no-show，不需 admin 前綴）
+export const noShowAPI = {
+  getList: async (days = 30, limit = 100, offset = 0) => {
+    const response = await api.get('/orders/no-show', {
+      params: { days, limit, offset },
+    });
+    return response.data as {
+      total: number;
+      orders: Array<{
+        orderId: string;
+        passengerId: string;
+        passengerName: string;
+        passengerPhone: string;
+        passengerNoShowTotal: number;
+        driverId: string;
+        driverName: string;
+        driverPlate: string;
+        pickupAddress: string;
+        source: string;
+        cancelledAt: string;
+        cancelReason: string;
+        penaltyFare: number;
+      }>;
+    };
+  },
+};
+
 // 統計數據 API
 export const statisticsAPI = {
   getDashboardStats: async (): Promise<ApiResponse<Statistics>> => {

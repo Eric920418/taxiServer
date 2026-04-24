@@ -50,6 +50,33 @@
       <input type="datetime-local" id="scheduledAt">
     </div>
 
+    <!-- 付款方式 -->
+    <div class="option-section">
+      <label class="section-label">付款方式</label>
+      <div class="radio-group" id="paymentGroup">
+        <label class="radio-option selected">
+          <input type="radio" name="payment" value="CASH" checked>
+          <span>現金</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="payment" value="LOVE_CARD_PHYSICAL">
+          <span>愛心卡</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="payment" value="SENIOR_CARD">
+          <span>敬老卡</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- 備註 -->
+    <div class="option-section">
+      <label class="section-label">備註（選填）</label>
+      <textarea id="notesInput" placeholder="例：老人家腳不方便請多等一下 / 有行李箱 / 大狗同行"
+                maxlength="200" rows="2" class="notes-textarea"></textarea>
+      <div class="notes-counter"><span id="notesCount">0</span>/200</div>
+    </div>
+
     <!-- 按鈕 -->
     <div class="btn-group">
       <button class="btn btn-secondary" onclick="handleSkipDest()" id="skipDestBtn">不指定目的地</button>
@@ -113,6 +140,23 @@
       } catch (e) {
         console.error('LIFF init failed:', e);
         showToast('LIFF 初始化失敗：' + (e.message || e));
+      }
+
+      // 付款方式 radio 視覺更新
+      document.querySelectorAll('input[name="payment"]').forEach(input => {
+        input.addEventListener('change', () => {
+          document.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
+          input.closest('.radio-option').classList.add('selected');
+        });
+      });
+
+      // 備註字數計數
+      const notesInput = document.getElementById('notesInput');
+      const notesCount = document.getElementById('notesCount');
+      if (notesInput && notesCount) {
+        notesInput.addEventListener('input', () => {
+          notesCount.textContent = notesInput.value.length;
+        });
       }
 
       // 取得後端配置
@@ -290,6 +334,19 @@
       btn.disabled = true;
       btn.textContent = '處理中...';
 
+      // 讀取付款方式（SENIOR_CARD/LOVE_CARD_PHYSICAL 轉成後端 subsidy 欄位）
+      const paymentValue = document.querySelector('input[name="payment"]:checked')?.value || 'CASH';
+      let paymentType = 'CASH';
+      let subsidyType = 'NONE';
+      if (paymentValue === 'LOVE_CARD_PHYSICAL') {
+        paymentType = 'LOVE_CARD_PHYSICAL';
+        subsidyType = 'LOVE_CARD';
+      } else if (paymentValue === 'SENIOR_CARD') {
+        paymentType = 'CASH'; // 敬老卡仍收現金，只是有補貼
+        subsidyType = 'SENIOR_CARD';
+      }
+      const notes = document.getElementById('notesInput')?.value?.trim() || undefined;
+
       const body = {
         pickupLat: pickupData.lat,
         pickupLng: pickupData.lng,
@@ -298,6 +355,9 @@
         destLng: destData.lng || undefined,
         destAddress: destData.address || undefined,
         mode,
+        paymentType,
+        subsidyType,
+        notes,
       };
 
       if (mode === 'reserve') {

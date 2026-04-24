@@ -737,20 +737,37 @@ router.post('/:orderId/notify-waiting', async (req, res) => {
  *
  * 使用時機：等候倒數結束，或司機手動放棄等候
  *
- * Body: { driverId: string, waitedMinutes?: number } — 司機實際等候了幾分鐘（供統計）
+ * Body:
+ *   - driverId: string          （必填）司機 ID
+ *   - waitedMinutes?: number    司機實際等候幾分鐘（供統計）
+ *   - penaltyFare?: number      no-show 罰金（元），預設 100
+ *
+ * 副作用：
+ *   - orders.status = CANCELLED, cancel_reason = '客人未到...', penalty_fare = N
+ *   - passengers.no_show_count += 1, last_no_show_at = NOW() （僅當 waitedMinutes >= 1）
+ *   - LINE 推播取消訊息（帶罰金額）
+ *   - WebSocket 通知乘客
  */
+const DEFAULT_NO_SHOW_PENALTY = 100;         // 預設罰金（元）
+const MIN_WAIT_MINUTES_TO_COUNT = 1;         // 等候少於此分鐘數不累計 no-show（避免誤觸）
+
 router.post('/:orderId/cancel-no-show', async (req, res) => {
   const { orderId } = req.params;
-  const { driverId, waitedMinutes } = req.body;
+  const { driverId, waitedMinutes, penaltyFare } = req.body;
 
   if (!driverId) {
     return res.status(400).json({ error: '缺少 driverId' });
   }
 
+  const waited = typeof waitedMinutes === 'number' ? waitedMinutes : 0;
+  const penalty = typeof penaltyFare === 'number' && penaltyFare >= 0
+    ? penaltyFare
+    : DEFAULT_NO_SHOW_PENALTY;
+
   try {
     // 只接受從 ARRIVED 狀態取消
     const existing = await queryOne(
-      'SELECT status, driver_id FROM orders WHERE order_id = $1',
+      'SELECT status, driver_id, passenger_id FROM orders WHERE order_id = $1',
       [orderId]
     );
     if (!existing) return res.status(404).json({ error: '訂單不存在' });
@@ -763,25 +780,37 @@ router.post('/:orderId/cancel-no-show', async (req, res) => {
       });
     }
 
-    const reason = waitedMinutes
-      ? `客人未到（司機等候 ${waitedMinutes} 分鐘）`
+    const reason = waited > 0
+      ? `客人未到（司機等候 ${waited} 分鐘）`
       : '客人未到';
 
     const result = await query(
       `UPDATE orders
        SET status = 'CANCELLED',
            cancelled_at = CURRENT_TIMESTAMP,
-           cancel_reason = $1
-       WHERE order_id = $2 AND status = 'ARRIVED'
+           cancel_reason = $1,
+           penalty_fare = $2
+       WHERE order_id = $3 AND status = 'ARRIVED'
        RETURNING *`,
-      [reason, orderId]
+      [reason, penalty, orderId]
     );
 
     if (result.rowCount === 0) {
       return res.status(409).json({ error: '訂單狀態已變更，無法取消' });
     }
 
-    console.log(`[Order NoShow] 訂單 ${orderId} 被司機 ${driverId} 標記為客人未到 (等候 ${waitedMinutes ?? '?'} 分鐘)`);
+    // 累積 no-show 統計（司機等候 >= 1 分鐘才算，避免司機手殘秒取消也計入）
+    if (waited >= MIN_WAIT_MINUTES_TO_COUNT) {
+      await query(
+        `UPDATE passengers
+         SET no_show_count = COALESCE(no_show_count, 0) + 1,
+             last_no_show_at = CURRENT_TIMESTAMP
+         WHERE passenger_id = $1`,
+        [existing.passenger_id]
+      );
+    }
+
+    console.log(`[Order NoShow] 訂單 ${orderId} 被司機 ${driverId} 標記為客人未到 (等候 ${waited} 分鐘，罰金 ${penalty} 元)`);
 
     // 通知乘客（WebSocket + LINE）
     const fullOrder = await queryOne(`
@@ -797,13 +826,17 @@ router.post('/:orderId/cancel-no-show', async (req, res) => {
       orderId,
       status: 'CANCELLED',
       cancelReason: reason,
+      penaltyFare: penalty,
     });
 
-    // LINE 推播（orderCancelledCard，附帶友善的取消原因）
+    // LINE 推播（orderCancelledCard，附帶友善的取消原因 + 罰金）
     const lineNotifier = getLineNotifier();
     if (lineNotifier) {
+      const reasonForLine = penalty > 0
+        ? `因您未準時到達上車點，訂單已取消。根據規定需收取 NT$${penalty} 違約金。`
+        : '因您未準時到達上車點，訂單已取消';
       lineNotifier.notifyOrderStatusChange(orderId, 'CANCELLED', {
-        reason: '因您未準時到達上車點，訂單已取消',
+        reason: reasonForLine,
       }).catch(err => console.error('[NoShow] LINE 推播失敗:', err));
     }
 
@@ -819,9 +852,68 @@ router.post('/:orderId/cancel-no-show', async (req, res) => {
       orderId,
       status: 'CANCELLED',
       cancelReason: reason,
+      penaltyFare: penalty,
+      waitedMinutes: waited,
     });
   } catch (error) {
     console.error('[Cancel NoShow] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * no-show 訂單清單（Admin Panel 用）
+ * GET /api/orders/no-show?days=30&limit=100&offset=0
+ *
+ * 回傳近 N 天內因客人未到而取消的訂單
+ */
+router.get('/no-show', async (req, res) => {
+  const days = parseInt(req.query.days as string) || 30;
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+  const offset = parseInt(req.query.offset as string) || 0;
+
+  try {
+    const rows = await queryMany(`
+      SELECT o.order_id, o.passenger_id, o.driver_id, o.pickup_address,
+             o.cancelled_at, o.cancel_reason, o.penalty_fare, o.source,
+             p.name AS passenger_name, p.phone AS passenger_phone,
+             p.no_show_count AS passenger_no_show_total,
+             d.name AS driver_name, d.plate AS driver_plate
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.cancel_reason LIKE '客人未到%'
+        AND o.cancelled_at > NOW() - ($1::text || ' days')::interval
+      ORDER BY o.cancelled_at DESC
+      LIMIT $2 OFFSET $3
+    `, [String(days), limit, offset]);
+
+    const countRow = await queryOne(`
+      SELECT COUNT(*)::text AS total FROM orders
+      WHERE cancel_reason LIKE '客人未到%'
+        AND cancelled_at > NOW() - ($1::text || ' days')::interval
+    `, [String(days)]);
+
+    res.json({
+      total: parseInt(countRow?.total || '0'),
+      orders: rows.map(r => ({
+        orderId: r.order_id,
+        passengerId: r.passenger_id,
+        passengerName: r.passenger_name,
+        passengerPhone: r.passenger_phone,
+        passengerNoShowTotal: r.passenger_no_show_total ?? 0,
+        driverId: r.driver_id,
+        driverName: r.driver_name,
+        driverPlate: r.driver_plate,
+        pickupAddress: r.pickup_address,
+        source: r.source || 'APP',
+        cancelledAt: r.cancelled_at,
+        cancelReason: r.cancel_reason,
+        penaltyFare: r.penalty_fare || 0,
+      })),
+    });
+  } catch (error) {
+    console.error('[No-Show List] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
