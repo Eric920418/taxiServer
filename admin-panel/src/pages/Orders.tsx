@@ -338,7 +338,7 @@ const Orders: React.FC = () => {
       <Drawer
         title="訂單詳細資料"
         width={700}
-        visible={isDrawerVisible}
+        open={isDrawerVisible}
         onClose={() => setIsDrawerVisible(false)}
       >
         {selectedOrder && (
@@ -427,7 +427,7 @@ const Orders: React.FC = () => {
       {/* 糾紛處理 Modal */}
       <Modal
         title="處理訂單糾紛"
-        visible={isDisputeModalVisible}
+        open={isDisputeModalVisible}
         onOk={handleDisputeSubmit}
         onCancel={() => {
           setIsDisputeModalVisible(false);
