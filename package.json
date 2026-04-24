@@ -24,7 +24,6 @@
     "@types/bcryptjs": "^3.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.3",
-    "bull": "^4.16.5",
     "bullmq": "^5.76.1",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
