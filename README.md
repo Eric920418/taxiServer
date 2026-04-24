@@ -4,7 +4,84 @@
 > 版本：v1.7.0-MVP
 > 更新日期：2026-04-24
 
-## 📝 最新修改（2026-04-24）- 防護網雙層 + Bull → BullMQ 遷移 + dead code 清理
+## 📝 最新修改（2026-04-24）- PR1 客人反向通知基礎建設（尚未接入流程）
+
+### 解決的問題（規劃中）
+電話叫車 / LINE 叫車的客人目前**完全收不到主動通知**：
+- 長輩打電話叫車後不確定有沒有叫到車，會重複打第二通第三通佔用客服線
+- 司機到達上車點時客人沒下樓 → 平均多等 2-4 分鐘、車隊週轉率下降
+- 派單無車可接時客人呆等 → 產生客訴
+
+`LineNotifier.notifyOrderStatusChange()` 已寫好（handles ACCEPTED / DONE / CANCELLED），
+但**接單 / 抵達 / 失敗這三個時機都沒有人呼叫它**；SMS 通道則完全未建置。
+
+### 本次改動（PR1 — 基礎建設，零行為變化）
+新增通知分派所需的 **資料表 / SMS 服務類別 / 環境變數**，但**尚未接入任何現有流程**，
+因此部署後不會有任何對外通知發送。接入流程於 PR2 完成。
+
+### 影響檔案
+- `src/db/migrations/012-customer-notifications.sql` — 新增
+  - `orders` 表：`notification_channel` / `line_notification_sent_at` / `sms_sent_at` 三欄（冪等 ALTER）
+  - 新建 `customer_notifications` 表（通知歷史，含 order_id / event / status / error_code 等，
+    遵守「錯誤完整顯示」原則，ON DELETE CASCADE 到 orders）
+  - 4 個索引（order_id、status+event、sent_at、dedupe 用 order_id+event+status）
+- `src/services/SmsNotifier.ts` — 新增
+  - 串三竹 Mitake HTTP API（純文字回應，內建 statuscode 對照表）
+  - Node 18+ 內建 `fetch` + `AbortController` 實作 10 秒 timeout（不裝 axios）
+  - in-memory rate limit（每手機每小時 3 則，多節點部署再升級 Redis）
+  - `normalizeTaiwanMobile()` 支援格式：`0912345678` / `0912-345-678` / `0912 345 678`
+    / `(0912)345-678` / `+886912345678` / `886912345678`；市話、缺 0、位數錯誤回 `null`
+    （此函式標註為 **決策點 C**，可依實際客人輸入習慣擴充）
+  - 單例管理 `initSmsNotifier()` / `getSmsNotifier()`（與 `LineNotifier` 風格一致）
+- `scripts/test-sms-notifier.ts` — 新增
+  - 本地測試 `normalizeTaiwanMobile` 13 個 case（無需 API）
+  - 三竹**測試端點**（`SmSendGetSim.asp`，不扣費）整合測試
+  - 格式錯誤不扣 rate limit 額度驗證
+  - `FORCE_REAL_SEND=1` 防呆：發現正式端點 URL 時要求額外旗標才送
+- `.env.example` — 新增
+  - `MITAKE_SMS_USERNAME` / `MITAKE_SMS_PASSWORD` / `MITAKE_SMS_API_URL`
+  - `CUSTOMER_SERVICE_PHONE`（通知訊息變數）
+  - `CUSTOMER_NOTIFICATION_ENABLED=false`（feature flag，PR2 生效，秒級可關）
+  - `TEST_PHONE` / `FORCE_REAL_SEND` 測試變數
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install
+# 執行 migration
+sudo -u postgres psql -d hualien_taxi -f src/db/migrations/012-customer-notifications.sql
+pnpm build
+pm2 restart taxiserver
+# 確認無錯誤
+pm2 logs taxiserver --lines 30
+```
+
+### 驗證
+```bash
+# 1. Migration 冪等測試（可重複執行不報錯）
+sudo -u postgres psql -d hualien_taxi -f src/db/migrations/012-customer-notifications.sql
+
+# 2. 表結構確認
+sudo -u postgres psql -d hualien_taxi -c "\d customer_notifications"
+sudo -u postgres psql -d hualien_taxi -c "\d orders" | grep -E "notification_channel|line_notification|sms_sent"
+
+# 3. SmsNotifier 本地邏輯測試（無需三竹帳號）
+pnpm ts-node scripts/test-sms-notifier.ts
+# 預期：normalizeTaiwanMobile 13 個 case 全 pass，三竹 API 測試跳過（無帳號）
+
+# 4. 申請三竹帳號後於 .env 填入 username/password 並再跑一次測試腳本
+```
+
+### 注意
+- 本 PR **不接入任何現有流程**：`SmartDispatcherV2` / `orders.ts` 完全未動
+- `CUSTOMER_NOTIFICATION_ENABLED` 預設為 `false`，PR2 部署時保持 `false` 驗證後再切 `true`
+- 三竹帳號申請：https://sms.mitake.com.tw/ （企業方案每則 NT$0.7，月結）
+- 三個業務決策點（通知文案、LINE 失敗降級策略、手機格式擴充）留至 PR2 實作
+
+---
+
+## 📝 歷史修改（2026-04-24）- 防護網雙層 + Bull → BullMQ 遷移 + dead code 清理
 
 ### 解決的問題
 - pm2 觀察到 7 小時內重啟 48 次 — 多數是 **Bull queue 內部 floating promise rejection**：
