@@ -29,7 +29,9 @@ export interface Driver {
   status: 'AVAILABLE' | 'REST' | 'ON_TRIP' | 'OFFLINE' | 'available' | 'busy' | 'offline' | 'blocked';
   // 管理員設定的帳號狀態
   accountStatus?: 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'ARCHIVED';
-  driverType?: 'HIGH_VOLUME' | 'REGULAR' | 'PART_TIME' | 'CONTRACT';
+  // 2026-04 改版：HIGH_VOLUME→FULL_TIME、CONTRACT→COOPERATIVE、新增 SPECIAL
+  driverType?: 'FULL_TIME' | 'REGULAR' | 'PART_TIME' | 'COOPERATIVE' | 'SPECIAL'
+             | 'HIGH_VOLUME' | 'CONTRACT'; // 舊值保留為向後相容（migration 014 後 DB 不再有）
   teamId?: number | null;
   teamName?: string | null;
   acceptedOrderTypes?: string[];
@@ -52,6 +54,21 @@ export interface Driver {
     insurance?: string;
     registration?: string;
   };
+  // === 2026-04 Phase 1 擴充欄位（migration 014） ===
+  registrationReviewDate?: string | null;     // YYYY-MM-DD
+  licenseReviewDate?: string | null;
+  compulsoryInsuranceExpiry?: string | null;
+  voluntaryInsuranceExpiry?: string | null;
+  licensePhoto?: string | null;               // base64 data URI
+  vehicleRegistrationPhoto?: string | null;
+  contractPhoto?: string | null;
+  shifts?: Array<{
+    shift_type: 'MORNING' | 'AFTERNOON' | 'EVENING' | 'NIGHT';
+    start: string;     // HH:MM
+    end: string;
+    is_active: boolean;
+  }>;
+  vehicleCapacity?: 'CAPACITY_4' | 'CAPACITY_5' | 'CAPACITY_6' | 'CAPACITY_8' | 'WHEELCHAIR_VEHICLE' | null;
 }
 
 // 乘客相關類型

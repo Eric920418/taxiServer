@@ -97,10 +97,15 @@ export const ORDER_TYPES = [
     'CREDIT_CARD', // 刷卡單
     'SENIOR_CARD', // 敬老卡
     'LOVE_CARD', // 愛心卡
-    'WHEELCHAIR', // 輪椅單
-    'PET', // 寵物單
+    'WHEELCHAIR', // 輪椅單（保留：固定/不分類型輪椅）
+    'FOLDING_WHEELCHAIR', // 折疊輪椅單（2026-04 新增）
+    'PET', // 寵物單（保留：不分籠廣義）
+    'PET_CAGED', // 寵物有籠單（2026-04 新增）
+    'PET_UNCAGED', // 寵物無籠單（2026-04 新增）
     'LONG_DISTANCE', // 長途單
+    'SHORT_TRIP', // 短途單（2026-04 新增）
     'NIGHT', // 夜間單
+    'BICYCLE', // 腳踏車單（2026-04 新增）
 ] as const;
 export type OrderType = typeof ORDER_TYPES[number];
 
@@ -111,17 +116,34 @@ export const ORDER_TYPE_LABELS: Record<OrderType, string> = {
     SENIOR_CARD: '敬老卡',
     LOVE_CARD: '愛心卡',
     WHEELCHAIR: '輪椅單',
+    FOLDING_WHEELCHAIR: '折疊輪椅單',
     PET: '寵物單',
+    PET_CAGED: '寵物有籠單',
+    PET_UNCAGED: '寵物無籠單',
     LONG_DISTANCE: '長途單',
+    SHORT_TRIP: '短途單',
     NIGHT: '夜間單',
+    BICYCLE: '腳踏車單',
 };
 
 /**
  * 可接受回饋金折減級距 enum（新台幣元）
  * 司機多選：能接受哪些價位級距的單
+ *
+ * 2026-04 改版：5/15 移除，新增 40/50；0 元語意改為「外調車輛」（車隊忙線時可調的排班車）
+ * 舊資料 5→10、15→20 由 migration 014 自動轉換
  */
-export const REBATE_LEVELS = [0, 5, 10, 15, 20, 30] as const;
+export const REBATE_LEVELS = [0, 10, 20, 30, 40, 50] as const;
 export type RebateLevel = typeof REBATE_LEVELS[number];
+
+export const REBATE_LEVEL_LABELS: Record<number, string> = {
+    0: '外調車輛（車隊忙線可調）',
+    10: '10 元',
+    20: '20 元',
+    30: '30 元',
+    40: '40 元',
+    50: '50 元',
+};
 
 /** 帳號狀態（管理員設定，與 availability runtime 狀態分離） */
 export const ACCOUNT_STATUSES = ['ACTIVE', 'SUSPENDED', 'PENDING', 'ARCHIVED'] as const;
@@ -134,16 +156,103 @@ export const ACCOUNT_STATUS_LABELS: Record<AccountStatus, string> = {
     ARCHIVED: '封存',
 };
 
-/** 司機類型 */
-export const DRIVER_TYPES = ['HIGH_VOLUME', 'REGULAR', 'PART_TIME', 'CONTRACT'] as const;
+/**
+ * 司機類型
+ *
+ * 2026-04 改版：HIGH_VOLUME → FULL_TIME（全職）、CONTRACT → COOPERATIVE（合作）、新增 SPECIAL（特約）
+ * 舊資料由 migration 014 自動轉換
+ *
+ * 業務語意：
+ *   FULL_TIME    全職司機（核心派單對象）
+ *   REGULAR      一般司機（彈性接單）
+ *   PART_TIME    兼職司機
+ *   COOPERATIVE  合作司機（外部車行合作）
+ *   SPECIAL      特約司機（可接預約單，需設班次）
+ */
+export const DRIVER_TYPES = ['FULL_TIME', 'REGULAR', 'PART_TIME', 'COOPERATIVE', 'SPECIAL'] as const;
 export type DriverType = typeof DRIVER_TYPES[number];
 
 export const DRIVER_TYPE_LABELS: Record<DriverType, string> = {
-    HIGH_VOLUME: '高量司機',
+    FULL_TIME: '全職司機',
     REGULAR: '一般司機',
     PART_TIME: '兼職司機',
-    CONTRACT: '合約司機',
+    COOPERATIVE: '合作司機',
+    SPECIAL: '特約司機',
 };
+
+/**
+ * 車型乘客容量（司機端設、乘客端可指定偏好）
+ * 2026-04 新增
+ */
+export const VEHICLE_CAPACITIES = [
+    'CAPACITY_4',          // 四人內
+    'CAPACITY_5',          // 五人內
+    'CAPACITY_6',          // 六人
+    'CAPACITY_8',          // 八人
+    'WHEELCHAIR_VEHICLE',  // 無障礙
+] as const;
+export type VehicleCapacity = typeof VEHICLE_CAPACITIES[number];
+
+export const VEHICLE_CAPACITY_LABELS: Record<VehicleCapacity, string> = {
+    CAPACITY_4: '四人內',
+    CAPACITY_5: '五人內',
+    CAPACITY_6: '六人',
+    CAPACITY_8: '八人',
+    WHEELCHAIR_VEHICLE: '無障礙',
+};
+
+/**
+ * 司機班次（2026-04 新增）
+ * 所有司機均可設定，但派單篩選時僅 SPECIAL 司機強制檢查
+ */
+export const SHIFT_TYPES = ['MORNING', 'AFTERNOON', 'EVENING', 'NIGHT'] as const;
+export type ShiftType = typeof SHIFT_TYPES[number];
+
+export const SHIFT_TYPE_LABELS: Record<ShiftType, string> = {
+    MORNING: '早班',
+    AFTERNOON: '中班',
+    EVENING: '晚班',
+    NIGHT: '夜班',
+};
+
+/**
+ * 班次配置 — 存於 drivers.shifts JSONB 欄位的單一 element 結構
+ */
+export interface ShiftSlot {
+    shift_type: ShiftType;
+    start: string; // HH:MM
+    end: string;   // HH:MM
+    is_active: boolean;
+}
+
+/**
+ * 驗證 shifts JSONB 結構：必須是 array 且每個 element 結構正確
+ */
+export function validateShifts(shifts: unknown): { ok: true; value: ShiftSlot[] } | { ok: false; error: string } {
+    if (shifts === null || shifts === undefined) return { ok: true, value: [] };
+    if (!Array.isArray(shifts)) return { ok: false, error: 'shifts 必須為陣列' };
+
+    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+    for (const [i, s] of shifts.entries()) {
+        if (typeof s !== 'object' || s === null) {
+            return { ok: false, error: `shifts[${i}] 必須為物件` };
+        }
+        const slot = s as Partial<ShiftSlot>;
+        if (!slot.shift_type || !(SHIFT_TYPES as readonly string[]).includes(slot.shift_type)) {
+            return { ok: false, error: `shifts[${i}].shift_type 不在允許範圍：${SHIFT_TYPES.join(', ')}` };
+        }
+        if (typeof slot.start !== 'string' || !timeRegex.test(slot.start)) {
+            return { ok: false, error: `shifts[${i}].start 格式必須為 HH:MM` };
+        }
+        if (typeof slot.end !== 'string' || !timeRegex.test(slot.end)) {
+            return { ok: false, error: `shifts[${i}].end 格式必須為 HH:MM` };
+        }
+        if (typeof slot.is_active !== 'boolean') {
+            return { ok: false, error: `shifts[${i}].is_active 必須為布林` };
+        }
+    }
+    return { ok: true, value: shifts as ShiftSlot[] };
+}
 
 /** 車色選項 */
 export const CAR_COLORS = ['白', '黑', '銀', '灰', '紅', '藍', '綠', '黃', '橙', '紫', '棕', '其他'] as const;

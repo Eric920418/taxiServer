@@ -7,10 +7,12 @@ import {
     validateTaiwanPhone,
     validatePlate,
     validateEnumArray,
+    validateShifts,
     ORDER_TYPES,
     REBATE_LEVELS,
     ACCOUNT_STATUSES,
     DRIVER_TYPES,
+    VEHICLE_CAPACITIES,
 } from '../utils/validators';
 
 const router = Router();
@@ -431,7 +433,17 @@ async function fetchDriverById(driverId: string): Promise<any | null> {
       d.last_heartbeat as "lastLocationUpdate",
       d.created_at as "createdAt",
       d.last_heartbeat as "lastActive",
-      d.firebase_uid as "firebaseUid"
+      d.firebase_uid as "firebaseUid",
+      -- Phase 1 擴充欄位（migration 014）
+      d.registration_review_date as "registrationReviewDate",
+      d.license_review_date as "licenseReviewDate",
+      d.compulsory_insurance_expiry as "compulsoryInsuranceExpiry",
+      d.voluntary_insurance_expiry as "voluntaryInsuranceExpiry",
+      d.license_photo as "licensePhoto",
+      d.vehicle_registration_photo as "vehicleRegistrationPhoto",
+      d.contract_photo as "contractPhoto",
+      d.shifts as "shifts",
+      d.vehicle_capacity as "vehicleCapacity"
     FROM drivers d
     LEFT JOIN teams t ON t.team_id = d.team_id
     WHERE d.driver_id = $1`,
@@ -446,6 +458,7 @@ async function fetchDriverById(driverId: string): Promise<any | null> {
     totalEarnings: driver.totalEarnings != null ? parseFloat(driver.totalEarnings) : 0,
     acceptedRebateLevels: Array.isArray(driver.acceptedRebateLevels) ? driver.acceptedRebateLevels : [],
     acceptedOrderTypes: Array.isArray(driver.acceptedOrderTypes) ? driver.acceptedOrderTypes : [],
+    shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
     location: (driver.latitude && driver.longitude) ? {
       latitude: driver.latitude,
       longitude: driver.longitude,
@@ -502,6 +515,16 @@ router.post('/drivers', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, A
       acceptedOrderTypes,
       acceptedRebateLevels,
       note,
+      // Phase 1 擴充欄位（migration 014）
+      registrationReviewDate,
+      licenseReviewDate,
+      compulsoryInsuranceExpiry,
+      voluntaryInsuranceExpiry,
+      licensePhoto,
+      vehicleRegistrationPhoto,
+      contractPhoto,
+      shifts,
+      vehicleCapacity,
     } = req.body;
 
     try {
@@ -543,6 +566,15 @@ router.post('/drivers', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, A
         return res.status(400).json({ success: false, error: rebateLevelsCheck.reason });
       }
 
+      // Phase 1 新增：vehicleCapacity / shifts 驗證
+      if (vehicleCapacity && !(VEHICLE_CAPACITIES as readonly string[]).includes(vehicleCapacity)) {
+        return res.status(400).json({ success: false, error: `vehicleCapacity 不在允許範圍：${VEHICLE_CAPACITIES.join(', ')}` });
+      }
+      if (shifts !== undefined && shifts !== null) {
+        const sc = validateShifts(shifts);
+        if (!sc.ok) return res.status(400).json({ success: false, error: sc.error });
+      }
+
       // 5) 手機號碼重複檢查
       const existingByPhone = await queryOne(
         'SELECT driver_id FROM drivers WHERE phone = $1',
@@ -575,8 +607,12 @@ router.post('/drivers', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, A
         `INSERT INTO drivers (
           driver_id, name, phone, plate, car_model, car_color, license_number,
           team_id, driver_type, account_status, accepted_order_types, accepted_rebate_levels, note,
+          registration_review_date, license_review_date, compulsory_insurance_expiry, voluntary_insurance_expiry,
+          license_photo, vehicle_registration_photo, contract_photo,
+          shifts, vehicle_capacity,
           availability
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'OFFLINE') RETURNING *`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                  $14, $15, $16, $17, $18, $19, $20, $21, $22, 'OFFLINE') RETURNING *`,
         [
           driverId,
           name,
@@ -586,36 +622,30 @@ router.post('/drivers', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, A
           carColor,
           licenseNumber || null,
           teamId ?? null,
-          driverType || 'HIGH_VOLUME',
+          driverType || 'FULL_TIME',
           accountStatus || 'ACTIVE',
           acceptedOrderTypes ?? [],
           acceptedRebateLevels ?? [],
           note || null,
+          registrationReviewDate || null,
+          licenseReviewDate || null,
+          compulsoryInsuranceExpiry || null,
+          voluntaryInsuranceExpiry || null,
+          licensePhoto || null,
+          vehicleRegistrationPhoto || null,
+          contractPhoto || null,
+          JSON.stringify(shifts ?? []),
+          vehicleCapacity || null,
         ]
       );
 
       console.log(`[Admin API] New driver created: ${driverId} by admin ${req.admin!.username}`);
 
-      const row = result.rows[0];
+      // 用 fetchDriverById 統一回傳格式（與 GET / PUT 一致，含 Phase 1 新欄位）
+      const fullDriver = await fetchDriverById(driverId);
       res.json({
         success: true,
-        data: {
-          driverId: row.driver_id,
-          name: row.name,
-          phoneNumber: row.phone,
-          carPlate: row.plate,
-          carModel: row.car_model,
-          carColor: row.car_color,
-          licenseNumber: row.license_number,
-          teamId: row.team_id,
-          driverType: row.driver_type,
-          accountStatus: row.account_status,
-          acceptedOrderTypes: row.accepted_order_types || [],
-          acceptedRebateLevels: row.accepted_rebate_levels || [],
-          note: row.note,
-          status: row.availability,
-          createdAt: row.created_at
-        }
+        data: fullDriver,
       });
     } catch (error) {
       console.error('[Admin API] Create driver error:', error);
@@ -674,6 +704,24 @@ router.put('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER
         acceptedRebateLevels: 'accepted_rebate_levels',
         accepted_rebate_levels: 'accepted_rebate_levels',
         note: 'note',
+        // Phase 1 擴充欄位（migration 014）
+        registrationReviewDate: 'registration_review_date',
+        registration_review_date: 'registration_review_date',
+        licenseReviewDate: 'license_review_date',
+        license_review_date: 'license_review_date',
+        compulsoryInsuranceExpiry: 'compulsory_insurance_expiry',
+        compulsory_insurance_expiry: 'compulsory_insurance_expiry',
+        voluntaryInsuranceExpiry: 'voluntary_insurance_expiry',
+        voluntary_insurance_expiry: 'voluntary_insurance_expiry',
+        licensePhoto: 'license_photo',
+        license_photo: 'license_photo',
+        vehicleRegistrationPhoto: 'vehicle_registration_photo',
+        vehicle_registration_photo: 'vehicle_registration_photo',
+        contractPhoto: 'contract_photo',
+        contract_photo: 'contract_photo',
+        shifts: 'shifts',
+        vehicleCapacity: 'vehicle_capacity',
+        vehicle_capacity: 'vehicle_capacity',
       };
 
       const updateFields: string[] = [];
@@ -732,6 +780,19 @@ router.put('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER
         if (!team) return res.status(400).json({ success: false, error: '指定的車隊不存在或已停用' });
       }
 
+      // vehicleCapacity 白名單
+      if (updates.vehicleCapacity !== undefined && updates.vehicleCapacity !== null && updates.vehicleCapacity !== '') {
+        if (!(VEHICLE_CAPACITIES as readonly string[]).includes(updates.vehicleCapacity)) {
+          return res.status(400).json({ success: false, error: `vehicleCapacity 不在允許範圍：${VEHICLE_CAPACITIES.join(', ')}` });
+        }
+      }
+
+      // shifts 結構驗證（陣列 of {shift_type, start, end, is_active}）
+      if (updates.shifts !== undefined && updates.shifts !== null) {
+        const sc = validateShifts(updates.shifts);
+        if (!sc.ok) return res.status(400).json({ success: false, error: sc.error });
+      }
+
       // 構建 UPDATE SET
       const seenColumns = new Set<string>();
       for (const key of Object.keys(updates)) {
@@ -741,6 +802,19 @@ router.put('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER
         let value = updates[key];
         if (dbField === 'phone' && normalized.phone !== undefined) value = normalized.phone;
         if (dbField === 'plate' && normalized.plate !== undefined) value = normalized.plate;
+        // shifts 是 JSONB，需要 stringify（pg 套件對 JSONB 接受 string 或 object，但 string 較穩）
+        if (dbField === 'shifts') value = JSON.stringify(value ?? []);
+        // 空字串 DATE 視為 NULL（前端可能送空字串清除日期）
+        if (
+          (dbField === 'registration_review_date' ||
+           dbField === 'license_review_date' ||
+           dbField === 'compulsory_insurance_expiry' ||
+           dbField === 'voluntary_insurance_expiry' ||
+           dbField === 'vehicle_capacity') &&
+          (value === '' || value === undefined)
+        ) {
+          value = null;
+        }
 
         updateFields.push(`${dbField} = $${paramIndex}`);
         values.push(value);

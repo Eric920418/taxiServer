@@ -19,6 +19,11 @@ import {
   Col,
   Statistic,
   Divider,
+  DatePicker,
+  TimePicker,
+  Upload,
+  Switch,
+  Image,
 } from 'antd';
 import {
   PlusOutlined,
@@ -34,7 +39,11 @@ import {
   UserOutlined,
   TeamOutlined,
   DeleteOutlined,
+  UploadOutlined,
+  ClockCircleOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   fetchDrivers,
@@ -61,32 +70,53 @@ const ORDER_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'SENIOR_CARD', label: '敬老卡' },
   { value: 'LOVE_CARD', label: '愛心卡' },
   { value: 'WHEELCHAIR', label: '輪椅單' },
+  { value: 'FOLDING_WHEELCHAIR', label: '折疊輪椅單' },
   { value: 'PET', label: '寵物單' },
+  { value: 'PET_CAGED', label: '寵物有籠單' },
+  { value: 'PET_UNCAGED', label: '寵物無籠單' },
   { value: 'LONG_DISTANCE', label: '長途單' },
+  { value: 'SHORT_TRIP', label: '短途單' },
   { value: 'NIGHT', label: '夜間單' },
+  { value: 'BICYCLE', label: '腳踏車單' },
 ];
 const ORDER_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   ORDER_TYPE_OPTIONS.map((o) => [o.value, o.label])
 );
 
 const REBATE_LEVEL_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 0, label: '0 元（原價單）' },
-  { value: 5, label: '5 元' },
+  { value: 0, label: '外調車輛（車隊忙線可調）' },
   { value: 10, label: '10 元' },
-  { value: 15, label: '15 元' },
   { value: 20, label: '20 元' },
-  { value: 30, label: '30 元以上' },
+  { value: 30, label: '30 元' },
+  { value: 40, label: '40 元' },
+  { value: 50, label: '50 元' },
 ];
 
 const DRIVER_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'HIGH_VOLUME', label: '高量司機' },
+  { value: 'FULL_TIME', label: '全職司機' },
   { value: 'REGULAR', label: '一般司機' },
   { value: 'PART_TIME', label: '兼職司機' },
-  { value: 'CONTRACT', label: '合約司機' },
+  { value: 'COOPERATIVE', label: '合作司機' },
+  { value: 'SPECIAL', label: '特約司機（可接預約）' },
 ];
 const DRIVER_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   DRIVER_TYPE_OPTIONS.map((o) => [o.value, o.label])
 );
+
+const VEHICLE_CAPACITY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'CAPACITY_4', label: '四人內' },
+  { value: 'CAPACITY_5', label: '五人內' },
+  { value: 'CAPACITY_6', label: '六人' },
+  { value: 'CAPACITY_8', label: '八人' },
+  { value: 'WHEELCHAIR_VEHICLE', label: '無障礙' },
+];
+
+const SHIFT_TYPE_OPTIONS: Array<{ value: string; label: string; defaultStart: string; defaultEnd: string }> = [
+  { value: 'MORNING',   label: '早班', defaultStart: '06:00', defaultEnd: '12:00' },
+  { value: 'AFTERNOON', label: '中班', defaultStart: '12:00', defaultEnd: '18:00' },
+  { value: 'EVENING',   label: '晚班', defaultStart: '18:00', defaultEnd: '00:00' },
+  { value: 'NIGHT',     label: '夜班', defaultStart: '00:00', defaultEnd: '06:00' },
+];
 
 const ACCOUNT_STATUS_OPTIONS: Array<{ value: string; label: string; color: string }> = [
   { value: 'ACTIVE', label: '啟用', color: 'green' },
@@ -193,20 +223,28 @@ const Drivers: React.FC = () => {
     form.resetFields();
     // 新增時預設值
     form.setFieldsValue({
-      driverType: 'HIGH_VOLUME',
+      driverType: 'FULL_TIME',
       accountStatus: 'ACTIVE',
       acceptedOrderTypes: [],
       acceptedRebateLevels: [],
+      shifts: [],
     });
     setIsModalVisible(true);
   };
 
   const handleEditDriver = (driver: Driver) => {
     setEditingDriver(driver);
+    // dayjs 物件給 DatePicker 用；driver.* 是 ISO 字串
+    const toDayjs = (s?: string | null) => (s ? dayjs(s) : undefined);
     form.setFieldsValue({
       ...driver,
       acceptedOrderTypes: driver.acceptedOrderTypes ?? [],
       acceptedRebateLevels: driver.acceptedRebateLevels ?? [],
+      registrationReviewDate: toDayjs((driver as any).registrationReviewDate),
+      licenseReviewDate: toDayjs((driver as any).licenseReviewDate),
+      compulsoryInsuranceExpiry: toDayjs((driver as any).compulsoryInsuranceExpiry),
+      voluntaryInsuranceExpiry: toDayjs((driver as any).voluntaryInsuranceExpiry),
+      shifts: (driver as any).shifts ?? [],
     });
     setIsModalVisible(true);
   };
@@ -219,6 +257,22 @@ const Drivers: React.FC = () => {
   const handleModalOk = async () => {
     try {
       const values = await form.validateFields();
+
+      // dayjs 物件 → YYYY-MM-DD 字串（後端 DATE 欄位需要）
+      const dateFields = ['registrationReviewDate', 'licenseReviewDate', 'compulsoryInsuranceExpiry', 'voluntaryInsuranceExpiry'];
+      for (const f of dateFields) {
+        if (values[f] && typeof values[f].format === 'function') {
+          values[f] = values[f].format('YYYY-MM-DD');
+        } else if (values[f] === null || values[f] === undefined) {
+          values[f] = null;
+        }
+      }
+
+      // shifts: 過濾掉沒勾 is_active 的，存正規化結構
+      if (Array.isArray(values.shifts)) {
+        values.shifts = values.shifts.filter((s: any) => s && s.shift_type);
+      }
+
       if (editingDriver) {
         await dispatch(updateDriver({
           driverId: editingDriver.driver_id,
@@ -736,13 +790,84 @@ const Drivers: React.FC = () => {
             </Col>
           </Row>
 
-          <Form.Item
-            label="備註"
-            name="note"
-            style={{ marginBottom: 0 }}
-          >
+          <Form.Item label="備註" name="note">
             <TextArea rows={2} placeholder="司機備註（可多行）" />
           </Form.Item>
+
+          <Divider orientation="left" plain>
+            <Space><SafetyCertificateOutlined />證件日期 / 車型</Space>
+          </Divider>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="計程車登記證審驗日" name="registrationReviewDate">
+                <DatePicker style={{ width: '100%' }} placeholder="選擇日期" format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="駕照檢驗日" name="licenseReviewDate">
+                <DatePicker style={{ width: '100%' }} placeholder="選擇日期" format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="強制險到期日" name="compulsoryInsuranceExpiry">
+                <DatePicker style={{ width: '100%' }} placeholder="選擇日期" format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="任意險到期日" name="voluntaryInsuranceExpiry">
+                <DatePicker style={{ width: '100%' }} placeholder="選擇日期" format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item label="車型乘客容量" name="vehicleCapacity">
+            <Select placeholder="請選擇車型容量" allowClear>
+              {VEHICLE_CAPACITY_OPTIONS.map((o) => (
+                <Option key={o.value} value={o.value}>{o.label}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Divider orientation="left" plain>
+            <Space><ClockCircleOutlined />班次設定（特約司機可接預約單時段）</Space>
+          </Divider>
+
+          {/* 班次：固定 4 種，每行勾選 + 開始/結束時間 */}
+          <Form.List name="shifts" initialValue={[]}>
+            {(_fields, { add, remove }, _meta) => (
+              <ShiftsEditor
+                form={form}
+                onAdd={add}
+                onRemove={remove}
+              />
+            )}
+          </Form.List>
+
+          <Divider orientation="left" plain>
+            <Space><IdcardOutlined />證件照片（選填）</Space>
+          </Divider>
+
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item label="駕照照片" name="licensePhoto" valuePropName="value">
+                <PhotoUploadField label="駕照" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="行照照片" name="vehicleRegistrationPhoto" valuePropName="value">
+                <PhotoUploadField label="行照" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="合約書照片" name="contractPhoto" valuePropName="value">
+                <PhotoUploadField label="合約書" />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
 
@@ -833,6 +958,152 @@ const Drivers: React.FC = () => {
           </div>
         )}
       </Drawer>
+    </div>
+  );
+};
+
+/**
+ * 班次編輯器 — 4 種班次（早/中/晚/夜），每種可獨立勾選並設定起訖時間
+ *
+ * Form value: Array<{ shift_type, start, end, is_active }>
+ *
+ * 為什麼自訂而非用 Form.List：4 種班次數量固定，使用者只需勾選 + 設時段，
+ * 不需要動態增刪。用一個固定面板比 Form.List 的「按鈕新增 row」UX 好。
+ */
+const ShiftsEditor: React.FC<{
+  form: any;
+  onAdd: (item: any) => void;
+  onRemove: (idx: number) => void;
+}> = ({ form }) => {
+  // 直接讀寫 form.shifts 整個陣列，避免 Form.List 的 index 管理
+  const shifts: Array<{ shift_type: string; start: string; end: string; is_active: boolean }> =
+    Form.useWatch('shifts', form) || [];
+
+  const updateShift = (shiftType: string, patch: Partial<{ start: string; end: string; is_active: boolean }>) => {
+    const existing = shifts.find((s) => s.shift_type === shiftType);
+    let next: typeof shifts;
+    if (existing) {
+      next = shifts.map((s) => (s.shift_type === shiftType ? { ...s, ...patch } : s));
+    } else {
+      const def = SHIFT_TYPE_OPTIONS.find((o) => o.value === shiftType)!;
+      next = [
+        ...shifts,
+        {
+          shift_type: shiftType,
+          start: def.defaultStart,
+          end: def.defaultEnd,
+          is_active: true,
+          ...patch,
+        },
+      ];
+    }
+    form.setFieldsValue({ shifts: next });
+  };
+
+  return (
+    <div style={{ background: '#fafafa', padding: 12, borderRadius: 8 }}>
+      {SHIFT_TYPE_OPTIONS.map((opt) => {
+        const slot = shifts.find((s) => s.shift_type === opt.value);
+        const isActive = slot?.is_active ?? false;
+        const start = slot?.start ?? opt.defaultStart;
+        const end = slot?.end ?? opt.defaultEnd;
+        return (
+          <Row key={opt.value} gutter={12} align="middle" style={{ marginBottom: 8 }}>
+            <Col span={5}>
+              <Space>
+                <Switch
+                  checked={isActive}
+                  onChange={(checked) => updateShift(opt.value, { is_active: checked })}
+                />
+                <span style={{ fontWeight: 500 }}>{opt.label}</span>
+              </Space>
+            </Col>
+            <Col span={9}>
+              <TimePicker
+                value={dayjs(start, 'HH:mm')}
+                format="HH:mm"
+                minuteStep={15}
+                style={{ width: '100%' }}
+                placeholder="開始時間"
+                disabled={!isActive}
+                onChange={(v) => v && updateShift(opt.value, { start: v.format('HH:mm') })}
+              />
+            </Col>
+            <Col span={1} style={{ textAlign: 'center' }}>~</Col>
+            <Col span={9}>
+              <TimePicker
+                value={dayjs(end, 'HH:mm')}
+                format="HH:mm"
+                minuteStep={15}
+                style={{ width: '100%' }}
+                placeholder="結束時間"
+                disabled={!isActive}
+                onChange={(v) => v && updateShift(opt.value, { end: v.format('HH:mm') })}
+              />
+            </Col>
+          </Row>
+        );
+      })}
+    </div>
+  );
+};
+
+/**
+ * 證件照片上傳元件 — 接受 File，轉 base64，存入 Form value
+ *
+ * 為什麼用 base64 而非 multipart upload：
+ * - 司機數量小（< 1000 人）
+ * - 照片需求是「儲存 + 顯示」非高頻存取
+ * - 後端用 TEXT 欄位即可，省下 S3 / Storage 整合複雜度
+ * - 未來真有效能問題再 migrate
+ */
+const PhotoUploadField: React.FC<{
+  label: string;
+  value?: string;
+  onChange?: (v: string | null) => void;
+}> = ({ label, value, onChange }) => {
+  const handleBefore = (file: File) => {
+    // 驗證：< 2MB（限制 base64 size）
+    if (file.size > 2 * 1024 * 1024) {
+      Modal.warning({ title: '檔案過大', content: `${label}照片不可超過 2MB` });
+      return Upload.LIST_IGNORE;
+    }
+    const reader = new FileReader();
+    reader.onload = () => onChange?.(reader.result as string);
+    reader.readAsDataURL(file);
+    return false; // 阻止 antd 自動上傳
+  };
+
+  return (
+    <div>
+      {value ? (
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <Image
+            src={value}
+            alt={label}
+            width={120}
+            height={80}
+            style={{ objectFit: 'cover', borderRadius: 4 }}
+          />
+          <Button
+            size="small"
+            danger
+            type="text"
+            onClick={() => onChange?.(null)}
+            style={{ position: 'absolute', top: 0, right: 0 }}
+          >
+            清除
+          </Button>
+        </div>
+      ) : (
+        <Upload
+          beforeUpload={handleBefore}
+          showUploadList={false}
+          accept="image/*"
+        >
+          <Button icon={<UploadOutlined />}>上傳{label}</Button>
+        </Upload>
+      )}
     </div>
   );
 };
