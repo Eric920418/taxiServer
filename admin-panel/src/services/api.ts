@@ -114,6 +114,47 @@ export const teamsAPI = {
     const response = await api.get('/admin/teams');
     return response.data;
   },
+
+  // Phase 2：管理頁用，含停用 + driverCount
+  getAllTeams: async (): Promise<ApiResponse<Array<Team & { driverCount: number; createdAt: string }>>> => {
+    const response = await api.get('/admin/teams/all');
+    return response.data;
+  },
+
+  createTeam: async (payload: { name: string; note?: string }) => {
+    const response = await api.post('/admin/teams', payload);
+    return response.data;
+  },
+
+  updateTeam: async (teamId: number, payload: { name?: string; note?: string; isActive?: boolean }) => {
+    const response = await api.put(`/admin/teams/${teamId}`, payload);
+    return response.data;
+  },
+
+  deleteTeam: async (teamId: number) => {
+    const response = await api.delete(`/admin/teams/${teamId}`);
+    return response.data;
+  },
+};
+
+// 乘客黑名單 API（Phase 2）
+export const passengerBlacklistAPI = {
+  getBlacklisted: async () => {
+    const response = await api.get('/admin/passengers/blacklisted');
+    return response.data;
+  },
+  blacklist: async (passengerId: string, reason: string) => {
+    const response = await api.post(`/admin/passengers/${passengerId}/blacklist`, { reason });
+    return response.data;
+  },
+  unblacklist: async (passengerId: string) => {
+    const response = await api.post(`/admin/passengers/${passengerId}/unblacklist`);
+    return response.data;
+  },
+  getRecentOrders: async (passengerId: string, limit = 10) => {
+    const response = await api.get(`/admin/passengers/${passengerId}/recent-orders`, { params: { limit } });
+    return response.data;
+  },
 };
 
 // 乘客管理 API

@@ -18,6 +18,8 @@ import PhoneCalls from './pages/PhoneCalls';
 import Landmarks from './pages/Landmarks';
 import AddressFailures from './pages/AddressFailures';
 import NoShowOrders from './pages/NoShowOrders';
+import Teams from './pages/Teams';
+import Blacklist from './pages/Blacklist';
 import './App.css';
 
 // 私有路由組件
@@ -60,6 +62,8 @@ function AppContent() {
           <Route path="landmarks" element={<Landmarks />} />
           <Route path="address-failures" element={<AddressFailures />} />
           <Route path="no-show" element={<NoShowOrders />} />
+          <Route path="teams" element={<Teams />} />
+          <Route path="blacklist" element={<Blacklist />} />
         </Route>
       </Routes>
     </Router>

@@ -2635,4 +2635,298 @@ router.get('/teams', authenticateAdmin, async (_req: AuthenticatedRequest, res: 
   }
 });
 
+/**
+ * 取得所有車隊（含停用，附司機數量）— 車隊管理頁用
+ * GET /api/admin/teams/all
+ */
+router.get('/teams/all', authenticateAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { rows } = await query(
+      `SELECT t.team_id as "teamId", t.name, t.note, t.is_active as "isActive",
+              t.created_at as "createdAt",
+              COALESCE(d.driver_count, 0) as "driverCount"
+       FROM teams t
+       LEFT JOIN (
+         SELECT team_id, COUNT(*) as driver_count
+         FROM drivers
+         WHERE team_id IS NOT NULL
+         GROUP BY team_id
+       ) d ON d.team_id = t.team_id
+       ORDER BY t.is_active DESC, t.name`
+    );
+    res.json({
+      success: true,
+      data: rows.map((r: any) => ({
+        ...r,
+        driverCount: parseInt(r.driverCount) || 0,
+      })),
+    });
+  } catch (error) {
+    console.error('[Admin API] Get all teams error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * 新增車隊
+ * POST /api/admin/teams
+ * Body: { name, note? }
+ */
+router.post('/teams', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { name, note } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ success: false, error: '車隊名稱為必填' });
+    }
+    const trimmedName = name.trim();
+    if (trimmedName.length > 100) {
+      return res.status(400).json({ success: false, error: '車隊名稱不可超過 100 字' });
+    }
+    try {
+      const dup = await queryOne('SELECT team_id FROM teams WHERE name = $1', [trimmedName]);
+      if (dup) return res.status(409).json({ success: false, error: '此車隊名稱已存在' });
+
+      const result = await query(
+        `INSERT INTO teams (name, note, is_active) VALUES ($1, $2, true)
+         RETURNING team_id as "teamId", name, note, is_active as "isActive", created_at as "createdAt"`,
+        [trimmedName, note?.trim() || null]
+      );
+      console.log(`[Admin API] Team created: ${trimmedName} by admin ${req.admin!.username}`);
+      res.json({ success: true, data: { ...result.rows[0], driverCount: 0 } });
+    } catch (error) {
+      console.error('[Admin API] Create team error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+/**
+ * 編輯車隊
+ * PUT /api/admin/teams/:teamId
+ * Body: { name?, note?, isActive? }
+ */
+router.put('/teams/:teamId', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const teamId = parseInt(req.params.teamId);
+    const { name, note, isActive } = req.body;
+    if (Number.isNaN(teamId)) {
+      return res.status(400).json({ success: false, error: '無效的 team_id' });
+    }
+    try {
+      const existing = await queryOne('SELECT team_id, name FROM teams WHERE team_id = $1', [teamId]);
+      if (!existing) return res.status(404).json({ success: false, error: '車隊不存在' });
+
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (name !== undefined) {
+        const trimmed = String(name).trim();
+        if (!trimmed) return res.status(400).json({ success: false, error: '車隊名稱不可為空' });
+        if (trimmed.length > 100) return res.status(400).json({ success: false, error: '車隊名稱不可超過 100 字' });
+        if (trimmed !== existing.name) {
+          const dup = await queryOne('SELECT team_id FROM teams WHERE name = $1 AND team_id <> $2', [trimmed, teamId]);
+          if (dup) return res.status(409).json({ success: false, error: '此車隊名稱已被使用' });
+        }
+        fields.push(`name = $${idx++}`);
+        values.push(trimmed);
+      }
+
+      if (note !== undefined) {
+        fields.push(`note = $${idx++}`);
+        values.push(note?.trim() || null);
+      }
+
+      if (isActive !== undefined) {
+        fields.push(`is_active = $${idx++}`);
+        values.push(!!isActive);
+      }
+
+      if (fields.length === 0) {
+        return res.status(400).json({ success: false, error: '無更新欄位' });
+      }
+
+      values.push(teamId);
+      const result = await query(
+        `UPDATE teams SET ${fields.join(', ')} WHERE team_id = $${idx}
+         RETURNING team_id as "teamId", name, note, is_active as "isActive", created_at as "createdAt"`,
+        values
+      );
+      console.log(`[Admin API] Team ${teamId} updated by admin ${req.admin!.username}`);
+
+      // 同步附帶 driverCount
+      const dc = await queryOne(
+        'SELECT COUNT(*)::int as cnt FROM drivers WHERE team_id = $1',
+        [teamId]
+      );
+      res.json({
+        success: true,
+        data: { ...result.rows[0], driverCount: dc?.cnt || 0 },
+      });
+    } catch (error) {
+      console.error('[Admin API] Update team error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+/**
+ * 刪除車隊（軟刪除：is_active=false）
+ * 真的硬刪會打到 drivers.team_id FK，且歷史司機資料會 NULL，所以一律軟刪除
+ * DELETE /api/admin/teams/:teamId
+ */
+router.delete('/teams/:teamId', authenticateAdmin, requireRole([AdminRole.SUPER_ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const teamId = parseInt(req.params.teamId);
+    if (Number.isNaN(teamId)) {
+      return res.status(400).json({ success: false, error: '無效的 team_id' });
+    }
+    try {
+      const result = await query(
+        'UPDATE teams SET is_active = false WHERE team_id = $1 RETURNING team_id',
+        [teamId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ success: false, error: '車隊不存在' });
+      }
+      console.log(`[Admin API] Team ${teamId} soft-deleted by admin ${req.admin!.username}`);
+      res.json({ success: true, message: '車隊已停用' });
+    } catch (error) {
+      console.error('[Admin API] Delete team error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// ===========================================
+// 客戶黑名單（Phase 2）
+// ===========================================
+
+/**
+ * 取得黑名單客戶清單
+ * GET /api/admin/passengers/blacklisted?limit=100&offset=0
+ */
+router.get('/passengers/blacklisted', authenticateAdmin,
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { rows } = await query(
+        `SELECT
+          passenger_id as "passengerId",
+          name,
+          phone as "phoneNumber",
+          blacklist_reason as "blacklistReason",
+          blacklisted_at as "blacklistedAt",
+          blacklisted_by as "blacklistedBy",
+          no_show_count as "noShowCount",
+          last_no_show_at as "lastNoShowAt"
+        FROM passengers
+        WHERE is_blacklisted = true
+        ORDER BY blacklisted_at DESC
+        LIMIT 200`
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('[Admin API] Get blacklisted passengers error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+/**
+ * 加入客戶黑名單
+ * POST /api/admin/passengers/:passengerId/blacklist
+ * Body: { reason: string }
+ */
+router.post('/passengers/:passengerId/blacklist', authenticateAdmin,
+  requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { passengerId } = req.params;
+    const { reason } = req.body;
+    if (!reason || typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json({ success: false, error: '黑名單原因為必填' });
+    }
+    try {
+      const result = await query(
+        `UPDATE passengers
+         SET is_blacklisted = true,
+             blacklist_reason = $1,
+             blacklisted_at = CURRENT_TIMESTAMP,
+             blacklisted_by = $2
+         WHERE passenger_id = $3
+         RETURNING passenger_id`,
+        [reason.trim(), req.admin!.username, passengerId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ success: false, error: '乘客不存在' });
+      }
+      console.log(`[Admin API] Passenger ${passengerId} blacklisted by ${req.admin!.username}: ${reason}`);
+      res.json({ success: true, message: '已加入黑名單' });
+    } catch (error) {
+      console.error('[Admin API] Blacklist passenger error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+/**
+ * 移除客戶黑名單
+ * POST /api/admin/passengers/:passengerId/unblacklist
+ */
+router.post('/passengers/:passengerId/unblacklist', authenticateAdmin,
+  requireRole([AdminRole.SUPER_ADMIN, AdminRole.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { passengerId } = req.params;
+    try {
+      const result = await query(
+        `UPDATE passengers
+         SET is_blacklisted = false,
+             blacklist_reason = NULL,
+             blacklisted_at = NULL,
+             blacklisted_by = NULL
+         WHERE passenger_id = $1
+         RETURNING passenger_id`,
+        [passengerId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ success: false, error: '乘客不存在' });
+      }
+      console.log(`[Admin API] Passenger ${passengerId} unblacklisted by ${req.admin!.username}`);
+      res.json({ success: true, message: '已移除黑名單' });
+    } catch (error) {
+      console.error('[Admin API] Unblacklist passenger error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+/**
+ * 取得乘客的近期叫車紀錄（含上下車地址）— Passenger 詳情頁用
+ * GET /api/admin/passengers/:passengerId/recent-orders?limit=10
+ */
+router.get('/passengers/:passengerId/recent-orders', authenticateAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { passengerId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
+    try {
+      const { rows } = await query(
+        `SELECT
+          o.order_id as "orderId",
+          o.status,
+          o.source,
+          o.pickup_address as "pickupAddress",
+          o.dest_address as "destAddress",
+          o.meter_amount as "fare",
+          o.cancel_reason as "cancelReason",
+          o.created_at as "createdAt",
+          o.completed_at as "completedAt",
+          d.name as "driverName",
+          d.plate as "driverPlate"
+        FROM orders o
+        LEFT JOIN drivers d ON o.driver_id = d.driver_id
+        WHERE o.passenger_id = $1
+        ORDER BY o.created_at DESC
+        LIMIT $2`,
+        [passengerId, limit]
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('[Admin API] Get passenger recent orders error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
 export default router;

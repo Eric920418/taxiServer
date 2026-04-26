@@ -211,6 +211,46 @@ export class SmartDispatcherV2 {
   }> {
     console.log(`\n[SmartDispatcherV2] 開始派單 - 訂單 ${order.orderId}`);
 
+    // === 黑名單檢查（Phase 2）===
+    // 黑名單客戶的訂單直接拒絕派單，不浪費司機時間
+    try {
+      const blacklistCheck = await this.pool.query(
+        'SELECT is_blacklisted, blacklist_reason FROM passengers WHERE passenger_id = $1',
+        [order.passengerId]
+      );
+      if (blacklistCheck.rows[0]?.is_blacklisted === true) {
+        const reason = blacklistCheck.rows[0]?.blacklist_reason || '黑名單客戶';
+        console.warn(`[SmartDispatcherV2] 黑名單客戶嘗試叫車 - 訂單 ${order.orderId} (${order.passengerId}): ${reason}`);
+
+        // 將訂單立刻設為 CANCELLED 並記錄原因
+        await this.pool.query(
+          `UPDATE orders SET status = 'CANCELLED',
+                             cancelled_at = CURRENT_TIMESTAMP,
+                             cancel_reason = $1
+           WHERE order_id = $2`,
+          [`黑名單客戶：${reason}`, order.orderId]
+        );
+
+        // 通知乘客（雖然是黑名單，仍給友善訊息）
+        this.notifyPassengerDispatchProgress(order.passengerId, {
+          orderId: order.orderId,
+          status: 'CANCELLED',
+          message: '無法為您派單，請聯繫客服',
+          cancelReason: '無法為您派單，請聯繫客服',
+        });
+
+        return {
+          success: false,
+          message: '無法為您派單，請聯繫客服',
+          batchNumber: 0,
+          offeredTo: [],
+        };
+      }
+    } catch (err: any) {
+      // 查詢失敗不阻擋派單（fail-open，避免 DB 抽風時所有人都叫不到車）
+      console.error('[SmartDispatcherV2] 黑名單檢查失敗（fail-open，繼續派單）:', err.message);
+    }
+
     // === 熱區配額檢查 ===
     let hotZoneQuota: ZoneCheckResult | undefined;
     const estimatedFare = order.estimatedFare || 200;
@@ -996,16 +1036,26 @@ export class SmartDispatcherV2 {
       cancelReason: shouldCancel ? '目前無可用司機' : undefined,
     });
 
-    // LINE 推播無司機通知
+    // 客人反向通知（派單失敗）— 走分派層（LINE 優先、SMS 備援）
+    // 若 CustomerNotificationService 未 init（LINE 或 SMS 任一未設），
+    // fallback 到舊的 LineNotifier shortcut 以保持行為相容
     if (shouldCancel) {
       try {
-        const { getLineNotifier } = require('./LineNotifier');
-        const lineNotifier = getLineNotifier();
-        if (lineNotifier) {
-          lineNotifier.notifyNoDriverAvailable(orderId)
-            .catch((err: any) => console.error('[SmartDispatcherV2] LINE 推播失敗:', err));
+        const { getCustomerNotificationService } = require('./CustomerNotificationService');
+        const cns = getCustomerNotificationService();
+        if (cns) {
+          cns.notifyDispatchFailed(orderId, '目前無可用司機')
+            .catch((err: any) => console.error('[SmartDispatcherV2] CustomerNotification 失敗:', err));
+        } else {
+          // 分派層未啟用時保留舊 LINE-only shortcut
+          const { getLineNotifier } = require('./LineNotifier');
+          const lineNotifier = getLineNotifier();
+          if (lineNotifier) {
+            lineNotifier.notifyNoDriverAvailable(orderId)
+              .catch((err: any) => console.error('[SmartDispatcherV2] LINE 推播失敗:', err));
+          }
         }
-      } catch { /* LINE 未初始化，忽略 */ }
+      } catch { /* 通知模組未初始化，忽略 */ }
     }
 
     // 從活動訂單移除

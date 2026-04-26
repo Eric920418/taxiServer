@@ -16,6 +16,7 @@ import {
   EnvironmentOutlined,
   QuestionCircleOutlined,
   ExclamationCircleOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -56,6 +57,11 @@ const MainLayout: React.FC = () => {
       label: '乘客管理',
     },
     {
+      key: '/blacklist',
+      icon: <StopOutlined />,
+      label: '客戶黑名單',
+    },
+    {
       key: '/orders',
       icon: <ShoppingCartOutlined />,
       label: '訂單管理',
@@ -74,6 +80,11 @@ const MainLayout: React.FC = () => {
       key: '/phonecalls',
       icon: <PhoneOutlined />,
       label: '電話記錄',
+    },
+    {
+      key: '/teams',
+      icon: <TeamOutlined />,
+      label: '車隊管理',
     },
     {
       key: '/landmarks',

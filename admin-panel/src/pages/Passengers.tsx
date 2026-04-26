@@ -14,6 +14,7 @@ import {
   Col,
   Statistic,
   App as AntdApp,
+  Tooltip,
 } from 'antd';
 import {
   SearchOutlined,
@@ -26,11 +27,15 @@ import {
   MailOutlined,
   DollarOutlined,
   CarOutlined,
+  StopOutlined,
+  EnvironmentOutlined,
 } from '@ant-design/icons';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchPassengers, blockPassenger, unblockPassenger } from '../store/slices/passengersSlice';
 import { type RootState, type AppDispatch } from '../store';
 import { type Passenger } from '../types';
+import { passengerBlacklistAPI } from '../services/api';
+import dayjs from 'dayjs';
 
 const { Search } = Input;
 const { Title } = Typography;
@@ -47,6 +52,8 @@ const Passengers: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [isDrawerVisible, setIsDrawerVisible] = useState(false);
   const [selectedPassenger, setSelectedPassenger] = useState<Passenger | null>(null);
+  const [recentOrders, setRecentOrders] = useState<any[]>([]);
+  const [recentOrdersLoading, setRecentOrdersLoading] = useState(false);
 
   useEffect(() => {
     loadPassengers();
@@ -69,9 +76,61 @@ const Passengers: React.FC = () => {
     }));
   };
 
-  const handleViewPassenger = (passenger: Passenger) => {
+  const handleViewPassenger = async (passenger: Passenger) => {
     setSelectedPassenger(passenger);
     setIsDrawerVisible(true);
+    // 同步載入近期叫車紀錄（含上下車地址）— Phase 2 從 orders 表 JOIN
+    setRecentOrdersLoading(true);
+    try {
+      const r = await passengerBlacklistAPI.getRecentOrders(passenger.passenger_id, 10);
+      if (r.success) setRecentOrders(r.data || []);
+    } catch (e) {
+      console.error('[Passengers] load recent orders failed:', e);
+      setRecentOrders([]);
+    } finally {
+      setRecentOrdersLoading(false);
+    }
+  };
+
+  // 加入黑名單（Phase 2 — 比 block 更嚴：派單系統會直接拒絕）
+  const handleBlacklistPassenger = (passenger: Passenger) => {
+    let reasonInput = '';
+    modal.confirm({
+      title: '加入黑名單',
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>
+            <strong style={{ color: '#F44336' }}>注意：</strong>加入黑名單後，此客戶下次叫車會被系統直接拒絕並提示聯繫客服。
+          </p>
+          <p style={{ marginBottom: 4 }}>客戶：{passenger.name || passenger.passenger_id}</p>
+          <Input.TextArea
+            rows={3}
+            placeholder="請輸入加入黑名單的原因（必填）"
+            onChange={(e) => { reasonInput = e.target.value; }}
+          />
+        </div>
+      ),
+      okText: '加入黑名單',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (!reasonInput.trim()) {
+          message.error('請輸入黑名單原因');
+          throw new Error('reason required');
+        }
+        try {
+          const r = await passengerBlacklistAPI.blacklist(passenger.passenger_id, reasonInput.trim());
+          if (r.success) {
+            message.success('已加入黑名單');
+            loadPassengers();
+          } else {
+            message.error(r.error || '操作失敗');
+          }
+        } catch (e: any) {
+          message.error(e?.response?.data?.error || '操作失敗');
+        }
+      },
+    });
   };
 
   const handleBlockPassenger = async (passenger: Passenger) => {
@@ -204,8 +263,17 @@ const Passengers: React.FC = () => {
               icon={<LockOutlined />}
               danger
               onClick={() => handleBlockPassenger(record)}
+              title="封鎖（暫停帳號）"
             />
           )}
+          <Button
+            size="small"
+            icon={<StopOutlined />}
+            danger
+            type="text"
+            onClick={() => handleBlacklistPassenger(record)}
+            title="加入黑名單（拒絕派單）"
+          />
         </Space>
       ),
     },
@@ -332,18 +400,77 @@ const Passengers: React.FC = () => {
             )}
 
             <div style={{ marginTop: 24 }}>
-              <Title level={5}>最近行程記錄</Title>
+              <Title level={5}>
+                <EnvironmentOutlined style={{ marginRight: 6 }} />
+                近期叫車紀錄（最多 10 筆）
+              </Title>
               <Table
-                dataSource={[]}
-                columns={[
-                  { title: '訂單號', dataIndex: 'orderId' },
-                  { title: '司機', dataIndex: 'driver' },
-                  { title: '車資', dataIndex: 'fare' },
-                  { title: '時間', dataIndex: 'time' },
-                ]}
+                dataSource={recentOrders}
+                rowKey="orderId"
+                loading={recentOrdersLoading}
                 pagination={false}
                 size="small"
-                locale={{ emptyText: '暫無行程記錄' }}
+                locale={{ emptyText: '此乘客尚無叫車紀錄' }}
+                columns={[
+                  {
+                    title: '時間',
+                    dataIndex: 'createdAt',
+                    width: 130,
+                    render: (t: string) => dayjs(t).format('MM-DD HH:mm'),
+                  },
+                  {
+                    title: '上車 → 下車',
+                    key: 'route',
+                    render: (_: any, r: any) => (
+                      <div style={{ fontSize: 12 }}>
+                        <div>📍 {r.pickupAddress || '—'}</div>
+                        <div style={{ color: '#888' }}>
+                          → {r.destAddress || '未指定'}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    title: '來源',
+                    dataIndex: 'source',
+                    width: 80,
+                    render: (s: string) => {
+                      const color = s === 'LINE' ? 'green' : s === 'PHONE' ? 'orange' : 'blue';
+                      return <Tag color={color}>{s || 'APP'}</Tag>;
+                    },
+                  },
+                  {
+                    title: '司機',
+                    key: 'driver',
+                    width: 100,
+                    render: (_: any, r: any) =>
+                      r.driverName ? `${r.driverName} ${r.driverPlate || ''}` : <Tag>未派單</Tag>,
+                  },
+                  {
+                    title: '狀態',
+                    dataIndex: 'status',
+                    width: 90,
+                    render: (s: string, r: any) => {
+                      const colorMap: Record<string, string> = {
+                        DONE: 'green', SETTLING: 'green',
+                        CANCELLED: 'red',
+                        ON_TRIP: 'blue', ACCEPTED: 'cyan', ARRIVED: 'cyan',
+                      };
+                      return (
+                        <Tooltip title={r.cancelReason || ''}>
+                          <Tag color={colorMap[s] || 'default'}>{s}</Tag>
+                        </Tooltip>
+                      );
+                    },
+                  },
+                  {
+                    title: '車資',
+                    dataIndex: 'fare',
+                    width: 80,
+                    align: 'right' as const,
+                    render: (f: number) => (f > 0 ? `NT$ ${f}` : '-'),
+                  },
+                ]}
               />
             </div>
           </div>
