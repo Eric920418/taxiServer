@@ -400,6 +400,61 @@ router.get('/drivers', authenticateAdmin, async (req: AuthenticatedRequest, res:
 });
 
 /**
+ * 共用 helper：查詢單一司機的完整資料（含 team join + pg numeric 轉換）
+ * GET 和 PUT (回傳更新後資料) 共用，避免複製貼上的欄位漂移。
+ */
+async function fetchDriverById(driverId: string): Promise<any | null> {
+  const driver = await queryOne(
+    `SELECT
+      d.driver_id,
+      d.name,
+      d.phone as "phoneNumber",
+      d.plate as "carPlate",
+      d.car_model as "carModel",
+      d.car_color as "carColor",
+      d.license_number as "licenseNumber",
+      d.availability as status,
+      d.account_status as "accountStatus",
+      d.driver_type as "driverType",
+      d.team_id as "teamId",
+      t.name as "teamName",
+      d.accepted_order_types as "acceptedOrderTypes",
+      d.accepted_rebate_levels as "acceptedRebateLevels",
+      d.note,
+      d.is_blocked as "isBlocked",
+      d.block_reason as "blockReason",
+      d.rating,
+      d.total_trips as "totalTrips",
+      d.total_earnings as "totalEarnings",
+      d.current_lat as latitude,
+      d.current_lng as longitude,
+      d.last_heartbeat as "lastLocationUpdate",
+      d.created_at as "createdAt",
+      d.last_heartbeat as "lastActive",
+      d.firebase_uid as "firebaseUid"
+    FROM drivers d
+    LEFT JOIN teams t ON t.team_id = d.team_id
+    WHERE d.driver_id = $1`,
+    [driverId]
+  );
+
+  if (!driver) return null;
+
+  return {
+    ...driver,
+    rating: driver.rating != null ? parseFloat(driver.rating) : null,
+    totalEarnings: driver.totalEarnings != null ? parseFloat(driver.totalEarnings) : 0,
+    acceptedRebateLevels: Array.isArray(driver.acceptedRebateLevels) ? driver.acceptedRebateLevels : [],
+    acceptedOrderTypes: Array.isArray(driver.acceptedOrderTypes) ? driver.acceptedOrderTypes : [],
+    location: (driver.latitude && driver.longitude) ? {
+      latitude: driver.latitude,
+      longitude: driver.longitude,
+      lastUpdated: driver.lastLocationUpdate
+    } : null
+  };
+}
+
+/**
  * 取得單一司機詳情
  * GET /api/admin/drivers/:driverId
  */
@@ -407,60 +462,13 @@ router.get('/drivers/:driverId', authenticateAdmin, async (req: AuthenticatedReq
   const { driverId } = req.params;
 
   try {
-    const driver = await queryOne(
-      `SELECT
-        d.driver_id,
-        d.name,
-        d.phone as "phoneNumber",
-        d.plate as "carPlate",
-        d.car_model as "carModel",
-        d.car_color as "carColor",
-        d.license_number as "licenseNumber",
-        d.availability as status,
-        d.account_status as "accountStatus",
-        d.driver_type as "driverType",
-        d.team_id as "teamId",
-        t.name as "teamName",
-        d.accepted_order_types as "acceptedOrderTypes",
-        d.accepted_rebate_levels as "acceptedRebateLevels",
-        d.note,
-        d.is_blocked as "isBlocked",
-        d.block_reason as "blockReason",
-        d.rating,
-        d.total_trips as "totalTrips",
-        d.total_earnings as "totalEarnings",
-        d.current_lat as latitude,
-        d.current_lng as longitude,
-        d.last_heartbeat as "lastLocationUpdate",
-        d.created_at as "createdAt",
-        d.last_heartbeat as "lastActive",
-        d.firebase_uid as "firebaseUid"
-      FROM drivers d
-      LEFT JOIN teams t ON t.team_id = d.team_id
-      WHERE d.driver_id = $1`,
-      [driverId]
-    );
-
-    if (!driver) {
+    const processedDriver = await fetchDriverById(driverId);
+    if (!processedDriver) {
       return res.status(404).json({
         success: false,
         error: 'Driver not found'
       });
     }
-
-    // 處理司機資料（pg numeric → number / 陣列保底）
-    const processedDriver = {
-      ...driver,
-      rating: driver.rating != null ? parseFloat(driver.rating) : null,
-      totalEarnings: driver.totalEarnings != null ? parseFloat(driver.totalEarnings) : 0,
-      acceptedRebateLevels: Array.isArray(driver.acceptedRebateLevels) ? driver.acceptedRebateLevels : [],
-      acceptedOrderTypes: Array.isArray(driver.acceptedOrderTypes) ? driver.acceptedOrderTypes : [],
-      location: (driver.latitude && driver.longitude) ? {
-        latitude: driver.latitude,
-        longitude: driver.longitude,
-        lastUpdated: driver.lastLocationUpdate
-      } : null
-    };
 
     res.json({
       success: true,
@@ -757,8 +765,13 @@ router.put('/drivers/:driverId', authenticateAdmin, requireRole([AdminRole.SUPER
 
       console.log(`[Admin API] Driver ${driverId} updated by admin ${req.admin!.username}`);
 
+      // 回傳更新後的完整 driver 資料給前端 Redux store 使用
+      // 之前只回 { success, message } 導致 thunk 因 `if (response.data)` 失敗而誤報 "Failed to update driver"
+      const updatedDriver = await fetchDriverById(driverId);
+
       res.json({
         success: true,
+        data: updatedDriver,
         message: 'Driver updated successfully'
       });
     } catch (error) {

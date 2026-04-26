@@ -57,8 +57,10 @@ export const createDriver = createAsyncThunk(
   'drivers/createDriver',
   async (driver: Partial<Driver>) => {
     const response = await driverAPI.createDriver(driver);
-    if (response.success && response.data) {
-      return response.data;
+    // 防禦性處理：只要 success=true 就視為成功
+    // 後端有回 data 就用，沒回則回傳 input 讓 reducer fallback
+    if (response.success) {
+      return response.data || (driver as Driver);
     }
     throw new Error(response.error || 'Failed to create driver');
   }
@@ -68,8 +70,10 @@ export const updateDriver = createAsyncThunk(
   'drivers/updateDriver',
   async ({ driverId, updates }: { driverId: string; updates: Partial<Driver> }) => {
     const response = await driverAPI.updateDriver(driverId, updates);
-    if (response.success && response.data) {
-      return response.data;
+    // 防禦性處理：只要 success=true 就視為成功
+    // 後端有回 data 就用，沒回則用 driverId + updates 合成 partial 物件給 reducer
+    if (response.success) {
+      return response.data || ({ driver_id: driverId, ...updates } as Driver);
     }
     throw new Error(response.error || 'Failed to update driver');
   }
@@ -167,12 +171,14 @@ const driversSlice = createSlice({
     // Update driver
     builder
       .addCase(updateDriver.fulfilled, (state, action) => {
+        // 用 merge 而非覆蓋 — 後端若沒回完整 driver 物件，
+        // 仍會保留舊資料（rating、totalTrips 等未變動欄位）
         const index = state.drivers.findIndex(d => d.driver_id === action.payload.driver_id);
         if (index !== -1) {
-          state.drivers[index] = action.payload;
+          state.drivers[index] = { ...state.drivers[index], ...action.payload };
         }
         if (state.selectedDriver?.driver_id === action.payload.driver_id) {
-          state.selectedDriver = action.payload;
+          state.selectedDriver = { ...state.selectedDriver, ...action.payload };
         }
       });
 
