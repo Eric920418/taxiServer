@@ -12,6 +12,7 @@ import {
 import { getSmartDispatcherV2 } from '../services/SmartDispatcherV2';
 import { getNotificationService } from '../services/NotificationService';
 import { getLineNotifier } from '../services/LineNotifier';
+import { getCustomerNotificationService } from '../services/CustomerNotificationService';
 import { fareConfigService } from '../services/FareConfigService';
 
 // 有效的拒單原因（強制選擇）
@@ -221,6 +222,66 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * no-show 訂單清單（Admin Panel 用）
+ * GET /api/orders/no-show?days=30&limit=100&offset=0
+ *
+ * ⚠ 必須定義在 GET /:orderId 之前，否則 Express 會把 'no-show' 當成 orderId
+ *   參數匹配到下面的查單 endpoint（回 "訂單不存在" 而非真實資料）
+ *
+ * 回傳近 N 天內因客人未到而取消的訂單
+ */
+router.get('/no-show', async (req, res) => {
+  const days = parseInt(req.query.days as string) || 30;
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+  const offset = parseInt(req.query.offset as string) || 0;
+
+  try {
+    const rows = await queryMany(`
+      SELECT o.order_id, o.passenger_id, o.driver_id, o.pickup_address,
+             o.cancelled_at, o.cancel_reason, o.penalty_fare, o.source,
+             p.name AS passenger_name, p.phone AS passenger_phone,
+             p.no_show_count AS passenger_no_show_total,
+             d.name AS driver_name, d.plate AS driver_plate
+      FROM orders o
+      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
+      LEFT JOIN drivers d ON o.driver_id = d.driver_id
+      WHERE o.cancel_reason LIKE '客人未到%'
+        AND o.cancelled_at > NOW() - ($1::text || ' days')::interval
+      ORDER BY o.cancelled_at DESC
+      LIMIT $2 OFFSET $3
+    `, [String(days), limit, offset]);
+
+    const countRow = await queryOne(`
+      SELECT COUNT(*)::text AS total FROM orders
+      WHERE cancel_reason LIKE '客人未到%'
+        AND cancelled_at > NOW() - ($1::text || ' days')::interval
+    `, [String(days)]);
+
+    res.json({
+      total: parseInt(countRow?.total || '0'),
+      orders: rows.map(r => ({
+        orderId: r.order_id,
+        passengerId: r.passenger_id,
+        passengerName: r.passenger_name,
+        passengerPhone: r.passenger_phone,
+        passengerNoShowTotal: r.passenger_no_show_total ?? 0,
+        driverId: r.driver_id,
+        driverName: r.driver_name,
+        driverPlate: r.driver_plate,
+        pickupAddress: r.pickup_address,
+        source: r.source || 'APP',
+        cancelledAt: r.cancelled_at,
+        cancelReason: r.cancel_reason,
+        penaltyFare: r.penalty_fare || 0,
+      })),
+    });
+  } catch (error) {
+    console.error('[No-Show List] 錯誤:', error);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
  * 取得單一訂單
  * GET /api/orders/:orderId
  */
@@ -391,13 +452,24 @@ router.patch('/:orderId/accept', async (req, res) => {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
     }
 
-    // LINE 推播通知
-    const lineNotifier = getLineNotifier();
-    if (lineNotifier) {
-      lineNotifier.notifyOrderStatusChange(orderId, 'ACCEPTED', {
+    // 客人反向通知（LINE 優先、SMS 備援）
+    // 若分派層未初始化或 flag=false 會自動 noop；否則寫 customer_notifications + 推播
+    const cns = getCustomerNotificationService();
+    if (cns) {
+      cns.notifyDriverAccepted(orderId, {
         driverName: fullOrder.driver_name || driverName,
         plate: fullOrder.plate || '',
-      }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+        etaMinutes: fullOrder.eta_to_pickup,
+      }).catch(err => console.error('[Order] CustomerNotification 失敗:', err));
+    } else {
+      // 分派層未啟用時保留舊行為（LINE-only shortcut）
+      const lineNotifier = getLineNotifier();
+      if (lineNotifier) {
+        lineNotifier.notifyOrderStatusChange(orderId, 'ACCEPTED', {
+          driverName: fullOrder.driver_name || driverName,
+          plate: fullOrder.plate || '',
+        }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+      }
     }
 
     res.json({
@@ -641,13 +713,38 @@ router.patch('/:orderId/status', async (req, res) => {
       await notificationService.notifyOrderCancelled(orderId);
     }
 
-    // LINE 推播（非 LINE 訂單會被 LineNotifier 自動跳過）
-    const lineNotifier = getLineNotifier();
-    if (lineNotifier && (status === 'ARRIVED' || status === 'DONE' || status === 'CANCELLED')) {
-      lineNotifier.notifyOrderStatusChange(orderId, status, {
-        driverName: fullOrder.driver_name,
-        plate: fullOrder.plate,
-      }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+    // 客人反向通知分派：
+    //   - ARRIVED → 走 CustomerNotificationService（含 SMS 備援）
+    //   - DONE / CANCELLED → 保留 LineNotifier shortcut（PR2 範圍外，LINE-only）
+    //     (CANCELLED 涵蓋 NO_SHOW cancel，由 /cancel-no-show endpoint 間接觸發；
+    //      DONE 是 trip completion，行程已結束 SMS 價值低)
+    if (status === 'ARRIVED') {
+      const cns = getCustomerNotificationService();
+      if (cns) {
+        cns.notifyDriverArrived(orderId, {
+          driverName: fullOrder.driver_name,
+          plate: fullOrder.plate,
+          pickupAddress: fullOrder.pickup_address,
+        }).catch(err => console.error('[Order] CustomerNotification 失敗:', err));
+      } else {
+        // 分派層未啟用時保留舊行為
+        const lineNotifier = getLineNotifier();
+        if (lineNotifier) {
+          lineNotifier.notifyOrderStatusChange(orderId, status, {
+            driverName: fullOrder.driver_name,
+            plate: fullOrder.plate,
+          }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+        }
+      }
+    } else if (status === 'DONE' || status === 'CANCELLED') {
+      // 保留 shortcut 不動（84219a6 既有行為）
+      const lineNotifier = getLineNotifier();
+      if (lineNotifier) {
+        lineNotifier.notifyOrderStatusChange(orderId, status, {
+          driverName: fullOrder.driver_name,
+          plate: fullOrder.plate,
+        }).catch(err => console.error('[Order] LINE 推播失敗:', err));
+      }
     }
 
     res.json({
@@ -857,63 +954,6 @@ router.post('/:orderId/cancel-no-show', async (req, res) => {
     });
   } catch (error) {
     console.error('[Cancel NoShow] 錯誤:', error);
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
-  }
-});
-
-/**
- * no-show 訂單清單（Admin Panel 用）
- * GET /api/orders/no-show?days=30&limit=100&offset=0
- *
- * 回傳近 N 天內因客人未到而取消的訂單
- */
-router.get('/no-show', async (req, res) => {
-  const days = parseInt(req.query.days as string) || 30;
-  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-  const offset = parseInt(req.query.offset as string) || 0;
-
-  try {
-    const rows = await queryMany(`
-      SELECT o.order_id, o.passenger_id, o.driver_id, o.pickup_address,
-             o.cancelled_at, o.cancel_reason, o.penalty_fare, o.source,
-             p.name AS passenger_name, p.phone AS passenger_phone,
-             p.no_show_count AS passenger_no_show_total,
-             d.name AS driver_name, d.plate AS driver_plate
-      FROM orders o
-      LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
-      LEFT JOIN drivers d ON o.driver_id = d.driver_id
-      WHERE o.cancel_reason LIKE '客人未到%'
-        AND o.cancelled_at > NOW() - ($1::text || ' days')::interval
-      ORDER BY o.cancelled_at DESC
-      LIMIT $2 OFFSET $3
-    `, [String(days), limit, offset]);
-
-    const countRow = await queryOne(`
-      SELECT COUNT(*)::text AS total FROM orders
-      WHERE cancel_reason LIKE '客人未到%'
-        AND cancelled_at > NOW() - ($1::text || ' days')::interval
-    `, [String(days)]);
-
-    res.json({
-      total: parseInt(countRow?.total || '0'),
-      orders: rows.map(r => ({
-        orderId: r.order_id,
-        passengerId: r.passenger_id,
-        passengerName: r.passenger_name,
-        passengerPhone: r.passenger_phone,
-        passengerNoShowTotal: r.passenger_no_show_total ?? 0,
-        driverId: r.driver_id,
-        driverName: r.driver_name,
-        driverPlate: r.driver_plate,
-        pickupAddress: r.pickup_address,
-        source: r.source || 'APP',
-        cancelledAt: r.cancelled_at,
-        cancelReason: r.cancel_reason,
-        penaltyFare: r.penalty_fare || 0,
-      })),
-    });
-  } catch (error) {
-    console.error('[No-Show List] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
