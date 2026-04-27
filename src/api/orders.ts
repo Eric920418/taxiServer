@@ -460,7 +460,7 @@ router.patch('/:orderId/accept', async (req, res) => {
         driverName: fullOrder.driver_name || driverName,
         plate: fullOrder.plate || '',
         etaMinutes: fullOrder.eta_to_pickup,
-      }).catch(err => console.error('[Order] CustomerNotification 失敗:', err));
+      }).catch((err: Error) => console.error('[Order] CustomerNotification 失敗:', err));
     } else {
       // 分派層未啟用時保留舊行為（LINE-only shortcut）
       const lineNotifier = getLineNotifier();
@@ -725,7 +725,7 @@ router.patch('/:orderId/status', async (req, res) => {
           driverName: fullOrder.driver_name,
           plate: fullOrder.plate,
           pickupAddress: fullOrder.pickup_address,
-        }).catch(err => console.error('[Order] CustomerNotification 失敗:', err));
+        }).catch((err: Error) => console.error('[Order] CustomerNotification 失敗:', err));
       } else {
         // 分派層未啟用時保留舊行為
         const lineNotifier = getLineNotifier();
