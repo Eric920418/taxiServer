@@ -31,8 +31,10 @@ import { initRejectionPredictor } from './services/RejectionPredictor';
 import { initWhisperService } from './services/WhisperService';
 import { initPhoneCallProcessor } from './services/PhoneCallProcessor';
 import { initLineMessageProcessor } from './services/LineMessageProcessor';
-import { initLineNotifier } from './services/LineNotifier';
+import { initLineNotifier, getLineNotifier } from './services/LineNotifier';
 import { initScheduledOrderService } from './services/ScheduledOrderService';
+import { initSmsNotifier, getSmsNotifier } from './services/SmsNotifier';
+import { initCustomerNotificationService } from './services/CustomerNotificationService';
 import { hualienAddressDB } from './services/HualienAddressDB';
 import pool from './db/connection';
 
@@ -212,6 +214,33 @@ if (process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.LINE_CHANNEL_SECRET) {
   }
 } else {
   console.log('[系統] LINE 未設定（需要 LINE_CHANNEL_ACCESS_TOKEN + LINE_CHANNEL_SECRET）');
+}
+
+// 初始化 SMS (三竹 Mitake) — 客人反向通知的 SMS 備援
+if (process.env.MITAKE_SMS_USERNAME && process.env.MITAKE_SMS_PASSWORD && process.env.MITAKE_SMS_API_URL) {
+  try {
+    initSmsNotifier();
+    console.log('[系統] SMS 通知服務已初始化（三竹 Mitake）');
+  } catch (error) {
+    console.warn('[系統] SMS 通知服務初始化失敗:', (error as Error).message);
+  }
+} else {
+  console.log('[系統] SMS 未設定（需要 MITAKE_SMS_USERNAME + PASSWORD + API_URL）');
+}
+
+// 初始化客人反向通知分派層（依賴 LineNotifier + SmsNotifier）
+// 只有兩者都成功 init 時才啟用，否則整個分派層保持 null（呼叫端會 noop）
+// 注意：即使本服務 init 成功，CUSTOMER_NOTIFICATION_ENABLED=false 仍會秒級關閉所有對外通知
+{
+  const lineNotifier = getLineNotifier();
+  const smsNotifier = getSmsNotifier();
+  if (lineNotifier && smsNotifier) {
+    initCustomerNotificationService(pool, lineNotifier, smsNotifier);
+    const flagOn = process.env.CUSTOMER_NOTIFICATION_ENABLED === 'true';
+    console.log(`[系統] 客人反向通知分派層已初始化（feature flag: ${flagOn ? 'ENABLED' : 'DISABLED'}）`);
+  } else {
+    console.log(`[系統] 客人反向通知分派層未啟用（LINE=${!!lineNotifier}, SMS=${!!smsNotifier}）`);
+  }
 }
 
 console.log('[系統] 智能派單系統 V2 已初始化');
