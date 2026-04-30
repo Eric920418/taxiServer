@@ -36,6 +36,21 @@ interface GeocodingResult {
   lat: number;
   lng: number;
   formattedAddress: string;
+  /**
+   * 命中禁止上車區（例花蓮火車站）時設定。
+   * 此情況下 lat/lng/formattedAddress 仍會填入命中地標座標供顯示用，
+   * 但呼叫端應該偵測此欄位、不直接用座標建單，改走人工審核。
+   */
+  forbiddenPickup?: {
+    matchedLandmark: string;
+    alternatives: Array<{
+      id: number;
+      name: string;
+      address: string;
+      lat: number;
+      lng: number;
+    }>;
+  };
 }
 
 // LANDMARK_COORDS 已移至 HualienAddressDB.ts（150+ 筆）
@@ -211,6 +226,15 @@ export class PhoneCallProcessor {
     if (parsedFields.destination_address) {
       destGeo = await this.geocodeAddress(parsedFields.destination_address);
       console.log('[PhoneCall] 目的地Geocoding:', JSON.stringify(destGeo));
+    }
+
+    // 上車點命中禁止上車區（例花蓮火車站）→ 不建單派單，改走人工審核
+    if (pickupGeo?.forbiddenPickup) {
+      const fp = pickupGeo.forbiddenPickup;
+      const altsList = fp.alternatives.map(a => `「${a.name}」`).join('、');
+      console.warn(`[PhoneCallProcessor] ⚠️ 上車點為禁止載客區 (${fp.matchedLandmark})，轉人工審核`);
+      await this.handleForbiddenPickupCall(callId, call, transcript, parsedFields, fp, altsList);
+      return;
     }
 
     // 如果上車點無法 geocoding，使用花蓮市中心作為預設
@@ -460,6 +484,35 @@ export class PhoneCallProcessor {
   }
 
   /**
+   * 偵測命中地標是否禁止上車，並組裝替代點清單。
+   * 命中時呼叫端應走人工審核（電話客人沒法點選 UI）。
+   */
+  private buildForbiddenPickup(landmarkName: string): GeocodingResult['forbiddenPickup'] {
+    const alts = hualienAddressDB.getForbiddenAlternatives(landmarkName);
+    if (alts.length === 0) return undefined;
+    return {
+      matchedLandmark: landmarkName,
+      alternatives: alts.map(a => ({
+        id: a.id!,
+        name: a.name,
+        address: a.address,
+        lat: a.lat as number,
+        lng: a.lng as number,
+      })),
+    };
+  }
+
+  /**
+   * 用座標反查是否落在禁止上車地標 100 公尺內。
+   * Google API 回傳「花蓮車站」、「Hualien Station」等變體時的最後防線。
+   */
+  private buildForbiddenPickupByCoords(lat: number, lng: number): GeocodingResult['forbiddenPickup'] {
+    const forbidden = hualienAddressDB.findNearbyForbidden(lat, lng, 100);
+    if (!forbidden) return undefined;
+    return this.buildForbiddenPickup(forbidden.name);
+  }
+
+  /**
    * 四層式地址 Geocoding：
    * ① HualienAddressDB（150+ 筆本地比對，含台語別名）
    * ② 街道地址 → Geocoding API（精確）
@@ -467,6 +520,7 @@ export class PhoneCallProcessor {
    * ④ 花蓮市中心預設座標（失敗保底，由呼叫端處理）
    *
    * Redis 快取：DB 命中 24h、Google API 結果 1h
+   * forbiddenPickup 結果不快取（每次都要攔截）
    */
   private async geocodeAddress(address: string): Promise<GeocodingResult | null> {
     if (!this.googleMapsApiKey) {
@@ -503,10 +557,12 @@ export class PhoneCallProcessor {
         console.log(`[HualienAddressDB] 街道地址跳過 SUBSTRING 命中: ${addr} → ${dbResult.entry.name}，改用 Geocoding API`);
       } else {
         console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType})`);
+        const forbiddenInfo = this.buildForbiddenPickup(dbResult.entry.name);
         result = {
           lat: dbResult.entry.lat,
           lng: dbResult.entry.lng,
-          formattedAddress: dbResult.entry.address
+          formattedAddress: dbResult.entry.address,
+          ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
         };
         cacheTtl = 86400; // DB 命中快取 24 小時
       }
@@ -538,11 +594,13 @@ export class PhoneCallProcessor {
       }
     }
 
-    // 寫入 Redis 快取
+    // 寫入 Redis 快取（forbiddenPickup 結果不快取，每次都要攔截）
     if (result) {
-      try {
-        await cacheApiResponse(cacheKey, result, cacheTtl);
-      } catch { /* Redis 失敗不阻斷 */ }
+      if (!result.forbiddenPickup) {
+        try {
+          await cacheApiResponse(cacheKey, result, cacheTtl);
+        } catch { /* Redis 失敗不阻斷 */ }
+      }
       // 若 lookup 失敗但 google 補救成功，附加到失敗佇列供 Admin 查看
       if (shouldLogFailure(dbResult)) {
         attachGoogleResult(address, 'PHONE', {
@@ -608,10 +666,12 @@ export class PhoneCallProcessor {
           (result.types || []).some((t: string) =>
             ['street_address','premise','establishment','point_of_interest'].includes(t)
           );
+        const forbiddenInfo = this.buildForbiddenPickupByCoords(lat, lng);
         return {
           lat,
           lng,
-          formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : fullAddress)
+          formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : fullAddress),
+          ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
         };
       }
 
@@ -661,10 +721,12 @@ export class PhoneCallProcessor {
           );
 
         console.log(`[PhoneCallProcessor] Places Search 命中: ${result.name || address} → ${googleAddr}`);
+        const forbiddenInfo = this.buildForbiddenPickupByCoords(lat, lng);
         return {
           lat,
           lng,
-          formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : address)
+          formattedAddress: hualienAddressDB.cleanupDisplay(hasDetail ? googleAddr : address),
+          ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
         };
       }
 
@@ -826,6 +888,62 @@ export class PhoneCallProcessor {
       `UPDATE phone_calls SET event_confidence = $1, field_confidence = $2, updated_at = CURRENT_TIMESTAMP WHERE call_id = $3`,
       [eventConfidence, fieldConfidence, callId]
     );
+  }
+
+  /**
+   * 上車點命中禁止上車區（例花蓮火車站）的處理：
+   *  - 不建單、不派單
+   *  - 標記 phone_calls.processing_status='NEEDS_REVIEW'
+   *  - error_message 記錄禁止地點 + 替代點清單，operator 撥回客人時直接念
+   *  - 推 admin Socket 即時通知（type=phone:forbidden_pickup）
+   */
+  private async handleForbiddenPickupCall(
+    callId: string,
+    call: PhoneCallRecord,
+    transcript: string,
+    parsedFields: ParsedFields,
+    forbiddenPickup: NonNullable<GeocodingResult['forbiddenPickup']>,
+    alternativesText: string
+  ): Promise<void> {
+    const reviewNote = `⚠️ 上車點為禁止載客區「${forbiddenPickup.matchedLandmark}」，請聯繫客人改至：${alternativesText}`;
+
+    await this.pool.query(
+      `UPDATE phone_calls
+       SET processing_status = 'NEEDS_REVIEW',
+           error_message = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE call_id = $2`,
+      [reviewNote, callId]
+    );
+
+    // 後台通知（復用既有審核通知通道，附上完整提示）
+    try {
+      const notificationService = getNotificationService();
+      await notificationService.notifyPhoneCallNeedsReview(
+        callId,
+        call.callerNumber,
+        `${reviewNote}\n\n原始錄音內容：${transcript}`
+      );
+    } catch (err) {
+      console.error('[PhoneCallProcessor] 建立禁止上車審核通知失敗:', err);
+    }
+
+    // Socket 即時推播
+    try {
+      notifyAdmins('phone:forbidden_pickup', {
+        callId,
+        callerNumber: call.callerNumber,
+        transcript: transcript?.substring(0, 100),
+        matchedLandmark: forbiddenPickup.matchedLandmark,
+        alternatives: forbiddenPickup.alternatives.map(a => ({ id: a.id, name: a.name })),
+        pickupAddress: parsedFields.pickup_address,
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('[PhoneCallProcessor] Socket 推播失敗:', err);
+    }
+
+    console.log(`[PhoneCallProcessor] 已標記禁止上車區人工審核: ${callId}`);
   }
 
   /**

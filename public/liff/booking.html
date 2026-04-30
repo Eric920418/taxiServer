@@ -88,6 +88,21 @@
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
+  <!-- 禁止上車區 Modal -->
+  <div id="forbiddenModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#fff;border-radius:14px;max-width:380px;width:100%;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+      <div style="background:#D32F2F;color:#fff;padding:16px 20px;">
+        <div style="font-size:18px;font-weight:700;line-height:1.3;" id="forbiddenTitle">⚠️ 此處不可上車</div>
+        <div style="font-size:12px;margin-top:4px;color:#FFEBEE;line-height:1.4;">依當地計程車管理規定，此處禁止載客</div>
+      </div>
+      <div style="padding:16px 20px;">
+        <div style="font-size:14px;font-weight:700;color:#333;margin-bottom:6px;">請選一個附近合法上車點：</div>
+        <div style="font-size:11px;color:#999;margin-bottom:12px;">步行 1–5 分鐘可到，司機會在該點等您</div>
+        <div id="forbiddenAlternatives" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- LIFF SDK -->
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
@@ -271,6 +286,8 @@
         document.getElementById('pickupDisplay').textContent = address;
         document.getElementById('pickupDisplay').classList.remove('clickable');
         document.getElementById('submitBtn').disabled = false;
+        // 禁止上車區檢查（fire-and-forget，命中時跳 Modal 強制改選）
+        checkForbiddenPickup(lat, lng, address);
       } else {
         destData = { lat, lng, address };
         document.getElementById('destDisplay').textContent = address;
@@ -279,6 +296,73 @@
         // 估算車資
         estimateFare();
       }
+    }
+
+    // ===== 禁止上車區檢查 =====
+    let lastForbiddenCheckKey = '';
+    async function checkForbiddenPickup(lat, lng, address) {
+      // 同一個座標+地址只查一次（避免地圖 idle 重複觸發）
+      const key = `${lat.toFixed(5)},${lng.toFixed(5)},${address}`;
+      if (key === lastForbiddenCheckKey) return;
+      lastForbiddenCheckKey = key;
+
+      try {
+        const params = new URLSearchParams({
+          lat: String(lat),
+          lng: String(lng),
+          address: address || '',
+        });
+        const res = await fetch(`/api/line/liff/check-pickup?${params.toString()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.forbidden && Array.isArray(data.alternatives) && data.alternatives.length > 0) {
+          showForbiddenModal(data.matchedLandmark, data.alternatives);
+        }
+      } catch (e) {
+        // fail-open: 後端壞掉也不擋使用者下單
+        console.warn('check-pickup failed:', e);
+      }
+    }
+
+    function showForbiddenModal(matchedLandmark, alternatives) {
+      const modal = document.getElementById('forbiddenModal');
+      const title = document.getElementById('forbiddenTitle');
+      const list = document.getElementById('forbiddenAlternatives');
+      title.textContent = `⚠️ ${matchedLandmark}不可上車`;
+      // 用 DOM API 重建子節點，避免 innerHTML XSS
+      while (list.firstChild) list.removeChild(list.firstChild);
+      alternatives.slice(0, 4).forEach(alt => {
+        const btn = document.createElement('button');
+        btn.style.cssText = 'background:#1E88E5;color:#fff;border:none;border-radius:8px;padding:12px 14px;font-size:14px;font-weight:600;text-align:left;cursor:pointer;line-height:1.3;';
+        const nameDiv = document.createElement('div');
+        nameDiv.textContent = alt.name;
+        const addrDiv = document.createElement('div');
+        addrDiv.style.cssText = 'font-size:11px;color:#E3F2FD;margin-top:2px;font-weight:400;';
+        addrDiv.textContent = alt.address || '';
+        btn.appendChild(nameDiv);
+        btn.appendChild(addrDiv);
+        btn.addEventListener('click', () => pickAlternativeLocation(alt));
+        list.appendChild(btn);
+      });
+      modal.style.display = 'flex';
+      // 鎖住確認按鈕，避免使用者強送禁止點
+      document.getElementById('submitBtn').disabled = true;
+    }
+
+    function pickAlternativeLocation(alt) {
+      pickupData = { lat: alt.lat, lng: alt.lng, address: alt.address || alt.name };
+      document.getElementById('pickupDisplay').textContent = pickupData.address;
+      document.getElementById('submitBtn').disabled = false;
+      // 地圖移動 + marker 跟隨
+      if (map && marker) {
+        const pos = { lat: alt.lat, lng: alt.lng };
+        map.setCenter(pos);
+        map.setZoom(17);
+        marker.setPosition(pos);
+      }
+      // 更新快取，讓再次拖回火車站時能重新觸發
+      lastForbiddenCheckKey = `${alt.lat.toFixed(5)},${alt.lng.toFixed(5)},${pickupData.address}`;
+      document.getElementById('forbiddenModal').style.display = 'none';
     }
 
     // ===== 步驟切換 =====

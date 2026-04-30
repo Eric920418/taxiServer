@@ -908,6 +908,97 @@ export function cancelConfirmCard(orderId: string, pickupAddress: string, status
   };
 }
 
+// ========== 禁止上車區替代點選單 ==========
+
+/**
+ * 命中禁止上車地點（例花蓮火車站）時顯示的卡片：
+ * - 紅底頂部警示「⚠️ 此處不可上車」
+ * - 列出多個替代上車點作為按鈕
+ * - 點擊後送 postback action=PICK_ALTERNATIVE&landmarkId=N
+ *
+ * LINE Flex Message footer 可放多個 button，採垂直 layout 較易閱讀
+ */
+export function forbiddenPickupCard(
+  matchedLandmark: string,
+  alternatives: Array<{ id: number; name: string; address: string }>
+): FlexMessage {
+  const buttons = alternatives.slice(0, 4).map((alt) => ({
+    type: 'button' as const,
+    style: 'primary' as const,
+    color: '#1E88E5',
+    margin: 'sm' as const,
+    height: 'sm' as const,
+    action: {
+      type: 'postback' as const,
+      label: alt.name.length > 12 ? alt.name.substring(0, 11) + '…' : alt.name,
+      data: `action=PICK_ALTERNATIVE&landmarkId=${alt.id}`,
+      displayText: `改至「${alt.name}」上車`,
+    },
+  }));
+
+  const bubble: FlexBubble = {
+    type: 'bubble',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#D32F2F',
+      paddingAll: '14px',
+      contents: [
+        {
+          type: 'text',
+          text: `⚠️ ${matchedLandmark}不可上車`,
+          weight: 'bold',
+          size: 'lg',
+          color: '#FFFFFF',
+        },
+        {
+          type: 'text',
+          text: '依當地計程車管理規定，此處禁止載客',
+          size: 'xs',
+          color: '#FFEBEE',
+          margin: 'sm',
+          wrap: true,
+        },
+      ],
+    },
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'sm',
+      contents: [
+        {
+          type: 'text',
+          text: '請選一個附近合法上車點：',
+          weight: 'bold',
+          size: 'md',
+          color: '#333333',
+        },
+        {
+          type: 'text',
+          text: '步行 1–5 分鐘可到，司機會在該點等您',
+          size: 'xs',
+          color: '#999999',
+          wrap: true,
+          margin: 'xs',
+        },
+      ],
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'xs',
+      paddingAll: '12px',
+      contents: buttons,
+    },
+  };
+
+  return {
+    type: 'flex',
+    altText: `${matchedLandmark}不可上車，請選擇附近替代上車點`,
+    contents: bubble,
+  };
+}
+
 // ========== 預約確認卡 ==========
 
 export function scheduleConfirmCard(

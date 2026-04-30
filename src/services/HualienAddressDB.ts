@@ -14,6 +14,7 @@ import pool from '../db/connection';
 // ========== 類型定義 ==========
 
 export interface LandmarkEntry {
+  id?: number;              // landmarks.id（給 forbidden alternative 引用用，可選）
   name: string;             // 正式全名
   lat: number | null;       // 精確緯度（人工驗證）
   lng: number | null;       // 精確經度
@@ -24,6 +25,10 @@ export interface LandmarkEntry {
   taigiAliases: string[];   // Whisper 台語腔調可能轉出的同音字
   priority: number;         // 0-10，越高越優先
   district: string;         // 所屬行政區（給 Geocoding 補前綴用）
+
+  // 2026-04 新增：禁止上車區機制
+  isForbiddenPickup?: boolean;             // true = 此地點禁止計程車載客
+  alternativePickupLandmarkIds?: number[]; // 替代上車點的 landmarks.id 陣列
 }
 
 export interface LookupResult {
@@ -163,6 +168,7 @@ class HualienAddressDB {
   private exactIndex: Map<string, LandmarkEntry> = new Map();
   private aliasIndex: Map<string, LandmarkEntry> = new Map();
   private taigiIndex: Map<string, LandmarkEntry> = new Map();
+  private idIndex: Map<number, LandmarkEntry> = new Map(); // id → entry（給 forbidden alternative lookup 用）
   private allLandmarks: LandmarkEntry[] = [];
   private lastBuiltAt: Date | null = null;
 
@@ -171,9 +177,23 @@ class HualienAddressDB {
    * 啟動時由 index.ts 呼叫；Admin 寫入後由 admin-landmarks.ts 呼叫。
    */
   async rebuildIndex(): Promise<void> {
+    // 容錯：新欄位 is_forbidden_pickup / alternative_pickup_landmark_ids 可能尚未 migrate，
+    //       用 to_regclass 檢查避免冷啟時 query 失敗（migration 015 前後行為都正確）
+    const colCheck = await pool.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'landmarks' AND column_name = 'is_forbidden_pickup'
+      LIMIT 1
+    `);
+    const hasForbiddenCols = colCheck.rowCount && colCheck.rowCount > 0;
+
+    const forbiddenCols = hasForbiddenCols
+      ? `, l.is_forbidden_pickup, l.alternative_pickup_landmark_ids`
+      : `, false AS is_forbidden_pickup, '{}'::int[] AS alternative_pickup_landmark_ids`;
+
     const result = await pool.query(`
       SELECT
-        l.id, l.name, l.lat, l.lng, l.address, l.category, l.district, l.priority,
+        l.id, l.name, l.lat, l.lng, l.address, l.category, l.district, l.priority
+        ${forbiddenCols},
         COALESCE(
           json_agg(
             json_build_object('alias', la.alias, 'type', la.alias_type)
@@ -190,6 +210,7 @@ class HualienAddressDB {
     const newExact = new Map<string, LandmarkEntry>();
     const newAlias = new Map<string, LandmarkEntry>();
     const newTaigi = new Map<string, LandmarkEntry>();
+    const newId = new Map<number, LandmarkEntry>();
     const newAll: LandmarkEntry[] = [];
 
     for (const row of result.rows) {
@@ -201,6 +222,7 @@ class HualienAddressDB {
       }
 
       const entry: LandmarkEntry = {
+        id: row.id,
         name: row.name,
         lat: row.lat !== null ? parseFloat(row.lat) : null,
         lng: row.lng !== null ? parseFloat(row.lng) : null,
@@ -210,10 +232,15 @@ class HualienAddressDB {
         taigiAliases: taigiList,
         priority: row.priority,
         district: row.district,
+        isForbiddenPickup: !!row.is_forbidden_pickup,
+        alternativePickupLandmarkIds: Array.isArray(row.alternative_pickup_landmark_ids)
+          ? row.alternative_pickup_landmark_ids
+          : [],
       };
 
       newAll.push(entry);
       newExact.set(entry.name, entry);
+      newId.set(row.id, entry);
 
       for (const alias of aliasList) {
         const existing = newAlias.get(alias);
@@ -232,6 +259,7 @@ class HualienAddressDB {
     this.exactIndex = newExact;
     this.aliasIndex = newAlias;
     this.taigiIndex = newTaigi;
+    this.idIndex = newId;
     this.allLandmarks = newAll;
     this.lastBuiltAt = new Date();
 
@@ -267,6 +295,47 @@ class HualienAddressDB {
    */
   isWithinBounds(lat: number, lng: number): boolean {
     return isWithinHualienBounds(lat, lng);
+  }
+
+  /**
+   * 用座標查詢附近的禁止上車地標（半徑單位：公尺）
+   * Google reverse geocode 字串無法直接命中時的座標 fallback
+   */
+  findNearbyForbidden(lat: number, lng: number, radiusMeters: number): LandmarkEntry | null {
+    // 簡化：只掃 isForbiddenPickup=true 的（量極少，O(N) 無感）
+    const forbidden = this.allLandmarks.filter(l => l.isForbiddenPickup && l.lat !== null && l.lng !== null);
+    let nearest: LandmarkEntry | null = null;
+    let minDistSq = Number.MAX_VALUE;
+    // 緯度 1 度 ≈ 111 km；經度 1 度 ≈ 111 km × cos(lat)
+    // 用平方距離省 sqrt，最後才比較
+    const radiusDeg = radiusMeters / 111000; // 約略，足夠近似（< 0.5% 誤差於花蓮緯度）
+    const radiusSq = radiusDeg * radiusDeg;
+    for (const l of forbidden) {
+      const dLat = (l.lat as number) - lat;
+      const dLng = (l.lng as number) - lng;
+      const distSq = dLat * dLat + dLng * dLng;
+      if (distSq < radiusSq && distSq < minDistSq) {
+        minDistSq = distSq;
+        nearest = l;
+      }
+    }
+    return nearest;
+  }
+
+  /**
+   * 取得指定地標的「替代上車點」清單（供禁止上車區功能用）
+   *
+   * @param landmarkName 命中的禁止地標名稱（例如「花蓮火車站」）
+   * @returns 替代地標 entries（已過濾不存在的 ID）
+   */
+  getForbiddenAlternatives(landmarkName: string): LandmarkEntry[] {
+    const entry = this.exactIndex.get(landmarkName);
+    if (!entry || !entry.isForbiddenPickup || !entry.alternativePickupLandmarkIds?.length) {
+      return [];
+    }
+    return entry.alternativePickupLandmarkIds
+      .map(id => this.idIndex.get(id))
+      .filter((e): e is LandmarkEntry => !!e && e.lat !== null && e.lng !== null);
   }
 
   /**

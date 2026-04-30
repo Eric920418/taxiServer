@@ -35,12 +35,37 @@ interface ConversationData {
   destLng?: number;
   scheduledAt?: string;
   estimatedFare?: number;
+  /**
+   * 命中禁止上車區時暫存替代點選單，等使用者按 PICK_ALTERNATIVE postback 後回填 pickup
+   */
+  forbiddenAlternatives?: Array<{
+    id: number;
+    name: string;
+    address: string;
+    lat: number;
+    lng: number;
+  }>;
 }
 
 interface GeocodingResult {
   lat: number;
   lng: number;
   formattedAddress: string;
+  /**
+   * 命中禁止上車區（例花蓮火車站）時設定。
+   * 此情況下 lat/lng/formattedAddress 仍會填入命中地標的座標供顯示用，
+   * 但呼叫端應該偵測此欄位、不直接用座標建單，改要求使用者選替代點。
+   */
+  forbiddenPickup?: {
+    matchedLandmark: string;
+    alternatives: Array<{
+      id: number;
+      name: string;
+      address: string;
+      lat: number;
+      lng: number;
+    }>;
+  };
 }
 
 interface ParsedIntent {
@@ -193,6 +218,15 @@ export class LineMessageProcessor {
         break;
       }
 
+      case 'PICK_ALTERNATIVE': {
+        const landmarkIdStr = params.get('landmarkId');
+        const landmarkId = landmarkIdStr ? parseInt(landmarkIdStr, 10) : NaN;
+        if (Number.isFinite(landmarkId)) {
+          await this.handlePickAlternative(userId, lineUser, landmarkId, event.replyToken);
+        }
+        break;
+      }
+
       default:
         console.log(`[LINE] 未知 postback action: ${action}`);
     }
@@ -265,10 +299,23 @@ export class LineMessageProcessor {
     const data: ConversationData = lineUser.conversation_data || {};
 
     if (state === 'AWAITING_PICKUP' || state === 'IDLE') {
+      // 用座標反查是否落在禁止上車區
+      const forbiddenInfo = this.buildForbiddenPickupByCoords(lat, lng);
+      if (forbiddenInfo) {
+        const handled = await this.interceptForbiddenPickup(
+          userId,
+          { lat, lng, formattedAddress: address || '', forbiddenPickup: forbiddenInfo },
+          { ...data, mode: data.mode || 'CALL' },
+          replyToken
+        );
+        if (handled) return;
+      }
+
       // 儲存上車地點
       data.pickupLat = lat;
       data.pickupLng = lng;
       data.pickupAddress = address || `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      data.forbiddenAlternatives = undefined;
 
       await this.updateConversationState(userId, 'AWAITING_DESTINATION', data);
       await this.lineClient.replyMessage({
@@ -286,6 +333,17 @@ export class LineMessageProcessor {
 
     } else {
       // 非預期狀態，當作上車地點開始新流程
+      const forbiddenInfo = this.buildForbiddenPickupByCoords(lat, lng);
+      if (forbiddenInfo) {
+        const handled = await this.interceptForbiddenPickup(
+          userId,
+          { lat, lng, formattedAddress: address || '', forbiddenPickup: forbiddenInfo },
+          { mode: 'CALL' },
+          replyToken
+        );
+        if (handled) return;
+      }
+
       const newData: ConversationData = {
         mode: 'CALL',
         pickupLat: lat,
@@ -316,6 +374,45 @@ export class LineMessageProcessor {
     data.destLat = undefined;
     data.destLng = undefined;
     await this.showConfirmCard(userId, data, replyToken);
+  }
+
+  /**
+   * 使用者在禁止上車區選了替代上車點：
+   *  - 從 conversation_data.forbiddenAlternatives 找該 ID 對應座標
+   *  - 寫入 pickup 後前進到 AWAITING_DESTINATION，提示輸入目的地
+   */
+  private async handlePickAlternative(
+    userId: string,
+    lineUser: LineUser,
+    landmarkId: number,
+    replyToken: string
+  ): Promise<void> {
+    const data: ConversationData = lineUser.conversation_data || {};
+    const alts = data.forbiddenAlternatives || [];
+    const picked = alts.find(a => a.id === landmarkId);
+
+    if (!picked) {
+      // 過期狀態（state 被重置或暫存丟失），請使用者重新開始
+      await this.lineClient.replyMessage({
+        replyToken,
+        messages: [{ type: 'text', text: '替代點選單已過期，請重新輸入「叫車」開始新訂單。' }],
+      });
+      return;
+    }
+
+    data.pickupLat = picked.lat;
+    data.pickupLng = picked.lng;
+    data.pickupAddress = picked.address || picked.name;
+    data.forbiddenAlternatives = undefined;
+
+    await this.updateConversationState(userId, 'AWAITING_DESTINATION', data);
+    await this.lineClient.replyMessage({
+      replyToken,
+      messages: [
+        { type: 'text', text: `已選擇上車點：${picked.name}\n📍 ${picked.address}` },
+        templates.askDestinationMessage(),
+      ],
+    });
   }
 
   private async showConfirmCard(userId: string, data: ConversationData, replyToken: string): Promise<void> {
@@ -662,9 +759,13 @@ export class LineMessageProcessor {
     const geo = await this.geocodeAddress(address);
 
     if (state === 'AWAITING_PICKUP') {
+      // 禁止上車區攔截
+      if (await this.interceptForbiddenPickup(userId, geo, data, replyToken)) return;
+
       data.pickupAddress = geo?.formattedAddress || address;
       data.pickupLat = geo?.lat;
       data.pickupLng = geo?.lng;
+      data.forbiddenAlternatives = undefined;
 
       await this.updateConversationState(userId, 'AWAITING_DESTINATION', data);
       await this.lineClient.replyMessage({
@@ -723,6 +824,10 @@ export class LineMessageProcessor {
         const data: ConversationData = { mode: 'CALL' };
 
         const pickupGeo = await this.geocodeAddress(parsed.pickupAddress);
+
+        // 禁止上車區攔截
+        if (await this.interceptForbiddenPickup(userId, pickupGeo, data, replyToken)) return;
+
         data.pickupAddress = pickupGeo?.formattedAddress || parsed.pickupAddress;
         data.pickupLat = pickupGeo?.lat;
         data.pickupLng = pickupGeo?.lng;
@@ -869,6 +974,73 @@ export class LineMessageProcessor {
 
   // ========== Geocoding ==========
 
+  /**
+   * 共用攔截：若 pickup geocode 命中禁止上車區，
+   *   1. 將替代點暫存到 conversation_data.forbiddenAlternatives
+   *   2. 回覆 forbiddenPickupCard 讓使用者選替代點
+   *   3. 不改變 conversation_state（仍停留在 AWAITING_PICKUP / IDLE）
+   *
+   * 回傳 true 表示已處理（呼叫端應 return）；false 表示沒命中、繼續正常流程
+   */
+  private async interceptForbiddenPickup(
+    userId: string,
+    pickupGeo: GeocodingResult | null,
+    currentData: ConversationData,
+    replyToken: string
+  ): Promise<boolean> {
+    const fp = pickupGeo?.forbiddenPickup;
+    if (!fp || fp.alternatives.length === 0) return false;
+
+    const newData: ConversationData = {
+      ...currentData,
+      // 暫不寫 pickupLat/Lng，等使用者選替代點才填
+      pickupAddress: undefined,
+      pickupLat: undefined,
+      pickupLng: undefined,
+      forbiddenAlternatives: fp.alternatives,
+    };
+
+    // 維持在 AWAITING_PICKUP，使用者選了替代點才前進到 AWAITING_DESTINATION
+    await this.updateConversationState(userId, 'AWAITING_PICKUP', newData);
+    await this.lineClient.replyMessage({
+      replyToken,
+      messages: [templates.forbiddenPickupCard(
+        fp.matchedLandmark,
+        fp.alternatives.map(a => ({ id: a.id, name: a.name, address: a.address }))
+      )],
+    });
+    return true;
+  }
+
+  /**
+   * 偵測命中地標是否禁止上車，並組裝替代點清單。
+   * 命中時呼叫端應顯示「請選替代上車點」UI 而非直接建單。
+   */
+  private buildForbiddenPickup(landmarkName: string): GeocodingResult['forbiddenPickup'] {
+    const alts = hualienAddressDB.getForbiddenAlternatives(landmarkName);
+    if (alts.length === 0) return undefined;
+    return {
+      matchedLandmark: landmarkName,
+      alternatives: alts.map(a => ({
+        id: a.id!,
+        name: a.name,
+        address: a.address,
+        lat: a.lat as number,
+        lng: a.lng as number,
+      })),
+    };
+  }
+
+  /**
+   * 用座標反查是否落在禁止上車地標 100 公尺範圍內
+   * Google reverse geocode 命中火車站位置但回傳非「花蓮火車站」字串時的最後防線
+   */
+  private buildForbiddenPickupByCoords(lat: number, lng: number): GeocodingResult['forbiddenPickup'] {
+    const forbidden = hualienAddressDB.findNearbyForbidden(lat, lng, 100);
+    if (!forbidden) return undefined;
+    return this.buildForbiddenPickup(forbidden.name);
+  }
+
   private async geocodeAddress(address: string): Promise<GeocodingResult | null> {
     // 段數正規化：1段→一段
     const addr = hualienAddressDB.normalizeSegment(address);
@@ -880,10 +1052,13 @@ export class LineMessageProcessor {
       if (isStreetAddress && dbResult.matchType === 'SUBSTRING') {
         // 街道地址跳過 SUBSTRING 命中
       } else {
+        // 禁止上車區攔截
+        const forbiddenInfo = this.buildForbiddenPickup(dbResult.entry.name);
         return {
           lat: dbResult.entry.lat,
           lng: dbResult.entry.lng,
           formattedAddress: dbResult.entry.address,
+          ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
         };
       }
     }
@@ -928,13 +1103,17 @@ export class LineMessageProcessor {
         }
         // 精確結果
         else {
+          const forbiddenInfo = this.buildForbiddenPickupByCoords(lat, lng);
           const geo: GeocodingResult = {
             lat,
             lng,
             formattedAddress: hualienAddressDB.cleanupDisplay(result.formatted_address || fullAddress),
+            ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
           };
-          try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
-          // 附加到失敗佇列（讓 Admin 看到 Google 建議座標）
+          // 不快取 forbiddenPickup 結果（讓使用者每次都會被攔截）
+          if (!forbiddenInfo) {
+            try { await cacheApiResponse(cacheKey, geo, 3600); } catch { /* ignore */ }
+          }
           attachGoogleResult(address, 'LINE', { lat: geo.lat, lng: geo.lng, formattedAddress: geo.formattedAddress }).catch(() => {});
           return geo;
         }

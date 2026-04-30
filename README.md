@@ -2,9 +2,211 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-04-24
+> 更新日期：2026-04-26
 
-## 📝 最新修改（2026-04-24）- PR1 客人反向通知基礎建設（尚未接入流程）
+## 📝 最新修改（2026-04-26）- 花蓮火車站禁止上車區引導機制
+
+### 解決的問題
+花蓮火車站上方（站體周圍計程車排班區外）依當地計程車管理規定**禁止載客**，違規會被開罰／驅趕。
+但客人會自然地說「到花蓮火車站」、在地圖選火車站位置，舊系統會直接接單派車 → 司機到場才發現不能載客。
+
+### 解法：三管道（LIFF / LINE / 電話）攔截 + 4 個合法替代上車點
+landmarks 表加兩個欄位（`is_forbidden_pickup`、`alternative_pickup_landmark_ids`），
+seed 一次性把花蓮火車站標記禁止 + 4 個替代點：花蓮轉運站 / 轉運站7-11 / 回瀾青年旅館 / 阿美麻糬。
+三個入口的 `geocodeAddress()` 命中禁止地標時，回傳 `forbiddenPickup` 欄位，呼叫端：
+- **LIFF（booking.html）**：Modal 強制覆蓋確認鍵，4 個替代點按鈕，點擊後地圖移動 + pickup 替換
+- **LINE 對話**：Flex Message 紅底警示 + 4 Quick Reply 按鈕，postback `PICK_ALTERNATIVE&landmarkId=N`
+- **電話**：客人沒法即時點選 → 標 `processing_status='NEEDS_REVIEW'`，operator 撥回提供替代點
+
+### 影響檔案（9 個）
+- `src/db/migrations/015-forbidden-pickup-zones.sql` — **新增**
+  - landmarks 加 `is_forbidden_pickup BOOLEAN`、`alternative_pickup_landmark_ids INTEGER[]`
+  - 部分索引 `idx_landmarks_forbidden_pickup` 只索引被禁止的地點
+- `scripts/seed-forbidden-pickup-zones.ts` — **新增**
+  - 用 Google Geocoding API + Places fallback 抓 3 個新地標座標（含 Hualien bounds 驗證）
+  - 冪等：依 `name` 跳過已存在；別名衝突自動跳過
+  - 設定花蓮火車站 forbidden + alternatives = [花蓮轉運站, 7-11, 回瀾, 阿美麻糬]
+- `src/db/migrate.ts` — **註冊** `forbidden-pickup` migration key
+- `src/services/HualienAddressDB.ts` — **擴充**
+  - `LandmarkEntry` 加 `id`、`isForbiddenPickup`、`alternativePickupLandmarkIds`
+  - 新增 `idIndex: Map<number, LandmarkEntry>` 給 alternative lookup
+  - `rebuildIndex()` 帶欄位存在性檢查（容錯：runtime 在 migration 015 跑之前 / 之後都不會炸）
+  - 新方法 `findNearbyForbidden(lat, lng, radius)` — 座標反查（半徑 100m）
+  - 新方法 `getForbiddenAlternatives(landmarkName)` — 從 idIndex 回傳替代地標
+- `src/services/LineMessageProcessor.ts` — **三入口攔截**
+  - `GeocodingResult` 加可選 `forbiddenPickup` 欄位
+  - `geocodeAddress()` DB lookup 分支 + Google API 結果分支都套 `buildForbiddenPickupByCoords`
+  - **不快取 forbiddenPickup 結果**（每次都要攔截）
+  - `interceptForbiddenPickup()` helper 把替代點塞進 `conversation_data.forbiddenAlternatives`、回 forbiddenPickupCard、保持 AWAITING_PICKUP
+  - 套用到 `handleAddressInput` / `handleLocationMessage` / `handleNaturalLanguage` 三個入口
+  - 新 postback action `PICK_ALTERNATIVE&landmarkId=N` → `handlePickAlternative()` 把選中的替代點寫進 pickup → 前進 AWAITING_DESTINATION
+- `src/services/PhoneCallProcessor.ts` — **電話端攔截**
+  - 同樣擴充 `GeocodingResult` 介面 + `buildForbiddenPickup` / `buildForbiddenPickupByCoords`
+  - `geocodeAddress()` DB / Geocoding API / Places Search 三條路徑都套；命中時 skip Redis cache
+  - `handleNewOrder()` 偵測 `pickupGeo.forbiddenPickup` → 改走新方法 `handleForbiddenPickupCall()`
+  - `handleForbiddenPickupCall` 標 `NEEDS_REVIEW` + `error_message` 帶禁止地點 + 替代點清單；推 `phone:forbidden_pickup` socket 事件
+- `src/services/LineFlexTemplates.ts` — **新增** `forbiddenPickupCard(matchedLandmark, alternatives)`
+  - 紅底 header「⚠️ {地名}不可上車」+ 4 個 primary button (footer vertical)
+  - postback data: `action=PICK_ALTERNATIVE&landmarkId=N`
+  - label 超過 12 字自動截斷（LINE 按鈕標籤限制）
+- `src/api/line-liff.ts` — **新增** `GET /api/line/liff/check-pickup`（公開無 auth）
+  - 接受 `lat+lng` 或 `address` 任一
+  - 回 `{ forbidden, matchedLandmark?, alternatives? }`
+- `public/liff/booking.html` — **新增 Modal + 拓展 updateLocation**
+  - `updateLocation()` 在 pickup 步驟呼叫 `checkForbiddenPickup()`，命中即跳 Modal
+  - 新增 `forbiddenModal` overlay（紅底警示 + 4 個按鈕，直接刻 inline style）
+  - `pickAlternativeLocation(alt)` 替換 pickup 並把地圖移到該點
+  - 用 DOM API 建按鈕（textContent / appendChild）避免 XSS
+  - 用 `lastForbiddenCheckKey` 去重，避免 `map.idle` 重複觸發
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install
+pnpm build
+# 跑 migration（idempotent）
+pnpm migrate forbidden-pickup
+# 抓 3 個替代地標座標 + 設定花蓮火車站 forbidden（需 GOOGLE_MAPS_API_KEY）
+pnpm ts-node scripts/seed-forbidden-pickup-zones.ts
+pm2 restart taxiserver
+pm2 logs taxiserver --lines 30 --nostream
+```
+
+### 驗證
+1. **LINE 對話**：傳「花蓮火車站」→ 收到紅色 Flex Message 4 個按鈕，點轉運站 → 流程繼續到目的地
+2. **LIFF 搜尋**：地圖搜尋「花蓮火車站」→ 跳 Modal 4 個按鈕；點 7-11 → pickup 替換 + 地圖移動
+3. **LIFF 拖曳**：把 marker 拖到火車站位置 → 也跳 Modal（座標反查命中 100m 範圍）
+4. **電話訂單**：模擬「我在花蓮火車站」→ phone_calls 應 `NEEDS_REVIEW`，admin 後台收到 `phone:forbidden_pickup` 推送
+5. **舊資料**：歷史訂單不受影響（migration 只加 schema 不動 orders）
+
+### 設計決策
+- **不做派單前最後 50m 防線**：三層攔截已夠；過度設計
+- **不做 admin UI 編輯禁止 flag**：目前只 1 個禁止點，硬編 seed 即可；未來多禁止點再做地標管理頁 toggle
+- **不做乘客 App 端**：花蓮業務主要走 LINE / LIFF / 電話三管道
+- **forbiddenPickup 結果不快取**：每次都要攔截，避免某客人「曾通過」讓後面客人也通過
+
+---
+
+## 📝 歷史修改（2026-04-24）- PR2 客人反向通知分派層（灰度 flag 預設關閉）
+
+### 解決的問題
+PR1 已把 SmsNotifier、migration、customer_notifications 表、feature flag 都建好，
+但 `84219a6` commit 為了快速 ship no-show 流程，在 3 個地方**直接呼叫 LINE** 繞過
+尚未存在的分派層：
+- `orders.ts:395-401` PATCH /accept 接單推 LINE
+- `orders.ts:645-651` PATCH /status 的 ARRIVED/DONE/CANCELLED 推 LINE
+- `SmartDispatcherV2.ts:1002-1009` 派單失敗推 LINE
+
+問題是這些 shortcut：
+- 電話叫車客人（無 LINE）**完全收不到通知** — 核心業務痛點仍未解
+- 不寫 `customer_notifications` 表 → admin 後台看不到通知歷史
+- 無去重、無 feature flag 可秒級關閉、無失敗追蹤
+
+### 本次改動（PR2 — 接入分派層，範圍收斂到 3 個事件）
+新增 `CustomerNotificationService`（LINE 優先、SMS 備援的分派核心），並 refactor
+3 個掛鉤點從直接呼叫 LineNotifier 改為走分派層。**刻意收斂範圍**：
+- ✅ **PR2 範圍**（走分派層，含 SMS 降級）：`DRIVER_ACCEPTED` / `DRIVER_ARRIVED` / `DISPATCH_FAILED`
+- ❌ **保留 84219a6 shortcut**（LINE-only）：`DONE` (trip completion) / `CANCELLED` (含 NO_SHOW) / `DRIVER_WAITING` (no-show 倒數)
+- 📅 **PR2.5 規劃**：NO_SHOW 也補 SMS 降級（需新 migration 擴充 event CHECK）
+
+### Feature flag 控制
+部署後預設 `CUSTOMER_NOTIFICATION_ENABLED=false`，**分派層完全 noop、行為等同
+84219a6 時期**。觀察 1 小時無異常後手動切 `true` 啟用 SMS 降級。出問題可秒級關閉。
+
+### 影響檔案
+- `src/services/CustomerNotificationService.ts` — **新增**
+  - 3 個 public method：`notifyDriverAccepted` / `notifyDriverArrived` / `notifyDispatchFailed`
+  - dispatch 核心：feature flag 檢查 → 去重查詢 → 查訂單 → LINE 優先 → SMS 備援
+  - 自動寫入 `customer_notifications` 表 + 更新 `orders.notification_channel`
+  - 單例管理（與 LineNotifier / SmsNotifier 風格一致）
+  - 預留 3 個決策點 TODO：
+    - ★ A: SMS 模板文案（已給安全預設值可直接上線）
+    - ★ B: LINE 失敗降級策略（預設不降級最保守）
+    - ★ C: 手機正規化擴充（PR1 已有最小實作）
+- `scripts/test-customer-notification.ts` — **新增**
+  - 8 個 test case：feature flag / LINE 優先 / SMS 備援 / 兩者皆無 / 去重 /
+    LINE 失敗不降級 / SMS 失敗寫 FAILED / 訂單不存在
+  - 結果：**28/28 pass**
+- `src/index.ts` — **修改**
+  - 追加 `initSmsNotifier()`（MITAKE_* env 檢查 + try/catch）
+  - 追加 `initCustomerNotificationService()`（依賴 LINE + SMS 都 init 成功才啟用）
+  - 啟動 log 顯示 feature flag 狀態
+- `src/api/orders.ts` — **修改 2 個掛鉤點**
+  - L395 PATCH /accept：`ACCEPTED` 優先走分派層，分派層未啟用時 fallback 舊 shortcut
+  - L645 PATCH /status 萬用 endpoint：拆分 `ARRIVED` (走分派層) vs `DONE/CANCELLED` (保留 shortcut)
+  - 新增 `import { getCustomerNotificationService }`
+- `src/services/SmartDispatcherV2.ts` — **修改 L1002-1013**
+  - `handleNoDriversAvailable` 的 LINE shortcut 改走分派層
+  - 保留 late-binding `require()` + try/catch 防禦模式（LineNotifier 原本的設計）
+  - 分派層未 init 時 fallback 到舊 LineNotifier 行為
+
+### 部署步驟（灰度流程）
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install
+pnpm build
+pm2 restart taxiserver
+pm2 logs taxiserver --lines 30 --nostream
+# 確認 log 出現：
+# [系統] SMS 通知服務已初始化（三竹 Mitake）     ← 若 MITAKE_* 已設
+# [系統] 客人反向通知分派層已初始化（feature flag: DISABLED）
+
+# 觀察 1 小時無異常後切 feature flag
+sed -i 's/CUSTOMER_NOTIFICATION_ENABLED=false/CUSTOMER_NOTIFICATION_ENABLED=true/' /var/www/taxiServer/.env
+pm2 restart taxiserver
+# 預期 log：feature flag: ENABLED
+
+# 出問題秒級關閉
+sed -i 's/CUSTOMER_NOTIFICATION_ENABLED=true/CUSTOMER_NOTIFICATION_ENABLED=false/' /var/www/taxiServer/.env
+pm2 restart taxiserver
+```
+
+### 驗證
+```bash
+# 1. 本地：跑測試腳本
+pnpm ts-node scripts/test-customer-notification.ts
+# 預期：28 pass / 0 fail
+
+# 2. 本地：型別檢查
+npx tsc --noEmit
+# 預期：0 error
+
+# 3. Server：切 flag=true 後跑真實訂單測試（LINE 訂單）
+#    接單 → 查 customer_notifications 應有 DRIVER_ACCEPTED / LINE / SENT 紀錄
+sudo -u postgres psql -d hualien_taxi -c \
+  "SELECT order_id, event, channel, status, sent_at FROM customer_notifications ORDER BY sent_at DESC LIMIT 5"
+
+# 4. 去重驗證：同訂單重複 PATCH /accept → 第二次無新紀錄
+```
+
+### 成本監控（SQL query，放 admin 後台儀表板）
+```sql
+-- 今日 SMS 成本估算（三竹 NT$0.7/則）
+SELECT
+  DATE(sent_at) AS day,
+  COUNT(*) FILTER (WHERE channel = 'SMS' AND status = 'SENT') AS sms_sent,
+  COUNT(*) FILTER (WHERE channel = 'LINE' AND status = 'SENT') AS line_sent,
+  COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
+  COUNT(*) FILTER (WHERE channel = 'SMS' AND status = 'SENT') * 0.7 AS sms_cost_ntd
+FROM customer_notifications
+WHERE sent_at >= CURRENT_DATE - INTERVAL '7 days'
+GROUP BY DATE(sent_at)
+ORDER BY day DESC;
+```
+
+### 注意事項
+- PR2 部署後若 `CUSTOMER_NOTIFICATION_ENABLED=false`（預設），**整個分派層 noop、
+  行為等同 84219a6** — 司機接單 / 到達 / 派單失敗走的是 LineNotifier 舊 shortcut
+- 切 `true` 後才會啟用 SMS 降級、`customer_notifications` 表才有紀錄
+- 三竹帳號若未設 `MITAKE_*` env，SmsNotifier 不會初始化 → CustomerNotificationService
+  不會初始化 → flag 即使 true 也會 fallback 回舊 shortcut（安全降級）
+- 三個決策點的 TODO 位置已標記在 `CustomerNotificationService.ts`，你可隨時 override
+
+---
+
+## 📝 歷史修改（2026-04-24）- PR1 客人反向通知基礎建設（尚未接入流程）
 
 ### 解決的問題（規劃中）
 電話叫車 / LINE 叫車的客人目前**完全收不到主動通知**：

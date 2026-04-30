@@ -77,6 +77,64 @@ router.get('/config', (req, res) => {
   });
 });
 
+// ========== 禁止上車區檢查 ==========
+
+/**
+ * GET /api/line/liff/check-pickup
+ *
+ * 給 LIFF booking.html 在地圖更新後檢查上車點是否落在禁止上車區。
+ * 接受 lat+lng（地圖拖曳）或 address（搜尋字串）任一。
+ * 公開無需 auth — 只回傳替代上車地標，無敏感資料。
+ *
+ * 回傳：
+ *   { forbidden: false } 安全可上車
+ *   { forbidden: true, matchedLandmark, alternatives:[{id,name,address,lat,lng}] }
+ */
+router.get('/check-pickup', (req, res) => {
+  const lat = parseFloat(req.query.lat as string);
+  const lng = parseFloat(req.query.lng as string);
+  const address = (req.query.address as string || '').trim();
+
+  let matchedName: string | null = null;
+
+  // 1. 用座標反查（範圍 100 公尺）
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    const nearby = hualienAddressDB.findNearbyForbidden(lat, lng, 100);
+    if (nearby) matchedName = nearby.name;
+  }
+
+  // 2. 沒命中再用地址字串查
+  if (!matchedName && address) {
+    const dbResult = hualienAddressDB.lookup(address);
+    if (dbResult?.entry.isForbiddenPickup) {
+      matchedName = dbResult.entry.name;
+    }
+  }
+
+  if (!matchedName) {
+    res.json({ forbidden: false });
+    return;
+  }
+
+  const alts = hualienAddressDB.getForbiddenAlternatives(matchedName);
+  if (alts.length === 0) {
+    res.json({ forbidden: false });
+    return;
+  }
+
+  res.json({
+    forbidden: true,
+    matchedLandmark: matchedName,
+    alternatives: alts.map(a => ({
+      id: a.id!,
+      name: a.name,
+      address: a.address,
+      lat: a.lat as number,
+      lng: a.lng as number,
+    })),
+  });
+});
+
 // ========== 建立訂單 ==========
 
 /**

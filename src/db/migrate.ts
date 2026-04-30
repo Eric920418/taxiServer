@@ -16,6 +16,7 @@ const MIGRATIONS = {
   'address-failures': '010-address-failures.sql',     // 地址匹配失敗佇列
   'no-show': '013-no-show-extensions.sql',            // no-show 罰金 + 備註 + 統計
   'driver-passenger-ext': '014-driver-passenger-extensions.sql', // 證件日期/班次/黑名單/車型
+  'forbidden-pickup': '015-forbidden-pickup-zones.sql',          // 禁止上車區
 };
 
 /**
