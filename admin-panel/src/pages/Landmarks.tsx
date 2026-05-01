@@ -9,6 +9,7 @@ import {
   HistoryOutlined, SearchOutlined, UndoOutlined, EnvironmentOutlined,
   TagOutlined, AppstoreOutlined, HomeOutlined, AimOutlined,
   StarOutlined, FileTextOutlined, ClockCircleOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { landmarkAPI, type Landmark, type LandmarkInput, type LandmarkAudit } from '../services/api';
@@ -467,7 +468,25 @@ const Landmarks: React.FC = () => {
             </Col>
             <Col span={6}>
               <Form.Item
-                label="優先級 (0-10)"
+                label={
+                  <span>
+                    優先級 (0-10)&nbsp;
+                    <Tooltip
+                      title={
+                        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>📌 簡單心法</div>
+                          <div>• <b>超知名熱點</b>（火車站、機場、慈濟醫院、東大門夜市）→ <b>9–10</b></div>
+                          <div>• <b>連鎖品牌可能多分店</b>（家樂福、7-11 主要分店、銀行）→ <b>6–8</b><br/>&nbsp;&nbsp;&nbsp;（要選你想客人講該品牌時跳到哪間）</div>
+                          <div>• <b>一般景點/商家</b>（無同名問題）→ <b>5</b>（預設，無所謂）</div>
+                          <div>• <b>冷門/小地標</b>（只是補完整性，怕誤判）→ <b>2–3</b></div>
+                          <div style={{ marginTop: 6, color: '#FFD54F' }}>※ 只在「同名衝突」或「子字串模糊比對」時才生效</div>
+                        </div>
+                      }
+                    >
+                      <QuestionCircleOutlined style={{ color: '#999', cursor: 'help' }} />
+                    </Tooltip>
+                  </span>
+                }
                 name="priority"
                 rules={[{ required: true }]}
               >
