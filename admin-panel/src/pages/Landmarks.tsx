@@ -42,9 +42,9 @@ const PRIORITY_NORMAL = 5;
 const PRIORITY_MINOR = 2;
 
 const PRIORITY_SEGMENTED_OPTIONS = [
-  { label: '🔝 主要', value: PRIORITY_PRIMARY },
-  { label: '◎ 一般', value: PRIORITY_NORMAL },
-  { label: '▪ 次要', value: PRIORITY_MINOR },
+  { label: '主要', value: PRIORITY_PRIMARY },
+  { label: '一般', value: PRIORITY_NORMAL },
+  { label: '次要', value: PRIORITY_MINOR },
 ];
 
 // 任意 0-10 數字 → 最近的三檔正規值（給 Segmented 顯示用）
@@ -321,9 +321,9 @@ const Landmarks: React.FC = () => {
       sorter: (a, b) => (a.priority || 0) - (b.priority || 0),
       render: (priority: number) => {
         const tier = normalizePriority(priority);
-        if (tier === PRIORITY_PRIMARY) return <Tag color="gold">🔝 主要</Tag>;
-        if (tier === PRIORITY_MINOR) return <Tag>▪ 次要</Tag>;
-        return <Tag color="blue">◎ 一般</Tag>;
+        if (tier === PRIORITY_PRIMARY) return <Tag color="gold">主要</Tag>;
+        if (tier === PRIORITY_MINOR) return <Tag>次要</Tag>;
+        return <Tag color="blue">一般</Tag>;
       },
     },
     {
