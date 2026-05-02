@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag,
   Popconfirm, Drawer, Timeline, Typography, Row, Col, App as AntdApp,
-  Tooltip, Switch, Alert, Collapse,
+  Tooltip, Switch, Alert, Collapse, Segmented,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
@@ -34,6 +34,26 @@ const DISTRICT_OPTIONS = [
   '鳳林鎮', '光復鄉', '豐濱鄉', '瑞穗鄉', '玉里鎮',
   '富里鄉', '卓溪鄉', '萬榮鄉',
 ];
+
+// 「重要程度」三段制：UI 三檔 ↔ DB 0-10 SMALLINT
+// 用途：地標 lookup 衝突時誰勝出（同名別名 / SUBSTRING fallback）
+const PRIORITY_PRIMARY = 8;
+const PRIORITY_NORMAL = 5;
+const PRIORITY_MINOR = 2;
+
+const PRIORITY_SEGMENTED_OPTIONS = [
+  { label: '🔝 主要', value: PRIORITY_PRIMARY },
+  { label: '◎ 一般', value: PRIORITY_NORMAL },
+  { label: '▪ 次要', value: PRIORITY_MINOR },
+];
+
+// 任意 0-10 數字 → 最近的三檔正規值（給 Segmented 顯示用）
+function normalizePriority(priority: number | undefined | null): number {
+  if (priority == null) return PRIORITY_NORMAL;
+  if (priority >= 7) return PRIORITY_PRIMARY;
+  if (priority <= 2) return PRIORITY_MINOR;
+  return PRIORITY_NORMAL;
+}
 
 const Landmarks: React.FC = () => {
   const { message } = AntdApp.useApp();
@@ -124,7 +144,7 @@ const Landmarks: React.FC = () => {
           address: full.address,
           category: full.category,
           district: full.district,
-          priority: full.priority,
+          priority: normalizePriority(full.priority),
           dropoff_lat: full.dropoff_lat ? parseFloat(full.dropoff_lat as string) : null,
           dropoff_lng: full.dropoff_lng ? parseFloat(full.dropoff_lng as string) : null,
           dropoff_address: full.dropoff_address,
@@ -294,11 +314,17 @@ const Landmarks: React.FC = () => {
       ),
     },
     {
-      title: <><StarOutlined /> 優先級</>,
+      title: <><StarOutlined /> 重要程度</>,
       dataIndex: 'priority',
-      width: 90,
+      width: 110,
       align: 'center',
       sorter: (a, b) => (a.priority || 0) - (b.priority || 0),
+      render: (priority: number) => {
+        const tier = normalizePriority(priority);
+        if (tier === PRIORITY_PRIMARY) return <Tag color="gold">🔝 主要</Tag>;
+        if (tier === PRIORITY_MINOR) return <Tag>▪ 次要</Tag>;
+        return <Tag color="blue">◎ 一般</Tag>;
+      },
     },
     {
       title: <><FileTextOutlined /> 別名數</>,
@@ -469,28 +495,14 @@ const Landmarks: React.FC = () => {
             <Col span={6}>
               <Form.Item
                 label={
-                  <span>
-                    優先級 (0-10)&nbsp;
-                    <Tooltip
-                      title={
-                        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                          <div style={{ fontWeight: 'bold', marginBottom: 4 }}>📌 簡單心法</div>
-                          <div>• <b>超知名熱點</b>（火車站、機場、慈濟醫院、東大門夜市）→ <b>9–10</b></div>
-                          <div>• <b>連鎖品牌可能多分店</b>（家樂福、7-11 主要分店、銀行）→ <b>6–8</b><br/>&nbsp;&nbsp;&nbsp;（要選你想客人講該品牌時跳到哪間）</div>
-                          <div>• <b>一般景點/商家</b>（無同名問題）→ <b>5</b>（預設，無所謂）</div>
-                          <div>• <b>冷門/小地標</b>（只是補完整性，怕誤判）→ <b>2–3</b></div>
-                          <div style={{ marginTop: 6, color: '#FFD54F' }}>※ 只在「同名衝突」或「子字串模糊比對」時才生效</div>
-                        </div>
-                      }
-                    >
-                      <QuestionCircleOutlined style={{ color: '#999', cursor: 'help' }} />
-                    </Tooltip>
-                  </span>
+                  <Tooltip title="同名衝突時誰勝出。多數地標選「一般」即可">
+                    <span>重要程度&nbsp;<QuestionCircleOutlined style={{ color: '#999' }} /></span>
+                  </Tooltip>
                 }
                 name="priority"
                 rules={[{ required: true }]}
               >
-                <InputNumber min={0} max={10} style={{ width: '100%' }} />
+                <Segmented block options={PRIORITY_SEGMENTED_OPTIONS} />
               </Form.Item>
             </Col>
           </Row>
