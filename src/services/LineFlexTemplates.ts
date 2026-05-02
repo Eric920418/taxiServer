@@ -404,24 +404,35 @@ export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMe
         },
       ],
     },
-    ...(trackingUrl ? {
-      footer: {
-        type: 'box' as const,
-        layout: 'vertical' as const,
-        contents: [
-          {
-            type: 'button' as const,
-            style: 'secondary' as const,
-            height: 'sm' as const,
-            action: {
-              type: 'uri' as const,
-              label: '查看派單狀態',
-              uri: trackingUrl,
-            },
+    footer: {
+      type: 'box' as const,
+      layout: 'vertical' as const,
+      spacing: 'sm' as const,
+      contents: [
+        ...(trackingUrl ? [{
+          type: 'button' as const,
+          style: 'secondary' as const,
+          height: 'sm' as const,
+          action: {
+            type: 'uri' as const,
+            label: '查看派單狀態',
+            uri: trackingUrl,
           },
-        ],
-      },
-    } : {}),
+        }] : []),
+        {
+          type: 'button' as const,
+          style: 'link' as const,
+          height: 'sm' as const,
+          color: '#F44336',
+          action: {
+            type: 'postback' as const,
+            label: '取消訂單',
+            data: 'action=CHECK_ORDER',
+            displayText: '取消訂單',
+          },
+        },
+      ],
+    },
   };
 
   return {
