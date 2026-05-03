@@ -49,6 +49,7 @@ interface LandmarkInput {
   dropoff_address?: string | null;
   aliases?: string[];
   taigi_aliases?: string[];
+  pickup_note?: string | null; // 給 LINE 客人看的上車提示
 }
 
 /**
@@ -111,6 +112,11 @@ function validateInput(input: LandmarkInput, isCreate: boolean): string | null {
   if (input.address !== undefined && input.address.length > 100) return '地址超過 100 字元';
   if (input.name && input.address && input.name.trim() === input.address.trim()) {
     return '地址不可與名稱完全相同 — 請填真實街道地址';
+  }
+
+  if (input.pickup_note !== undefined && input.pickup_note !== null) {
+    if (typeof input.pickup_note !== 'string') return '上車提示必須是字串';
+    if (input.pickup_note.length > 200) return '上車提示超過 200 字元';
   }
 
   if (input.lat !== undefined && input.lng !== undefined) {
@@ -203,7 +209,7 @@ router.get('/', async (req: AuthedRequest, res: Response) => {
     params.push(pageSize, offset);
     const listResult = await pool.query(
       `SELECT l.id, l.name, l.lat, l.lng, l.address, l.category, l.district,
-              l.priority, l.dropoff_lat, l.dropoff_lng, l.dropoff_address,
+              l.priority, l.dropoff_lat, l.dropoff_lng, l.dropoff_address, l.pickup_note,
               l.created_by, l.updated_by, l.created_at, l.updated_at, l.deleted_at,
               (SELECT COUNT(*) FROM landmark_aliases la WHERE la.landmark_id = l.id) AS alias_count
        FROM landmarks l
@@ -307,8 +313,8 @@ router.post(
       const insertResult = await client.query(
         `INSERT INTO landmarks
           (name, lat, lng, address, category, district, priority,
-           dropoff_lat, dropoff_lng, dropoff_address, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+           dropoff_lat, dropoff_lng, dropoff_address, pickup_note, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
          RETURNING *`,
         [
           input.name,
@@ -321,6 +327,7 @@ router.post(
           input.dropoff_lat ?? null,
           input.dropoff_lng ?? null,
           input.dropoff_address ?? null,
+          input.pickup_note?.trim() || null,
           req.admin!.admin_id,
         ]
       );
@@ -411,6 +418,10 @@ router.patch(
         dropoff_lat: input.dropoff_lat,
         dropoff_lng: input.dropoff_lng,
         dropoff_address: input.dropoff_address,
+        // 空字串視為清空 → null；trim 後寫入
+        pickup_note: input.pickup_note === undefined
+          ? undefined
+          : (input.pickup_note?.trim() || null),
       };
       for (const [col, val] of Object.entries(fieldMap)) {
         if (val !== undefined) {

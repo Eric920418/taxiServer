@@ -4,7 +4,67 @@
 > 版本：v1.7.0-MVP
 > 更新日期：2026-05-03
 
-## 📝 最新修改（2026-05-03）- LINE 叫車 NL 入口 + 地標資料品質大修
+## 📝 最新修改（2026-05-03 #2）- 地標上車提示備註 + 兩段確認 UI
+
+### 解決的問題
+某些地標（如慈濟醫院多個出入口、無障礙上車區）需要 admin 給客人具體位置指示「請站在 X 等」。
+之前 admin 把這類提示誤塞進 `address` 欄位，造成客人看到亂七八糟的「到放輪椅的地方等...」。
+現在開新欄位 `pickup_note` 專門承載，並設計兩段確認 UI 強制客人讀過再確認叫車。
+
+### 設計
+1. **DB schema**：landmarks 加 `pickup_note TEXT` 欄位（migration 016，nullable，沿用 IF NOT EXISTS）
+2. **HualienAddressDB**：LandmarkEntry 加 `pickupNote`，rebuildIndex 容錯三新欄位是否存在
+3. **LineMessageProcessor**：GeocodingResult / ConversationData 加 `pickupNote`，從 DB lookup 命中傳下來
+4. **新確認流程**（`showConfirmCard()` 分流）：
+   - 沒備註 → 直接 `orderConfirmCard`（既有行為，不變）
+   - 有備註 → 先 `pickupNoteAckCard`（黃底警示卡 + 「我知道了，繼續叫車」按鈕） → 按了再進 `orderConfirmCard`
+5. **新 postback action**：`ACK_PICKUP_NOTE` → 對應 `AWAITING_PICKUP_NOTE_ACK` 對話狀態
+6. **admin form**：新增獨立區塊「📣 上車提示（給 LINE 客人看）」+ Antd `Input.TextArea` (200 字 maxLength + showCount)
+7. **admin Table**：新欄位顯示 🟠「有」 Tag (hover 看內容) 或 「—」
+
+### 為什麼不複用 address / aliases
+- `address` 是行政地址用作派車基準，**機器讀**
+- `aliases` 是 lookup 用的別名，**搜尋匹配**
+- `pickup_note` 是給人類客人看的指示，**完全顯示用**
+
+三者用途完全不重疊。混用就是上次「到放輪椅的地方等」的根源。
+
+### 影響檔案
+- `src/db/migrations/016-landmark-pickup-note.sql` — 新增
+- `src/db/migrate.ts` — 註冊 016
+- `src/services/HualienAddressDB.ts` — LandmarkEntry + rebuildIndex
+- `src/services/LineMessageProcessor.ts` — interface 擴充 + showConfirmCard 分流 + ACK_PICKUP_NOTE handler
+- `src/services/LineFlexTemplates.ts` — 新增 `pickupNoteAckCard()`
+- `src/api/admin-landmarks.ts` — LandmarkInput + validateInput + INSERT/UPDATE/SELECT
+- `admin-panel/src/services/api.ts` — Landmark / LandmarkInput interface
+- `admin-panel/src/pages/Landmarks.tsx` — Form Item + Table column
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install
+pnpm build
+cd admin-panel && pnpm build && cd ..
+pnpm migrate pickup-note
+pm2 restart taxiserver
+```
+
+### 驗證
+1. admin 編輯地標 → 看到「📣 上車提示」區塊 + 200 字 textarea
+2. 填一個地標的 pickup_note 例如「請至大廳右側電梯旁」
+3. LINE 傳該地標名稱（例「慈濟門診」）→ 應收到黃色警示卡 + 「我知道了」按鈕
+4. 按「我知道了」 → 才進原本的「確認叫車資訊」卡
+5. 沒填 pickup_note 的地標叫車流程不變（單卡確認）
+
+### 設計決策
+- **2 段卡 (ack → confirm)** 而非單卡黃框：強制 friction 確保客人真的讀過。要點 2 次才能下單，慢一點但更安全。
+- **pickup_note 是 free-text 不限格式**：admin 比較好用、LINE Flex `wrap: true` 自動換行。沒像 address 那樣加正規化規則。
+- **ack 後的 conversation_state = AWAITING_PICKUP_NOTE_ACK**：跟 AWAITING_CONFIRM 區分，避免狀態跳躍時誤判。
+
+---
+
+## 📝 歷史修改（2026-05-03）- LINE 叫車 NL 入口 + 地標資料品質大修
 
 ### 解決的問題（生產回報）
 1. 客人傳「民國路 7-11 超商」→ 系統回「輸入叫車...」沒觸發叫車（要打「...到車站」才會）

@@ -29,6 +29,9 @@ export interface LandmarkEntry {
   // 2026-04 新增：禁止上車區機制
   isForbiddenPickup?: boolean;             // true = 此地點禁止計程車載客
   alternativePickupLandmarkIds?: number[]; // 替代上車點的 landmarks.id 陣列
+
+  // 2026-05 新增：上車提示備註（給 LINE 客人看）
+  pickupNote?: string;                      // 「請至輪椅出入口等候」這類具體位置指示
 }
 
 export interface LookupResult {
@@ -177,23 +180,29 @@ class HualienAddressDB {
    * 啟動時由 index.ts 呼叫；Admin 寫入後由 admin-landmarks.ts 呼叫。
    */
   async rebuildIndex(): Promise<void> {
-    // 容錯：新欄位 is_forbidden_pickup / alternative_pickup_landmark_ids 可能尚未 migrate，
-    //       用 to_regclass 檢查避免冷啟時 query 失敗（migration 015 前後行為都正確）
-    const colCheck = await pool.query(`
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'landmarks' AND column_name = 'is_forbidden_pickup'
-      LIMIT 1
+    // 容錯：新欄位可能尚未 migrate（migration 015 / 016 前後都要能正常啟動）
+    const colsCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'landmarks'
+        AND column_name IN ('is_forbidden_pickup', 'alternative_pickup_landmark_ids', 'pickup_note')
     `);
-    const hasForbiddenCols = colCheck.rowCount && colCheck.rowCount > 0;
+    const cols = new Set((colsCheck.rows as Array<{ column_name: string }>).map(r => r.column_name));
+    const hasForbiddenCols = cols.has('is_forbidden_pickup');
+    const hasPickupNote = cols.has('pickup_note');
 
     const forbiddenCols = hasForbiddenCols
       ? `, l.is_forbidden_pickup, l.alternative_pickup_landmark_ids`
       : `, false AS is_forbidden_pickup, '{}'::int[] AS alternative_pickup_landmark_ids`;
 
+    const pickupNoteCol = hasPickupNote
+      ? `, l.pickup_note`
+      : `, NULL::text AS pickup_note`;
+
     const result = await pool.query(`
       SELECT
         l.id, l.name, l.lat, l.lng, l.address, l.category, l.district, l.priority
-        ${forbiddenCols},
+        ${forbiddenCols}
+        ${pickupNoteCol},
         COALESCE(
           json_agg(
             json_build_object('alias', la.alias, 'type', la.alias_type)
@@ -236,6 +245,7 @@ class HualienAddressDB {
         alternativePickupLandmarkIds: Array.isArray(row.alternative_pickup_landmark_ids)
           ? row.alternative_pickup_landmark_ids
           : [],
+        pickupNote: row.pickup_note || undefined,
       };
 
       newAll.push(entry);

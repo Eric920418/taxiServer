@@ -45,6 +45,11 @@ interface ConversationData {
     lat: number;
     lng: number;
   }>;
+  /**
+   * 上車提示備註（給客人看），需先在 pickupNoteAckCard 顯示並要求按「我知道了」
+   * 按完後流程才繼續到 orderConfirmCard
+   */
+  pickupNote?: string;
 }
 
 interface GeocodingResult {
@@ -66,6 +71,11 @@ interface GeocodingResult {
       lng: number;
     }>;
   };
+  /**
+   * 上車提示備註（DB 命中地標時才有）。例「請至輪椅出入口等候」。
+   * 呼叫端負責在 LINE 顯示給客人看，並要求按一次「我知道了」確認。
+   */
+  pickupNote?: string;
 }
 
 interface ParsedIntent {
@@ -223,6 +233,20 @@ export class LineMessageProcessor {
         const landmarkId = landmarkIdStr ? parseInt(landmarkIdStr, 10) : NaN;
         if (Number.isFinite(landmarkId)) {
           await this.handlePickAlternative(userId, lineUser, landmarkId, event.replyToken);
+        }
+        break;
+      }
+
+      case 'ACK_PICKUP_NOTE': {
+        // 客人按「我知道了」，繼續走原本的 orderConfirmCard 流程
+        const data: ConversationData = lineUser.conversation_data || {};
+        if (lineUser.conversation_state === 'AWAITING_PICKUP_NOTE_ACK') {
+          await this.showFinalConfirmCard(userId, data, event.replyToken);
+        } else {
+          await this.lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '訂單流程已過期，請重新輸入「叫車」開始。' }],
+          });
         }
         break;
       }
@@ -423,18 +447,39 @@ export class LineMessageProcessor {
         replyToken,
         messages: [templates.askScheduleTimeMessage()],
       });
-    } else {
-      // 即時叫車：顯示確認卡
-      await this.updateConversationState(userId, 'AWAITING_CONFIRM', data);
+      return;
+    }
+
+    // 即時叫車：若上車點有 pickup_note，先強制讀提示再進確認流程
+    if (data.pickupNote) {
+      await this.updateConversationState(userId, 'AWAITING_PICKUP_NOTE_ACK', data);
       await this.lineClient.replyMessage({
         replyToken,
-        messages: [templates.orderConfirmCard(
+        messages: [templates.pickupNoteAckCard(
           data.pickupAddress || '未知',
-          data.destAddress || null,
-          data.estimatedFare || null,
+          data.pickupNote,
         )],
       });
+      return;
     }
+
+    await this.showFinalConfirmCard(userId, data, replyToken);
+  }
+
+  /**
+   * 顯示最終 orderConfirmCard。從 showConfirmCard 直接呼叫（無 note）或從
+   * ACK_PICKUP_NOTE postback 呼叫（讀完 note 按了「我知道了」）。
+   */
+  private async showFinalConfirmCard(userId: string, data: ConversationData, replyToken: string): Promise<void> {
+    await this.updateConversationState(userId, 'AWAITING_CONFIRM', data);
+    await this.lineClient.replyMessage({
+      replyToken,
+      messages: [templates.orderConfirmCard(
+        data.pickupAddress || '未知',
+        data.destAddress || null,
+        data.estimatedFare || null,
+      )],
+    });
   }
 
   private async handleDatetimePicked(
@@ -766,6 +811,7 @@ export class LineMessageProcessor {
       data.pickupLat = geo?.lat;
       data.pickupLng = geo?.lng;
       data.forbiddenAlternatives = undefined;
+      data.pickupNote = geo?.pickupNote;  // DB 命中地標時帶入
 
       await this.updateConversationState(userId, 'AWAITING_DESTINATION', data);
       await this.lineClient.replyMessage({
@@ -799,12 +845,16 @@ export class LineMessageProcessor {
         lng: dbHit.entry.lng,
         formattedAddress: dbHit.entry.address,
         ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
+        ...(dbHit.entry.pickupNote ? { pickupNote: dbHit.entry.pickupNote } : {}),
       };
       if (await this.interceptForbiddenPickup(userId, pickupGeo, data, replyToken)) return;
 
       data.pickupAddress = pickupGeo.formattedAddress;
       data.pickupLat = pickupGeo.lat;
       data.pickupLng = pickupGeo.lng;
+      if (dbHit.entry.pickupNote) {
+        data.pickupNote = dbHit.entry.pickupNote;
+      }
 
       // 進 AWAITING_DESTINATION，詢問目的地（與正常 startCallTaxi 流程匯流）
       await this.updateConversationState(userId, 'AWAITING_DESTINATION', data);
@@ -873,6 +923,7 @@ export class LineMessageProcessor {
         data.pickupAddress = pickupGeo?.formattedAddress || parsed.pickupAddress;
         data.pickupLat = pickupGeo?.lat;
         data.pickupLng = pickupGeo?.lng;
+        data.pickupNote = pickupGeo?.pickupNote;
 
         if (parsed.destAddress) {
           const destGeo = await this.geocodeAddress(parsed.destAddress);
@@ -1101,6 +1152,7 @@ export class LineMessageProcessor {
           lng: dbResult.entry.lng,
           formattedAddress: dbResult.entry.address,
           ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
+          ...(dbResult.entry.pickupNote ? { pickupNote: dbResult.entry.pickupNote } : {}),
         };
       }
     }

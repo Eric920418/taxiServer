@@ -440,6 +440,7 @@ export interface Landmark {
   dropoff_lat: number | string | null;
   dropoff_lng: number | string | null;
   dropoff_address: string | null;
+  pickup_note: string | null;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
@@ -460,6 +461,7 @@ export interface LandmarkInput {
   dropoff_lat?: number | null;
   dropoff_lng?: number | null;
   dropoff_address?: string | null;
+  pickup_note?: string | null;
   aliases: string[];
   taigi_aliases: string[];
 }

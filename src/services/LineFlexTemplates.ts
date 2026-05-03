@@ -1010,6 +1010,117 @@ export function forbiddenPickupCard(
   };
 }
 
+// ========== 上車提示確認卡 ==========
+
+/**
+ * 客人選了有 pickup_note 的地標時插入的中介卡片：
+ *   - 黃色警示頂部「⚠️ 重要上車提示」
+ *   - body 顯示 admin 設定的 pickup_note 文字（醒目）
+ *   - 按「我知道了，繼續叫車」postback action=ACK_PICKUP_NOTE → 進 orderConfirmCard
+ *   - 按「取消叫車」postback action=CANCEL_FLOW → 重置對話
+ *
+ * 設計目的：強制客人讀過上車位置指示再進確認，避免站錯位置。
+ */
+export function pickupNoteAckCard(pickupAddress: string, pickupNote: string): FlexMessage {
+  const bubble: FlexBubble = {
+    type: 'bubble',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#FFA000',
+      paddingAll: '14px',
+      contents: [
+        {
+          type: 'text',
+          text: '⚠️ 重要上車提示',
+          weight: 'bold',
+          size: 'lg',
+          color: '#FFFFFF',
+        },
+        {
+          type: 'text',
+          text: '請確認上車位置，再按「我知道了」繼續',
+          size: 'xs',
+          color: '#FFF8E1',
+          margin: 'sm',
+          wrap: true,
+        },
+      ],
+    },
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'md',
+      contents: [
+        {
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: '#FFF8E1',
+          cornerRadius: '8px',
+          paddingAll: '14px',
+          contents: [
+            {
+              type: 'text',
+              text: pickupNote,
+              size: 'md',
+              color: '#E65100',
+              weight: 'bold',
+              wrap: true,
+            },
+          ],
+        },
+        { type: 'separator', margin: 'sm' },
+        {
+          type: 'box',
+          layout: 'horizontal',
+          margin: 'sm',
+          contents: [
+            { type: 'text', text: '上車點', size: 'sm', color: '#999999', flex: 2 },
+            { type: 'text', text: pickupAddress, size: 'sm', color: '#333333', flex: 5, wrap: true },
+          ],
+        },
+      ],
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'sm',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: '#FFA000',
+          height: 'sm',
+          action: {
+            type: 'postback',
+            label: '我知道了，繼續叫車',
+            data: 'action=ACK_PICKUP_NOTE',
+            displayText: '我知道了，繼續叫車',
+          },
+        },
+        {
+          type: 'button',
+          style: 'link',
+          height: 'sm',
+          color: '#888888',
+          action: {
+            type: 'postback',
+            label: '取消',
+            data: 'action=CANCEL_FLOW',
+            displayText: '取消',
+          },
+        },
+      ],
+    },
+  };
+
+  return {
+    type: 'flex',
+    altText: `上車提示：${pickupNote}`,
+    contents: bubble,
+  };
+}
+
 // ========== 預約確認卡 ==========
 
 export function scheduleConfirmCard(

@@ -148,6 +148,7 @@ const Landmarks: React.FC = () => {
           dropoff_lat: full.dropoff_lat ? parseFloat(full.dropoff_lat as string) : null,
           dropoff_lng: full.dropoff_lng ? parseFloat(full.dropoff_lng as string) : null,
           dropoff_address: full.dropoff_address,
+          pickup_note: full.pickup_note || '',
           aliases: aliasList,
           taigi_aliases: taigiList,
         });
@@ -332,6 +333,20 @@ const Landmarks: React.FC = () => {
       width: 90,
       align: 'center',
       sorter: (a, b) => (a.alias_count || 0) - (b.alias_count || 0),
+    },
+    {
+      title: '上車提示',
+      dataIndex: 'pickup_note',
+      width: 90,
+      align: 'center',
+      render: (note: string | null) =>
+        note ? (
+          <Tooltip title={note}>
+            <Tag color="orange" style={{ cursor: 'help' }}>有</Tag>
+          </Tooltip>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        ),
     },
     {
       title: <><ClockCircleOutlined /> 最後更新</>,
@@ -614,6 +629,26 @@ const Landmarks: React.FC = () => {
             tooltip="Whisper 在台語腔調下可能轉出的同音字，例如：火車頭、飛機厝"
           >
             <Select mode="tags" tokenSeparators={[',', ' ', '、']} />
+          </Form.Item>
+
+          <Title level={5} style={{ marginTop: 16 }}>📣 上車提示（給 LINE 客人看）</Title>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="客人在 LINE 確認叫車前會看到這段文字，並要求按一次「我知道了」確認。"
+            description="例：「請至輪椅出入口等候」、「在大廳右側電梯旁」、「請到便利商店門口」。沒填則跳過此步驟，直接顯示確認卡。"
+          />
+          <Form.Item
+            name="pickup_note"
+            rules={[{ max: 200, message: '上車提示上限 200 字' }]}
+          >
+            <Input.TextArea
+              rows={2}
+              maxLength={200}
+              showCount
+              placeholder="（選填）給客人看的上車位置指示。留空表示不顯示提示。"
+            />
           </Form.Item>
 
           <Collapse
