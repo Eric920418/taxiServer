@@ -785,6 +785,39 @@ export class LineMessageProcessor {
   // ========== GPT 自然語言解析 ==========
 
   private async handleNaturalLanguage(userId: string, text: string, replyToken: string): Promise<void> {
+    // ⚡ Fast path: 先試 DB lookup — 客人傳「裸地名」(例: 民國路 7-11 超商) 直接觸發叫車流程
+    // 只信任高信心命中（EXACT / ALIAS / TAIGI），SUBSTRING 仍走 GPT 避免誤判
+    const dbHit = hualienAddressDB.lookup(text.trim());
+    if (dbHit && dbHit.matchType !== 'SUBSTRING' && dbHit.entry.lat !== null && dbHit.entry.lng !== null) {
+      console.log(`[LINE] NL 入口 DB 命中 (${dbHit.matchType}): "${text}" → ${dbHit.entry.name}`);
+      const data: ConversationData = { mode: 'CALL' };
+
+      // 構造 GeocodingResult 格式給禁止上車區攔截器用
+      const forbiddenInfo = this.buildForbiddenPickup(dbHit.entry.name);
+      const pickupGeo = {
+        lat: dbHit.entry.lat,
+        lng: dbHit.entry.lng,
+        formattedAddress: dbHit.entry.address,
+        ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
+      };
+      if (await this.interceptForbiddenPickup(userId, pickupGeo, data, replyToken)) return;
+
+      data.pickupAddress = pickupGeo.formattedAddress;
+      data.pickupLat = pickupGeo.lat;
+      data.pickupLng = pickupGeo.lng;
+
+      // 進 AWAITING_DESTINATION，詢問目的地（與正常 startCallTaxi 流程匯流）
+      await this.updateConversationState(userId, 'AWAITING_DESTINATION', data);
+      await this.lineClient.replyMessage({
+        replyToken,
+        messages: [
+          { type: 'text', text: `✓ 已設定上車點：${pickupGeo.formattedAddress}` },
+          templates.askDestinationMessage(),
+        ],
+      });
+      return;
+    }
+
     if (!this.openai) {
       await this.lineClient.replyMessage({
         replyToken,
@@ -807,6 +840,15 @@ export class LineMessageProcessor {
   "destAddress": "目的地（若有）",
   "scheduledTime": "預約時間 ISO 格式（若有）"
 }
+
+判斷規則：
+- 訊息包含明確叫車詞 (叫車/我要去/載我/calltaxi) → CALL_TAXI
+- **訊息只給單一地點/地標 (例: 民國路 7-11、慈濟醫院、火車站) 也視為 CALL_TAXI**，pickupAddress = 該地點，destAddress 留空
+- 訊息有「A 到 B / A 去 B」格式 → CALL_TAXI，pickup=A，dest=B
+- 含「取消/不要了/不叫了」 → CANCEL
+- 含「預約/明天/早上 X 點」 → RESERVE
+- 純問候/閒聊 (你好/哈囉) → UNKNOWN
+
 只回傳 JSON，不要其他文字。地點在花蓮縣。`
           },
           { role: 'user', content: text }

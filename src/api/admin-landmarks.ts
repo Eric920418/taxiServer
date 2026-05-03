@@ -52,9 +52,52 @@ interface LandmarkInput {
 }
 
 /**
+ * 清理 address 欄位 — admin 常誤塞動詞性備註、emoji、typo 進去。
+ * 在 validateInput 之前 in-place 修改 input.address。
+ */
+function sanitizeAddress(input: LandmarkInput): string[] {
+  const warnings: string[] = [];
+  if (!input.address) return warnings;
+
+  const original = input.address;
+  let cleaned = original;
+
+  // 去 emoji
+  cleaned = cleaned.replace(/[\u{1F300}-\u{1FAFF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu, '');
+
+  // 去前綴 "(...)" 括號備註
+  cleaned = cleaned.replace(/^\s*[\(（][^)）]*[\)）]\s*/, '');
+
+  // 去動詞性備註：「到 X 的地方等」、「請 X 等」、「放 X 的地方」
+  cleaned = cleaned.replace(/到[^,，。 ]{1,8}的地方等?\s*/g, '');
+  cleaned = cleaned.replace(/請[^,，。 ]{1,5}等\s*/g, '');
+  cleaned = cleaned.replace(/放[^,，。 ]{1,5}的地方\s*/g, '');
+
+  // 去結尾重複「號號」 → 「號」
+  cleaned = cleaned.replace(/號號+$/, '號');
+
+  // 多個逗號或空白 collapse
+  cleaned = cleaned.replace(/[,，]\s*[,，]/g, '，').trim();
+
+  if (cleaned !== original) {
+    warnings.push(`address 已自動清理: "${original}" → "${cleaned}"`);
+    input.address = cleaned;
+  }
+
+  return warnings;
+}
+
+/**
  * 驗證新增/修改輸入。回 null 表通過；回字串表錯誤訊息。
+ * 副作用：可能 in-place 清理 input.address（透過 sanitizeAddress）
  */
 function validateInput(input: LandmarkInput, isCreate: boolean): string | null {
+  // 寫入前 sanitize address（log 警告但不擋）
+  const warnings = sanitizeAddress(input);
+  if (warnings.length > 0) {
+    console.warn('[admin-landmarks]', warnings.join(' | '));
+  }
+
   if (isCreate) {
     if (!input.name || !input.name.trim()) return '地標名稱不可為空';
     if (input.lat === undefined || input.lng === undefined) return '經緯度必填';
@@ -64,6 +107,11 @@ function validateInput(input: LandmarkInput, isCreate: boolean): string | null {
   }
 
   if (input.name !== undefined && input.name.length > 100) return '名稱超過 100 字元';
+
+  if (input.address !== undefined && input.address.length > 100) return '地址超過 100 字元';
+  if (input.name && input.address && input.name.trim() === input.address.trim()) {
+    return '地址不可與名稱完全相同 — 請填真實街道地址';
+  }
 
   if (input.lat !== undefined && input.lng !== undefined) {
     if (typeof input.lat !== 'number' || typeof input.lng !== 'number') {

@@ -2,9 +2,84 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-05-01
+> 更新日期：2026-05-03
 
-## 📝 最新修改（2026-05-01）- 地標 priority 欄位 UX 重設計（連續 0-10 → 三段語意化）
+## 📝 最新修改（2026-05-03）- LINE 叫車 NL 入口 + 地標資料品質大修
+
+### 解決的問題（生產回報）
+1. 客人傳「民國路 7-11 超商」→ 系統回「輸入叫車...」沒觸發叫車（要打「...到車站」才會）
+2. 客人傳「慈濟輪椅」→ 顯示「中山路一段3巷138號」（錯地址，那是別棟樓）
+3. 客人傳「慈濟門診輪椅」→ 顯示「**到放輪椅的地方等** 花蓮市中央路三段707號」（admin 把備註塞進 address 欄位，原文回給客人看）
+
+### 根因
+1. **NL 入口太嚴**：handleNaturalLanguage 全靠 GPT 判定意圖，「裸地名」被視為非叫車意圖。
+2. **DB 資料髒**：7 筆 landmark 的 `address` 欄位被 admin 誤填動詞性備註、地名複製、typo（138號**號**）等。
+3. **常用 alias 缺**：id=196「民國路7-ELEVEn 愛民門市」沒設「民國路7-11」這種自然講法的別名，DB lookup 必失敗。
+
+### 修復（5 段一起上）
+
+#### B3 + B4：NL 入口加 DB-first fast path
+`src/services/LineMessageProcessor.ts` — `handleNaturalLanguage()` 進 GPT 之前先試
+`hualienAddressDB.lookup()`，命中 EXACT/ALIAS/TAIGI 高信心結果即直接進 AWAITING_DESTINATION。
+GPT prompt 也補上「使用者只給單一地點時也視為 CALL_TAXI」的判斷規則。
+SUBSTRING 命中仍走 GPT（避免子字串多筆平手誤判，如「慈濟」命中 13 個 candidate）。
+
+#### B1：admin Landmarks form 加 address 校驗
+`admin-panel/src/pages/Landmarks.tsx` — Form Item rules 加：
+- `address` 不可等於 `name`
+- 不可含「到 X 的地方等」「請 X 等」「放 X 的地方」這類動詞備註
+- 不可含 emoji、長度 6-100 字、結尾不可重複「號號」
+
+#### B2：後端 admin-landmarks 寫入前 sanitize address
+`src/api/admin-landmarks.ts` — 新增 `sanitizeAddress(input)` helper（log warning 但不擋），
+在 `validateInput` 開頭呼叫。defense in depth：前端校驗擋使用者錯誤、後端 sanitize 兜底自動清。
+另加 length 100 + name=address 後端校驗。
+
+#### A1：fix-landmark-addresses.ts（一次性腳本）
+`scripts/fix-landmark-addresses.ts` — 對指定 IDs `[23, 164, 165, 166, 167, 168, 236]`
+用 Google Reverse Geocoding 重抓 formatted_address 寫回 DB。預設 dry-run、加 `--apply` 才寫。
+部署後執行一次。
+
+#### A2：add-common-aliases.ts（一次性腳本）
+`scripts/add-common-aliases.ts` — 補幾組常用查詢 alias：
+- id=196 加「民國路7-11」「民國路超商」「愛民7-11」等
+- id=234 加「慈濟急診」「慈濟醫院急診室」
+- id=236 加「慈濟門診」「慈院門診」「慈濟輪椅出入口」
+
+UNIQUE 衝突 catch 跳過，冪等。
+
+### 部署步驟
+
+```bash
+cd /var/www/taxiServer
+git pull
+pnpm install
+pnpm build
+cd admin-panel && pnpm build && cd ..
+pm2 restart taxiserver
+
+# 一次性腳本（需 GOOGLE_MAPS_API_KEY）
+pnpm ts-node scripts/fix-landmark-addresses.ts            # dry-run 先看
+pnpm ts-node scripts/fix-landmark-addresses.ts --apply    # 確認 OK 寫 DB
+pnpm ts-node scripts/add-common-aliases.ts
+
+pm2 restart taxiserver   # 讓 hualienAddressDB 重 build index
+```
+
+### 驗證
+1. LINE 傳「民國路 7-11 超商」→ 應直接進「請輸入目的地」
+2. LINE 傳「慈濟輪椅」→ 應顯示乾淨的地址（無「到放輪椅的地方等」前綴）
+3. admin 編輯地標 → address 填「慈濟」(== name) 應被前端擋下
+4. admin 編輯地標 → address 填「到放東西的地方等中央路 707」存檔 → 後端 log 警告，DB 存「中央路 707」
+
+### 設計決策
+- **DB-first fast path 只信高信心命中**：SUBSTRING 仍走 GPT，避免「慈濟」這種短詞 substring 命中錯
+- **後端 sanitize 只清不擋**：admin 偶爾貼錯系統自動清；故意違規時前端擋下提供回饋
+- **fix 腳本不寫進 migrate.ts**：依賴 Google API 且只跑一次，跟 schema migration 性質不同
+
+---
+
+## 📝 歷史修改（2026-05-01）- 地標 priority 欄位 UX 重設計（連續 0-10 → 三段語意化）
 
 ### 解決的問題
 昨天（2026-04-26）替「優先級 (0-10)」加了 Tooltip 心法（9-10 / 6-8 / 5 / 2-3）後，

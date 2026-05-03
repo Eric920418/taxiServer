@@ -524,9 +524,29 @@ const Landmarks: React.FC = () => {
               <Form.Item
                 label="完整地址"
                 name="address"
-                rules={[{ required: true }]}
+                rules={[
+                  { required: true, message: '請輸入真實街道地址' },
+                  { min: 6, message: '地址過短，請輸入完整街道（例：花蓮市某某路X號）' },
+                  { max: 100, message: '地址過長（上限 100 字），備註請放別名欄位' },
+                  // 反例字串：客服常誤填動詞性備註
+                  { pattern: /^(?!.*(到.{1,8}的地方|請.{1,5}等|放.{1,5}的地方)).*$/, message: '地址不可含「到 X 的地方」「請 X 等」這類備註，請拆到別名/說明欄位' },
+                  // 不可含 emoji
+                  { pattern: /^[^\u{1F300}-\u{1FAFF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]*$/u, message: '地址不可含 emoji 表情符' },
+                  // 結尾不可有重複「號號」(typo)
+                  { pattern: /^(?!.*號號).*$/, message: '地址結尾不可重複「號號」（typo）' },
+                  // address 不可等於 name（地名複製錯誤的常見模式）
+                  ({ getFieldValue }) => ({
+                    validator(_rule, value) {
+                      const name = getFieldValue('name');
+                      if (value && name && value.trim() === name.trim()) {
+                        return Promise.reject(new Error('地址不可與名稱完全相同 — 請填真實街道地址'));
+                      }
+                      return Promise.resolve();
+                    },
+                  }),
+                ]}
               >
-                <Input placeholder="例：花蓮縣花蓮市站前路" />
+                <Input placeholder="例：花蓮縣花蓮市站前路 100 號" />
               </Form.Item>
             </Col>
           </Row>
