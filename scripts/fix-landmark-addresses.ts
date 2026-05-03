@@ -22,7 +22,9 @@ import { isWithinHualienBounds } from '../src/services/HualienAddressDB';
 dotenv.config();
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || '';
-const DEFAULT_IDS = [23, 164, 165, 166, 167, 168, 236];
+// id=23「慈濟門診圓環輪椅」座標本身就在新城鄉而不是花蓮市，reverse geocode
+// 拿到的是錯地址。需要 admin 手動修座標，先排除。
+const DEFAULT_IDS = [164, 165, 166, 167, 168, 236];
 
 interface Landmark {
   id: number;
@@ -54,12 +56,13 @@ async function reverseGeocode(lat: number, lng: number): Promise<string | null> 
 }
 
 /**
- * 清理 Google 回的 address 字串：去郵遞區號、去「台灣」前綴
+ * 清理 Google 回的 address 字串：去郵遞區號、去「台灣」前綴、修「號號」typo
  */
 function cleanupAddress(addr: string): string {
   return addr
     .replace(/^\s*\d{3,6}\s*[,，]?\s*/, '')
     .replace(/^\s*(台灣|Taiwan)\s*[,，]?\s*/i, '')
+    .replace(/號號+/g, '號') // Google API 偶爾回「138號號」這種 typo
     .trim();
 }
 
