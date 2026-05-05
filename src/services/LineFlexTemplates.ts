@@ -228,12 +228,84 @@ export function askDestinationMessage(): Message {
   };
 }
 
+// ========== 付款方式選擇 ==========
+
+/**
+ * 客人選好上車/目的地後詢問付款方式（mirror LIFF radio 三選一）：
+ *   CASH        現金
+ *   LOVE_CARD   愛心卡（會送補貼）
+ *   SENIOR_CARD 敬老卡（仍收現金 + 補貼）
+ *
+ * 客人按 → postback action=PICK_PAYMENT&value=<3 種其一> → handler 寫入
+ *   data.paymentType + data.subsidyType 後 re-call showConfirmCard 重評估
+ */
+export function askPaymentTypeMessage(): Message {
+  return {
+    type: 'text',
+    text: '請選擇付款方式：',
+    quickReply: {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '💵 現金',
+            data: 'action=PICK_PAYMENT&value=CASH',
+            displayText: '付款方式：現金',
+          },
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '❤️ 愛心卡',
+            data: 'action=PICK_PAYMENT&value=LOVE_CARD',
+            displayText: '付款方式：愛心卡',
+          },
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '👴 敬老卡',
+            data: 'action=PICK_PAYMENT&value=SENIOR_CARD',
+            displayText: '付款方式：敬老卡',
+          },
+        },
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '取消',
+            data: 'action=CANCEL_FLOW',
+            displayText: '取消',
+          },
+        },
+      ],
+    },
+  };
+}
+
 // ========== 叫車確認卡 ==========
+
+/**
+ * 把 paymentType + subsidyType 翻譯成中文「現金 / 愛心卡 / 敬老卡」label
+ */
+export function paymentLabel(
+  paymentType?: string,
+  subsidyType?: string,
+): string {
+  if (subsidyType === 'LOVE_CARD' || paymentType === 'LOVE_CARD_PHYSICAL') return '愛心卡';
+  if (subsidyType === 'SENIOR_CARD') return '敬老卡';
+  return '現金';
+}
 
 export function orderConfirmCard(
   pickupAddress: string,
   destAddress: string | null,
-  estimatedFare: number | null
+  estimatedFare: number | null,
+  paymentType?: string,
+  subsidyType?: string,
 ): FlexMessage {
   const bodyContents: any[] = [
     {
@@ -268,6 +340,17 @@ export function orderConfirmCard(
       ],
     },
   ];
+
+  // 付款方式（必有，showConfirmCard 已強制問過）
+  bodyContents.push({
+    type: 'box',
+    layout: 'horizontal',
+    margin: 'md',
+    contents: [
+      { type: 'text', text: '付款方式', size: 'sm', color: '#999999', flex: 2 },
+      { type: 'text', text: paymentLabel(paymentType, subsidyType), size: 'sm', color: '#333333', weight: 'bold', flex: 5 },
+    ],
+  });
 
   if (estimatedFare) {
     bodyContents.push({

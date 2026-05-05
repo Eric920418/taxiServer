@@ -2,9 +2,69 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-05-03
+> 更新日期：2026-05-05
 
-## 📝 最新修改（2026-05-03 #2）- 地標上車提示備註 + 兩段確認 UI
+## 📝 最新修改（2026-05-05）- LINE 對話加付款方式選擇 + showConfirmCard 改 orchestrator
+
+### 解決的問題
+LINE 對話流程舊流程：pickup → dest → confirm，**付款方式硬寫 `payment_type='CASH'`**。
+後果：
+- 客人想用愛心卡 / 敬老卡完全沒處輸入
+- 司機端訂單卡 SubsidyTag 永遠不會亮 → 司機接單後才發現要刷卡，但有些車沒刷卡機 → 載客糾紛
+- LIFF 流程有完整 radio 選擇，跟 LINE 對話資料不一致
+
+### 設計
+**LINE 對話加一步 AWAITING_PAYMENT**（介於目的地後、確認前）：
+1. AWAITING_PICKUP → AWAITING_DESTINATION → **AWAITING_PAYMENT** → AWAITING_CONFIRM
+2. 三個 Quick Reply 按鈕：💵 現金 / ❤️ 愛心卡 / 👴 敬老卡
+3. mirror LIFF 編碼：
+   - 現金 → `payment_type=CASH, subsidy_type=NONE`
+   - 愛心卡 → `payment_type=LOVE_CARD_PHYSICAL, subsidy_type=LOVE_CARD`
+   - 敬老卡 → `payment_type=CASH, subsidy_type=SENIOR_CARD`（敬老仍收現金，只是有補貼）
+
+### showConfirmCard 改成 orchestrator
+原本 showConfirmCard 是 leaf method 直接顯示確認卡。現在改成 chained checks：
+
+```
+showConfirmCard(data):
+  if pickupNote && !acked → AWAITING_PICKUP_NOTE_ACK
+  if !paymentType → AWAITING_PAYMENT
+  if RESERVE && !scheduledAt → AWAITING_SCHEDULE_TIME
+  else → AWAITING_CONFIRM (orderConfirmCard)
+```
+
+各 postback handler（ACK_PICKUP_NOTE / PICK_PAYMENT）只負責改 data，
+**re-call showConfirmCard 重新評估還缺什麼**。新增步驟未來只要加一個 if，
+不用每處 handler 都改。
+
+### orderConfirmCard 顯示付款方式
+原 `orderConfirmCard(pickup, dest, fare)` 加兩個 optional 參數
+`paymentType, subsidyType`，在卡片中間插入「付款方式：[現金/愛心卡/敬老卡]」一行。
+新增 helper `paymentLabel()` 統一翻譯。
+
+### Android 司機 App 零工作量
+Order.kt 已有 `subsidyType` 欄位、SubsidyTag 已實裝、OrderTagRowLarge 已串好。
+LINE 新訂單寫入正確 subsidy_type → SimplifiedDriverScreen 自動顯示 Tag。**不需發新 APK**。
+
+### 影響檔案
+- `src/services/LineMessageProcessor.ts` — ConversationData 加 paymentType/subsidyType/pickupNoteAcked，showConfirmCard 改 orchestrator，新 PICK_PAYMENT postback handler，createLineOrder + createScheduledOrder 用 data 取代硬寫 CASH，dispatch 也帶上 subsidyType
+- `src/services/LineFlexTemplates.ts` — 新增 askPaymentTypeMessage、orderConfirmCard 加 paymentType/subsidyType 參數+顯示行，新增 paymentLabel helper
+
+### 驗證
+1. LINE 傳「叫車」→ 選 pickup → 選 dest → **應出現付款方式選擇**（4 個 Quick Reply）
+2. 按「愛心卡」→ 確認卡顯示「付款方式：愛心卡」+ 司機 App 訂單卡顯示紅色「愛心卡」Tag
+3. 按「敬老卡」→ 同上但顯示紫色「敬老卡」Tag
+4. 按「現金」→ 確認卡顯示「現金」+ 司機端**沒 Tag**（NONE 不顯示，省 visual noise）
+5. RESERVE 模式：選 pickup/dest 後也走付款 → 預約時間 → 確認，順序正確
+
+### 設計決策
+- **Quick Reply 而非 Flex Card 三按鈕**：付款方式只有 3 + 取消 4 個選項，Quick Reply 簡潔（小圖示 + 文字），不佔螢幕空間。Flex Card 適合需要副標的選項。
+- **subsidyType=NONE 司機端不顯示 Tag**：現金訂單 ≈ 大部分。預設 + 例外的設計 — 司機看到 Tag 就要刷卡，沒 Tag 就是現金。
+- **showConfirmCard orchestrator 模式**：未來加新步驟（例：行動不便服務、寵物攜帶等）只要加一個 if，不用每處改。
+
+---
+
+## 📝 歷史修改（2026-05-03 #2）- 地標上車提示備註 + 兩段確認 UI
 
 ### 解決的問題
 某些地標（如慈濟醫院多個出入口、無障礙上車區）需要 admin 給客人具體位置指示「請站在 X 等」。

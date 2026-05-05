@@ -50,6 +50,17 @@ interface ConversationData {
    * 按完後流程才繼續到 orderConfirmCard
    */
   pickupNote?: string;
+  /** 客人已按「我知道了」確認過 pickupNote，避免 showConfirmCard 重複顯示 */
+  pickupNoteAcked?: boolean;
+
+  /**
+   * 付款方式（mirror LIFF 編碼）：
+   *   現金   → paymentType=CASH, subsidyType=NONE
+   *   愛心卡 → paymentType=LOVE_CARD_PHYSICAL, subsidyType=LOVE_CARD
+   *   敬老卡 → paymentType=CASH, subsidyType=SENIOR_CARD（敬老仍收現金，只是有補貼）
+   */
+  paymentType?: 'CASH' | 'LOVE_CARD_PHYSICAL' | 'OTHER';
+  subsidyType?: 'NONE' | 'SENIOR_CARD' | 'LOVE_CARD';
 }
 
 interface GeocodingResult {
@@ -238,16 +249,47 @@ export class LineMessageProcessor {
       }
 
       case 'ACK_PICKUP_NOTE': {
-        // 客人按「我知道了」，繼續走原本的 orderConfirmCard 流程
+        // 客人按「我知道了」，標記 acked 重新走 orchestrator
         const data: ConversationData = lineUser.conversation_data || {};
         if (lineUser.conversation_state === 'AWAITING_PICKUP_NOTE_ACK') {
-          await this.showFinalConfirmCard(userId, data, event.replyToken);
+          data.pickupNoteAcked = true;
+          await this.showConfirmCard(userId, data, event.replyToken);
         } else {
           await this.lineClient.replyMessage({
             replyToken: event.replyToken,
             messages: [{ type: 'text', text: '訂單流程已過期，請重新輸入「叫車」開始。' }],
           });
         }
+        break;
+      }
+
+      case 'PICK_PAYMENT': {
+        const value = params.get('value'); // CASH | LOVE_CARD | SENIOR_CARD
+        const data: ConversationData = lineUser.conversation_data || {};
+        if (lineUser.conversation_state !== 'AWAITING_PAYMENT') {
+          await this.lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '訂單流程已過期，請重新輸入「叫車」開始。' }],
+          });
+          break;
+        }
+        if (value === 'CASH') {
+          data.paymentType = 'CASH';
+          data.subsidyType = 'NONE';
+        } else if (value === 'LOVE_CARD') {
+          data.paymentType = 'LOVE_CARD_PHYSICAL';
+          data.subsidyType = 'LOVE_CARD';
+        } else if (value === 'SENIOR_CARD') {
+          data.paymentType = 'CASH';
+          data.subsidyType = 'SENIOR_CARD';
+        } else {
+          await this.lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '付款方式參數異常，請重新選擇。' }],
+          });
+          break;
+        }
+        await this.showConfirmCard(userId, data, event.replyToken);
         break;
       }
 
@@ -439,19 +481,15 @@ export class LineMessageProcessor {
     });
   }
 
+  /**
+   * 訂單確認 orchestrator — 依序檢查還缺什麼，缺什麼就顯示對應步驟。
+   * 每個 postback handler 改完 data 都應呼叫這個方法重新評估。
+   *
+   * 順序：pickupNote ack → 付款方式 → 預約時間 (RESERVE) → 最終確認
+   */
   private async showConfirmCard(userId: string, data: ConversationData, replyToken: string): Promise<void> {
-    if (data.mode === 'RESERVE') {
-      // 預約模式：先選時間
-      await this.updateConversationState(userId, 'AWAITING_SCHEDULE_TIME', data);
-      await this.lineClient.replyMessage({
-        replyToken,
-        messages: [templates.askScheduleTimeMessage()],
-      });
-      return;
-    }
-
-    // 即時叫車：若上車點有 pickup_note，先強制讀提示再進確認流程
-    if (data.pickupNote) {
+    // Step 1: pickupNote 強制讀過確認
+    if (data.pickupNote && !data.pickupNoteAcked) {
       await this.updateConversationState(userId, 'AWAITING_PICKUP_NOTE_ACK', data);
       await this.lineClient.replyMessage({
         replyToken,
@@ -463,14 +501,27 @@ export class LineMessageProcessor {
       return;
     }
 
-    await this.showFinalConfirmCard(userId, data, replyToken);
-  }
+    // Step 2: 付款方式（現金/愛心卡/敬老卡）
+    if (!data.paymentType) {
+      await this.updateConversationState(userId, 'AWAITING_PAYMENT', data);
+      await this.lineClient.replyMessage({
+        replyToken,
+        messages: [templates.askPaymentTypeMessage()],
+      });
+      return;
+    }
 
-  /**
-   * 顯示最終 orderConfirmCard。從 showConfirmCard 直接呼叫（無 note）或從
-   * ACK_PICKUP_NOTE postback 呼叫（讀完 note 按了「我知道了」）。
-   */
-  private async showFinalConfirmCard(userId: string, data: ConversationData, replyToken: string): Promise<void> {
+    // Step 3: 預約模式選時間
+    if (data.mode === 'RESERVE' && !data.scheduledAt) {
+      await this.updateConversationState(userId, 'AWAITING_SCHEDULE_TIME', data);
+      await this.lineClient.replyMessage({
+        replyToken,
+        messages: [templates.askScheduleTimeMessage()],
+      });
+      return;
+    }
+
+    // Step 4: 最終確認卡
     await this.updateConversationState(userId, 'AWAITING_CONFIRM', data);
     await this.lineClient.replyMessage({
       replyToken,
@@ -478,6 +529,8 @@ export class LineMessageProcessor {
         data.pickupAddress || '未知',
         data.destAddress || null,
         data.estimatedFare || null,
+        data.paymentType,
+        data.subsidyType,
       )],
     });
   }
@@ -598,7 +651,8 @@ export class LineMessageProcessor {
           lng: data.destLng!,
           address: data.destAddress || '',
         } : null,
-        paymentType: 'CASH',
+        paymentType: data.paymentType === 'LOVE_CARD_PHYSICAL' ? 'SUBSIDY' : 'CASH',
+        subsidyType: data.subsidyType,
         createdAt: Date.now(),
         source: 'LINE',
       };
@@ -970,7 +1024,7 @@ export class LineMessageProcessor {
         order_id, passenger_id, status,
         pickup_lat, pickup_lng, pickup_address,
         dest_lat, dest_lng, dest_address,
-        payment_type,
+        payment_type, subsidy_type,
         created_at, offered_at,
         hour_of_day, day_of_week,
         source, line_user_id
@@ -978,10 +1032,10 @@ export class LineMessageProcessor {
         $1, $2, 'OFFERED',
         $3, $4, $5,
         $6, $7, $8,
-        'CASH',
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
         $9, $10,
-        'LINE', $11
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+        $11, $12,
+        'LINE', $13
       )
     `, [
       orderId,
@@ -992,6 +1046,8 @@ export class LineMessageProcessor {
       data.destLat || null,
       data.destLng || null,
       data.destAddress || null,
+      data.paymentType || 'CASH',
+      data.subsidyType || 'NONE',
       now.getHours(),
       now.getDay(),
       userId,
@@ -1027,7 +1083,7 @@ export class LineMessageProcessor {
         order_id, passenger_id, status,
         pickup_lat, pickup_lng, pickup_address,
         dest_lat, dest_lng, dest_address,
-        payment_type,
+        payment_type, subsidy_type,
         created_at,
         hour_of_day, day_of_week,
         source, line_user_id, scheduled_at
@@ -1035,10 +1091,10 @@ export class LineMessageProcessor {
         $1, $2, 'WAITING',
         $3, $4, $5,
         $6, $7, $8,
-        'CASH',
-        CURRENT_TIMESTAMP,
         $9, $10,
-        'LINE', $11, $12
+        CURRENT_TIMESTAMP,
+        $11, $12,
+        'LINE', $13, $14
       )
     `, [
       orderId,
@@ -1049,6 +1105,8 @@ export class LineMessageProcessor {
       data.destLat || null,
       data.destLng || null,
       data.destAddress || null,
+      data.paymentType || 'CASH',
+      data.subsidyType || 'NONE',
       now.getHours(),
       now.getDay(),
       userId,
