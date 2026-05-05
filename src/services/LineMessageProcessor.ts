@@ -579,6 +579,8 @@ export class LineMessageProcessor {
         data.pickupAddress || '未知',
         data.destAddress || null,
         formattedTime,
+        data.paymentType,
+        data.subsidyType,
       )],
     });
   }

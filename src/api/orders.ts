@@ -494,6 +494,16 @@ router.patch('/:orderId/accept', async (req, res) => {
           address: getDestAddress(fullOrder)
         } : null,
         paymentType: fullOrder.payment_type,
+        // 電話/LINE 訂單欄位 — 司機端 Tag 顯示 + relocate 按鈕判定 source
+        source: fullOrder.source || 'APP',
+        subsidyType: fullOrder.subsidy_type || 'NONE',
+        subsidyConfirmed: fullOrder.subsidy_confirmed || false,
+        subsidyAmount: fullOrder.subsidy_amount || 0,
+        petPresent: fullOrder.pet_present || 'UNKNOWN',
+        petCarrier: fullOrder.pet_carrier || 'UNKNOWN',
+        petNote: fullOrder.pet_note,
+        customerPhone: fullOrder.customer_phone,
+        notes: fullOrder.notes,
         createdAt: new Date(fullOrder.created_at).getTime(),
         acceptedAt: new Date(fullOrder.accepted_at).getTime()
       }
@@ -767,9 +777,16 @@ router.patch('/:orderId/status', async (req, res) => {
         address: getDestAddress(fullOrder)
       } : null,
       paymentType: fullOrder.payment_type,
+      // 電話/LINE 訂單欄位 — 司機端 Tag 顯示 + relocate 按鈕判定 source
+      source: fullOrder.source || 'APP',
       subsidyType: fullOrder.subsidy_type || 'NONE',
       subsidyConfirmed: fullOrder.subsidy_confirmed || false,
       subsidyAmount: fullOrder.subsidy_amount || 0,
+      petPresent: fullOrder.pet_present || 'UNKNOWN',
+      petCarrier: fullOrder.pet_carrier || 'UNKNOWN',
+      petNote: fullOrder.pet_note,
+      customerPhone: fullOrder.customer_phone,
+      notes: fullOrder.notes,
       fare: fullOrder.meter_amount ? {
         meterAmount: fullOrder.meter_amount,
         appDistanceMeters: fullOrder.actual_distance_km ? Math.round(fullOrder.actual_distance_km * 1000) : 0

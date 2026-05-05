@@ -1302,7 +1302,9 @@ export function relocateRequestCard(
 export function scheduleConfirmCard(
   pickupAddress: string,
   destAddress: string | null,
-  scheduledTime: string
+  scheduledTime: string,
+  paymentType?: string,
+  subsidyType?: string,
 ): FlexMessage {
   const bubble: FlexBubble = {
     type: 'bubble',
@@ -1347,6 +1349,15 @@ export function scheduleConfirmCard(
               contents: [
                 { type: 'text', text: '目的地', size: 'sm', color: '#999999', flex: 3 },
                 { type: 'text', text: destAddress || '未指定', size: 'sm', color: '#333333', flex: 5, wrap: true },
+              ],
+            },
+            {
+              type: 'box',
+              layout: 'horizontal',
+              margin: 'sm',
+              contents: [
+                { type: 'text', text: '付款方式', size: 'sm', color: '#999999', flex: 3 },
+                { type: 'text', text: paymentLabel(paymentType, subsidyType), size: 'sm', color: '#333333', weight: 'bold', flex: 5 },
               ],
             },
           ],
