@@ -102,7 +102,7 @@ async function testMitakeApi() {
 
   const notifier = new SmsNotifier({ username, password, apiUrl });
 
-  const message = `【花蓮計程車】SmsNotifier 測試 ${new Date().toISOString()}`;
+  const message = `【大豐計程車】SmsNotifier 測試 ${new Date().toISOString()}`;
   console.log(`   發送到 ${testPhone}: ${message}`);
 
   const result = await notifier.send(testPhone, message);
