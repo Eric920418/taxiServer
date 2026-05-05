@@ -107,6 +107,14 @@
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
   <script>
+    // mode=relocate 時 redirect 到 relocate.html（同 origin，LIFF auth 保留）
+    (function checkRelocateRedirect() {
+      const _params = new URLSearchParams(window.location.search);
+      if (_params.get('mode') === 'relocate') {
+        window.location.replace('/liff/relocate.html?' + _params.toString());
+      }
+    })();
+
     // ===== 狀態 =====
     let map, marker, geocoder, autocomplete;
     let currentStep = 'pickup'; // 'pickup' | 'dest'

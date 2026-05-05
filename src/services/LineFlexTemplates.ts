@@ -1204,6 +1204,99 @@ export function pickupNoteAckCard(pickupAddress: string, pickupNote: string): Fl
   };
 }
 
+// ========== 司機請客人重發位置 ==========
+
+/**
+ * 司機到達後找不到客人時觸發。客人 LINE 收到黃色警示 + LIFF 連結，
+ * 點擊後開 relocate.html 重新選擇上車位置。
+ *
+ * Button URI 帶 orderId + mode=relocate，LIFF 會根據 mode 切到改位置流程。
+ */
+export function relocateRequestCard(
+  orderId: string,
+  pickupAddress: string,
+  liffIdBooking: string,
+): FlexMessage {
+  const liffUrl = liffIdBooking
+    ? `https://liff.line.me/${liffIdBooking}?orderId=${orderId}&mode=relocate`
+    : '';
+
+  const bubble: FlexBubble = {
+    type: 'bubble',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#FFA000',
+      paddingAll: '14px',
+      contents: [
+        {
+          type: 'text',
+          text: '⚠️ 司機請您重新分享上車點',
+          weight: 'bold',
+          size: 'lg',
+          color: '#FFFFFF',
+        },
+        {
+          type: 'text',
+          text: `訂單 ${orderId}`,
+          size: 'xs',
+          color: '#FFF8E1',
+          margin: 'xs',
+        },
+      ],
+    },
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'md',
+      contents: [
+        {
+          type: 'text',
+          text: '司機到達後找不到您的位置，請點下方按鈕重新分享您現在的位置。',
+          size: 'sm',
+          color: '#333333',
+          wrap: true,
+        },
+        { type: 'separator', margin: 'md' },
+        {
+          type: 'box',
+          layout: 'horizontal',
+          margin: 'md',
+          contents: [
+            { type: 'text', text: '目前位置', size: 'sm', color: '#999999', flex: 2 },
+            { type: 'text', text: pickupAddress, size: 'sm', color: '#333333', flex: 5, wrap: true },
+          ],
+        },
+      ],
+    },
+    ...(liffUrl ? {
+      footer: {
+        type: 'box' as const,
+        layout: 'vertical' as const,
+        contents: [
+          {
+            type: 'button' as const,
+            style: 'primary' as const,
+            color: '#FFA000',
+            height: 'sm' as const,
+            action: {
+              type: 'uri' as const,
+              label: '📍 重新選擇位置',
+              uri: liffUrl,
+            },
+          },
+        ],
+      },
+    } : {}),
+  };
+
+  return {
+    type: 'flex',
+    altText: `司機請您重新分享上車位置（訂單 ${orderId}）`,
+    contents: bubble,
+  };
+}
+
 // ========== 預約確認卡 ==========
 
 export function scheduleConfirmCard(

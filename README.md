@@ -4,7 +4,88 @@
 > 版本：v1.7.0-MVP
 > 更新日期：2026-05-05
 
-## 📝 最新修改（2026-05-05）- LINE 對話加付款方式選擇 + showConfirmCard 改 orchestrator
+## 📝 最新修改（2026-05-05 #2）- 司機請客人重發位置（LINE push + LIFF 改訂單頁 + 補手機）
+
+### 解決的問題
+司機接到 LINE 訂單後，常遇到客人傳的上車點座標不準（geocode 不準、客人手 slip 點錯）。
+之前司機沒有合規解決方法 — 撥電話有隱私問題、且 LINE 客人多半未留手機。
+另外現在 LINE 訂單沒留手機，no-show 時司機完全沒法聯繫。
+
+### 設計：閉環流程
+```
+司機按「請客人重發位置」按鈕
+   → 後端 POST /api/orders/:id/request-relocation
+   → LineNotifier.notifyRequestRelocation 推 Flex card 給客人
+   → 客人按 Flex 卡上的 LIFF deep link
+   → booking.html 偵測 mode=relocate redirect 到 relocate.html
+   → 客人看地圖（中心 = 目前 pickup）拖曳 marker / 搜尋新位置
+   → 順便選填手機（passengers.phone 仍是 LINE_xxx 才顯示）
+   → PATCH /api/line/liff/relocate-order/:id
+   → UPDATE orders.pickup_lat/lng/address
+   → 若手機合法且原本是 placeholder：覆蓋 passengers.phone + orders.customer_phone
+   → Socket emit `order:pickup_updated` → 司機 App
+   → 司機端訂單卡上車點即時更新 + 語音 + Toast
+```
+
+### 影響檔案
+
+**Backend (server)**：
+- `src/services/LineFlexTemplates.ts` — 新增 `relocateRequestCard()`（黃底警示 + LIFF deep link）
+- `src/services/LineNotifier.ts` — 新增 `notifyRequestRelocation()` 方法
+- `src/api/orders.ts` — 新增 `POST /:orderId/request-relocation`，驗 driver_id + source='LINE' + status ACCEPTED/ARRIVED
+- `src/api/line-liff.ts` — 新增 `PATCH /relocate-order/:orderId`，驗 line_user_id + bounds + 寫 DB + emit socket
+
+**LIFF (frontend)**：
+- `public/liff/booking.html` — 加 5 行 redirect script：mode=relocate 立即跳到 relocate.html
+- `public/liff/relocate.html` — **新增**：地圖 + marker + 自動定位（getCurrentPosition）+ 選填手機 + 確認按鈕
+
+**Android driver app**：
+- `data/remote/dto/NoShowRequests.kt` — 加 `RequestRelocationRequest`
+- `data/remote/ApiService.kt` — 加 `requestRelocation()` retrofit 方法
+- `data/repository/OrderRepository.kt` — wrapper
+- `data/remote/WebSocketManager.kt` — 加 `pickupUpdated` StateFlow + `order:pickup_updated` listener + cleanup
+- `viewmodel/HomeViewModel.kt` — 訂閱 pickupUpdated 自動 in-place 更新 currentOrder.pickup + 語音提示；新增 `requestRelocation()`
+- `ui/screens/SimplifiedDriverScreen.kt` — SmartActionButton 上方加紅圈按鈕（只 source=="LINE" + NavigatingToPickup/ArrivedAtPickup state 顯示）
+
+### 為什麼選 LIFF 而非 Web URL
+- LIFF 自動取 LINE userId → 後端可比對訂單 line_user_id 防別人代改
+- 不需要客人額外登入 / 留 token
+- 在 LINE 內 WebView 開啟，UX 像 native
+
+### 為什麼 booking.html JS-redirect 而非 if-branch 重用
+- booking.html 已經 427 行，加 mode=relocate 分支會大量 if-else 弄髒原 booking flow
+- relocate UI 跟 booking 差異大：沒目的地、沒付款、沒備註、submit 不同 endpoint
+- 同 origin redirect LIFF SDK auth state 保留，relocate.html 可獨立 init liff
+- 保持單一 LIFF ID 註冊不需動 LINE Developers Console
+
+### 部署步驟
+```bash
+# server
+cd /var/www/taxiServer
+git pull && pnpm install && pnpm build && pm2 restart taxiserver
+
+# Android
+cd ~/AndroidStudioProjects/HualienTaxiDriver
+./gradlew publishReleaseBundle    # 推 Play Console alpha
+```
+
+### 驗證
+1. LINE 客人下單，司機 App 接單 → 訂單卡 SmartActionButton 上方應出現「請客人重發上車位置」按鈕（紅圈 OutlinedButton）
+2. 司機按按鈕 → Toast「已通知客人重發位置」+ 客人 LINE 收到黃色 Flex 卡
+3. 客人按「📍 重新選擇位置」 → LIFF 開啟 relocate.html，地圖中心 = 訂單目前 pickup
+4. 拖曳 marker 或搜尋新地址 → 點「✓ 確認新位置」（順便填手機）→ Toast「位置已更新」+ LIFF 自動關閉
+5. 司機 App 訂單卡上車點地址自動換成新位置 + 語音「客人已更新上車位置」
+6. DB 抽檢：`orders.pickup_lat/lng/address` 已更新；若有填手機 → `passengers.phone` 與 `orders.customer_phone` 同步寫入
+
+### 設計決策
+- **手機選填欄位顯示策略**：暫時無條件顯示（沒精準的 GET /me 端點判斷）。後端寫入時用 SQL `WHERE phone LIKE 'LINE\\_%'` 擋掉，已有真實號碼不會被覆蓋。後續可加 endpoint 精準控制 visibility。
+- **status 限制 ACCEPTED/ARRIVED**：尚未接單（OFFERED）司機本來就不該主動聯繫；ON_TRIP 已上車不需要重發位置。
+- **不做 cooldown**：實務上司機不會 spam，過度工程化。
+- **LIFF deep link 用 LIFF_ID_BOOKING**：複用現有 LIFF endpoint 註冊，不額外申請新 ID。
+
+---
+
+## 📝 歷史修改（2026-05-05）- LINE 對話加付款方式選擇 + showConfirmCard 改 orchestrator
 
 ### 解決的問題
 LINE 對話流程舊流程：pickup → dest → confirm，**付款方式硬寫 `payment_type='CASH'`**。

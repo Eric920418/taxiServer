@@ -829,6 +829,63 @@ router.post('/:orderId/notify-waiting', async (req, res) => {
 });
 
 /**
+ * 司機請客人重發上車位置（LINE 訂單專用）
+ * POST /api/orders/:orderId/request-relocation
+ *
+ * 使用時機：司機到達後找不到客人，懷疑客人傳的位置不準
+ *
+ * Body:
+ *   - driverId: string  （必填）司機 ID（驗 driver_id 匹配防別人代發）
+ *
+ * 條件：
+ *   - 訂單必須 source='LINE' 且有 line_user_id
+ *   - 訂單狀態必須 ACCEPTED 或 ARRIVED（接了或到達才需要請客人重發）
+ *
+ * 副作用：
+ *   - LineNotifier.notifyRequestRelocation 推播 Flex card + LIFF deep link
+ */
+router.post('/:orderId/request-relocation', async (req, res) => {
+  const { orderId } = req.params;
+  const { driverId } = req.body;
+
+  if (!driverId) {
+    return res.status(400).json({ error: '缺少 driverId' });
+  }
+
+  try {
+    const order = await queryOne(
+      'SELECT order_id, driver_id, source, status, line_user_id FROM orders WHERE order_id = $1',
+      [orderId]
+    );
+    if (!order) return res.status(404).json({ error: '訂單不存在' });
+
+    if (order.driver_id !== driverId) {
+      return res.status(403).json({ error: '只有接單司機可請客人重發位置' });
+    }
+    if (order.source !== 'LINE') {
+      return res.status(400).json({ error: '只有 LINE 訂單可使用此功能' });
+    }
+    if (!order.line_user_id) {
+      return res.status(400).json({ error: '訂單無 LINE 通道，無法推播' });
+    }
+    if (!['ACCEPTED', 'ARRIVED'].includes(order.status)) {
+      return res.status(400).json({ error: `目前訂單狀態 (${order.status}) 無法請客人重發位置` });
+    }
+
+    const lineNotifier = getLineNotifier();
+    if (!lineNotifier) {
+      return res.status(503).json({ error: 'LINE 通知服務未啟用' });
+    }
+    await lineNotifier.notifyRequestRelocation(orderId);
+
+    return res.json({ success: true, message: '已通知客人重發上車位置' });
+  } catch (error: any) {
+    console.error('[Request Relocation] 錯誤:', error);
+    res.status(500).json({ error: error.message || 'INTERNAL_ERROR' });
+  }
+});
+
+/**
  * 客人未到 — 取消訂單並標記為 PASSENGER_NO_SHOW
  * POST /api/orders/:orderId/cancel-no-show
  *

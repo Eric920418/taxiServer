@@ -202,6 +202,40 @@ export class LineNotifier {
   }
 
   /**
+   * 司機請客人重發上車位置 — 推黃色警示卡 + LIFF deep link
+   * @param orderId 訂單 ID（用於 LIFF 連結 query 參數）
+   */
+  async notifyRequestRelocation(orderId: string): Promise<void> {
+    try {
+      const result = await this.pool.query(
+        'SELECT line_user_id, pickup_address FROM orders WHERE order_id = $1',
+        [orderId]
+      );
+      if (result.rows.length === 0) return;
+
+      const { line_user_id, pickup_address } = result.rows[0];
+      if (!line_user_id) {
+        console.warn(`[LineNotifier] 訂單 ${orderId} 無 line_user_id，跳過 relocate 推播`);
+        return;
+      }
+
+      const liffIdBooking = process.env.LIFF_ID_BOOKING || '';
+      if (!liffIdBooking) {
+        console.warn('[LineNotifier] LIFF_ID_BOOKING 未設定，relocate 連結將失效');
+      }
+
+      await this.lineClient.pushMessage({
+        to: line_user_id,
+        messages: [templates.relocateRequestCard(orderId, pickup_address || '未定位', liffIdBooking)],
+      });
+      console.log(`[LineNotifier] 已推播 relocate 請求給 ${line_user_id} (訂單 ${orderId})`);
+    } catch (error: any) {
+      console.error(`[LineNotifier] relocate 推播失敗 (${orderId}):`, error.message || error);
+      throw error; // 讓呼叫端能回 5xx 給司機
+    }
+  }
+
+  /**
    * 預約提醒
    */
   async notifyScheduledOrderReminder(orderId: string): Promise<void> {

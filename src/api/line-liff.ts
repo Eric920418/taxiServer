@@ -9,7 +9,7 @@ import { query, queryOne, queryMany } from '../db/connection';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 import { getScheduledOrderService } from '../services/ScheduledOrderService';
 import { getLineNotifier } from '../services/LineNotifier';
-import { hualienAddressDB } from '../services/HualienAddressDB';
+import { hualienAddressDB, isWithinHualienBounds } from '../services/HualienAddressDB';
 import { getSocketIO, driverSockets, driverLocations } from '../socket';
 import pool from '../db/connection';
 
@@ -473,6 +473,108 @@ router.post('/cancel-order/:orderId', verifyLiffToken, async (req: LiffRequest, 
   } catch (error: any) {
     console.error('[LIFF] 取消訂單失敗:', error);
     res.status(500).json({ error: `取消失敗：${error.message}` });
+  }
+});
+
+/**
+ * PATCH /api/line/liff/relocate-order/:orderId
+ * 客人在 LIFF relocate.html 重新選位置後寫回 DB + 通知司機
+ *
+ * Body:
+ *   - lat, lng, address: 新上車點（必填）
+ *   - phone?: 選填台灣手機號（10 位數字 09xx-xxx-xxx），用來補既有 LINE_xxx placeholder
+ *
+ * 條件：
+ *   - 訂單必須屬於該 LIFF user (line_user_id 比對)
+ *   - 訂單狀態必須在 WAITING / OFFERED / ACCEPTED / ARRIVED
+ *   - 座標必須在花蓮縣範圍
+ *
+ * 副作用：
+ *   - UPDATE orders.pickup_lat/lng/address
+ *   - 若 phone 合法且 passengers.phone 仍是 LINE_ placeholder：覆蓋寫入 + 同步 orders.customer_phone
+ *   - Socket emit `order:pickup_updated` 給接單司機
+ */
+router.patch('/relocate-order/:orderId', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const { orderId } = req.params;
+  const userId = req.lineUserId!;
+  const { lat, lng, address, phone } = req.body || {};
+
+  if (typeof lat !== 'number' || typeof lng !== 'number' || !address || typeof address !== 'string') {
+    res.status(400).json({ error: '缺少 lat/lng/address 或型別錯誤' });
+    return;
+  }
+  if (!isWithinHualienBounds(lat, lng)) {
+    res.status(400).json({ error: '座標不在花蓮縣範圍內' });
+    return;
+  }
+
+  try {
+    const order = await queryOne(
+      'SELECT order_id, status, driver_id, passenger_id FROM orders WHERE order_id = $1 AND line_user_id = $2',
+      [orderId, userId]
+    );
+    if (!order) {
+      res.status(404).json({ error: '訂單不存在或不屬於您' });
+      return;
+    }
+    if (!['WAITING', 'OFFERED', 'ACCEPTED', 'ARRIVED'].includes(order.status)) {
+      res.status(400).json({ error: `訂單狀態 (${order.status}) 不允許更新位置` });
+      return;
+    }
+
+    const trimmedAddress = address.trim().substring(0, 100);
+
+    await pool.query(
+      `UPDATE orders SET pickup_lat = $1, pickup_lng = $2, pickup_address = $3, updated_at = CURRENT_TIMESTAMP WHERE order_id = $4`,
+      [lat, lng, trimmedAddress, orderId]
+    );
+
+    // 補手機（選填）— 只在 passengers.phone 還是 LINE_ placeholder 時覆蓋
+    let phoneSaved = false;
+    if (typeof phone === 'string') {
+      const cleaned = phone.replace(/\D/g, '');
+      const isValidTwMobile = /^09\d{8}$/.test(cleaned);
+      if (isValidTwMobile && order.passenger_id) {
+        const phoneUpd = await pool.query(
+          `UPDATE passengers SET phone = $1, updated_at = CURRENT_TIMESTAMP
+           WHERE passenger_id = $2 AND phone LIKE 'LINE\\_%' ESCAPE '\\'
+           RETURNING phone`,
+          [cleaned, order.passenger_id]
+        );
+        if (phoneUpd.rowCount && phoneUpd.rowCount > 0) {
+          await pool.query(
+            `UPDATE orders SET customer_phone = $1 WHERE order_id = $2`,
+            [cleaned, orderId]
+          );
+          phoneSaved = true;
+        }
+      }
+    }
+
+    // 通知司機（若已有指派）
+    if (order.driver_id) {
+      const io = getSocketIO();
+      const socketId = driverSockets.get(order.driver_id);
+      if (socketId) {
+        io.to(socketId).emit('order:pickup_updated', {
+          orderId,
+          pickupLat: lat,
+          pickupLng: lng,
+          pickupAddress: trimmedAddress,
+        });
+        console.log(`[LIFF] order:pickup_updated → driver ${order.driver_id} (${orderId})`);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: '位置已更新',
+      phoneSaved,
+      pickup: { lat, lng, address: trimmedAddress },
+    });
+  } catch (error: any) {
+    console.error('[LIFF] 更新位置失敗:', error);
+    res.status(500).json({ error: `更新失敗：${error.message}` });
   }
 });
 
