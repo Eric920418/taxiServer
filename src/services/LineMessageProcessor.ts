@@ -138,6 +138,17 @@ export class LineMessageProcessor {
       }
     } catch (error: any) {
       console.error(`[LINE] 處理事件失敗:`, error);
+      // Silent fail safety net：嘗試用 replyToken 回 fallback 訊息
+      // （只能用一次、可能已被消費，try/catch 包住避免雙重失敗）
+      const replyToken = (event as any).replyToken;
+      if (replyToken) {
+        try {
+          await this.lineClient.replyMessage({
+            replyToken,
+            messages: [{ type: 'text', text: '系統暫時無法處理您的訊息，請稍候再試或輸入「叫車」重新開始。' }],
+          });
+        } catch { /* replyToken 已用過或過期 — 忽略 */ }
+      }
     }
   }
 
@@ -886,10 +897,66 @@ export class LineMessageProcessor {
 
   // ========== GPT 自然語言解析 ==========
 
+  /**
+   * 嘗試解析「A 到/去 B」格式直接建單。比 GPT NLP 穩。
+   * 兩邊都需 geocode 成功才會 short-circuit；任一邊失敗 fallthrough 給後續路徑。
+   * 回 true 表示已處理（呼叫端應 return）；false 表示沒命中。
+   */
+  private async tryDirectABOrder(userId: string, text: string, replyToken: string): Promise<boolean> {
+    // 找「到」或「去」分隔符（取第一個出現的）
+    const match = text.match(/^(.+?)(到|去)(.+)$/);
+    if (!match) return false;
+
+    let pickupText = match[1].replace(/^(從|由|在)/, '').trim();
+    let destText = match[3].trim();
+
+    // 太短的字串多半不是真地名（避免「我去A」這類不是叫車的句子誤觸發）
+    if (pickupText.length < 2 || destText.length < 2) return false;
+
+    // 並行 geocode 兩邊
+    const [pickupGeo, destGeo] = await Promise.all([
+      this.geocodeAddress(pickupText),
+      this.geocodeAddress(destText),
+    ]);
+
+    if (!pickupGeo || !destGeo) {
+      console.log(`[LINE] A→B 一句話格式：geocode 不全（pickup=${!!pickupGeo}, dest=${!!destGeo}），fallthrough`);
+      return false;
+    }
+
+    console.log(`[LINE] ⚡ A→B 一句話命中: "${pickupText}" → "${destText}"`);
+
+    const data: ConversationData = {
+      mode: 'CALL',
+      pickupAddress: pickupGeo.formattedAddress,
+      pickupLat: pickupGeo.lat,
+      pickupLng: pickupGeo.lng,
+      destAddress: destGeo.formattedAddress,
+      destLat: destGeo.lat,
+      destLng: destGeo.lng,
+      ...(pickupGeo.pickupNote ? { pickupNote: pickupGeo.pickupNote } : {}),
+    };
+
+    // 禁止上車區攔截（pickup 命中禁止上車地標）
+    if (await this.interceptForbiddenPickup(userId, pickupGeo, data, replyToken)) return true;
+
+    // 進 orchestrator — 自動詢問付款方式（沒有 pickupNote 時）
+    await this.showConfirmCard(userId, data, replyToken);
+    return true;
+  }
+
   private async handleNaturalLanguage(userId: string, text: string, replyToken: string): Promise<void> {
-    // ⚡ Fast path: 先試 DB lookup — 客人傳「裸地名」(例: 民國路 7-11 超商) 直接觸發叫車流程
+    const trimmed = text.trim();
+
+    // ⚡ Fast path A: 「A 到/去 B」一句話直接叫車（mirror booking.html 的 A→B UX）
+    // 例：「福建街145號到車站」「車站到和平路一段」「家去機場」
+    // 比 GPT NLP 穩 — 直接 regex 切 + 雙邊 DB lookup 驗證
+    const dbResult = await this.tryDirectABOrder(userId, trimmed, replyToken);
+    if (dbResult) return;
+
+    // ⚡ Fast path B: 「裸地名」(例: 民國路 7-11 超商) 觸發叫車流程，當 pickup 詢問 dest
     // 只信任高信心命中（EXACT / ALIAS / TAIGI），SUBSTRING 仍走 GPT 避免誤判
-    const dbHit = hualienAddressDB.lookup(text.trim());
+    const dbHit = hualienAddressDB.lookup(trimmed);
     if (dbHit && dbHit.matchType !== 'SUBSTRING' && dbHit.entry.lat !== null && dbHit.entry.lng !== null) {
       console.log(`[LINE] NL 入口 DB 命中 (${dbHit.matchType}): "${text}" → ${dbHit.entry.name}`);
       const data: ConversationData = { mode: 'CALL' };
