@@ -154,7 +154,10 @@ export class CustomerNotificationService {
 
     // 5. SMS 備援
     if (contact.customer_phone) {
-      const result = await this.sms.send(contact.customer_phone, smsMessage);
+      // clientid 讓三竹做第二層去重（12 小時內同 orderId+event 不會重發、不扣點）
+      // 加 timestamp 滿足 PDF 規範「必須維持唯一性，而非只在 12 小時內唯一」
+      const clientid = `${orderId}:${event}:${Date.now()}`.slice(0, 36);
+      const result = await this.sms.send(contact.customer_phone, smsMessage, { clientid });
       if (result.success) {
         await this.recordSuccess(
           orderId,
@@ -271,7 +274,7 @@ export class CustomerNotificationService {
    *
    * 由你填寫文案 — 限制：
    *   - ≤ 70 個中文字（避免三竹拆兩則計費）
-   *   - 開頭建議帶【花蓮計程車】防詐騙辨識
+   *   - 開頭建議帶【大豐計程車】防詐騙辨識
    *   - 可用變數：ctx.driverName / ctx.plate / ctx.etaMinutes / ctx.pickupAddress / ctx.reason
    *   - 可從 process.env.CUSTOMER_SERVICE_PHONE 取客服電話
    */
@@ -281,15 +284,15 @@ export class CustomerNotificationService {
     switch (event) {
       case 'DRIVER_ACCEPTED':
         // TODO 你的文案：司機姓名 + 車牌 + 預計 N 分鐘到達
-        return `【花蓮計程車】司機${ctx.driverName ?? ''}已接單，車牌${ctx.plate ?? ''}，預計${ctx.etaMinutes ?? '?'}分鐘到達。客服${cs}`;
+        return `【大豐計程車】司機${ctx.driverName ?? ''}已接單，車牌${ctx.plate ?? ''}，預計${ctx.etaMinutes ?? '?'}分鐘到達。客服${cs}`;
 
       case 'DRIVER_ARRIVED':
         // TODO 你的文案：司機已到達上車點
-        return `【花蓮計程車】司機${ctx.driverName ?? ''}(${ctx.plate ?? ''})已到達${ctx.pickupAddress ?? '上車點'}，請準備上車`;
+        return `【大豐計程車】司機${ctx.driverName ?? ''}(${ctx.plate ?? ''})已到達${ctx.pickupAddress ?? '上車點'}，請準備上車`;
 
       case 'DISPATCH_FAILED':
         // TODO 你的文案：無司機可接
-        return `【花蓮計程車】很抱歉目前無司機可接單（${ctx.reason ?? ''}），請稍後再試或致電客服${cs}`;
+        return `【大豐計程車】很抱歉目前無司機可接單（${ctx.reason ?? ''}），請稍後再試或致電客服${cs}`;
     }
   }
 }

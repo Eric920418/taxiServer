@@ -77,11 +77,19 @@ export class SmsNotifier {
   }
 
   /**
-   * 發送簡訊
+   * 發送簡訊（三竹三站 API v2.14）
+   *
    * @param rawPhone 手機號（容許各種格式，內部會 normalize）
    * @param message 訊息內容（UTF-8，建議 ≤ 70 個中文字避免被拆兩則計費）
+   * @param options.clientid 客戶簡訊 ID（36 字內，建議 GUID 或 orderId:event:timestamp）
+   *   三竹用此 ID 防 12 小時內重複發送 — 相同 clientid 會回上次結果且加 Duplicate=Y、不再扣點
+   *   若不提供則由本服務自動生成（基於 phone + message hash + timestamp）
    */
-  async send(rawPhone: string, message: string): Promise<SmsSendResult> {
+  async send(
+    rawPhone: string,
+    message: string,
+    options?: { clientid?: string }
+  ): Promise<SmsSendResult> {
     // Step 1: 手機號正規化
     const phone = this.normalizeTaiwanMobile(rawPhone);
     if (!phone) {
@@ -110,23 +118,32 @@ export class SmsNotifier {
       };
     }
 
-    // Step 4: 組 URL
-    const params = new URLSearchParams({
+    // Step 4: 組 POST body（三站 v2.14 規格 — body 用 form-urlencoded）
+    const clientid = options?.clientid ?? this.generateClientId(phone, message);
+    const bodyParams = new URLSearchParams({
       username: this.username,
       password: this.password,
       dstaddr: phone,
       smbody: message,
-      encoding: 'UTF8',
+      clientid,
+      smsPointFlag: '1',     // 回應含 smsPoint 扣點數，便於成本追蹤
     });
-    const url = `${this.apiUrl}?${params.toString()}`;
 
-    // Step 5: 發送 HTTP 請求（含 timeout）
+    // CharsetURL=UTF8 走 query string（PDF 規格：query string 控制編碼）
+    const url = `${this.apiUrl}?CharsetURL=UTF8`;
+
+    // Step 5: POST 請求（含 timeout）
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let rawText: string;
     try {
-      const res = await fetch(url, { method: 'GET', signal: controller.signal });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        body: bodyParams.toString(),
+        signal: controller.signal,
+      });
       rawText = await res.text();
 
       if (!res.ok) {
@@ -239,6 +256,24 @@ export class SmsNotifier {
     const history = this.sendHistory.get(phone) ?? [];
     history.push(Date.now());
     this.sendHistory.set(phone, history);
+  }
+
+  /**
+   * 生成 clientid 用於三竹 12 小時防重送機制
+   *
+   * 格式：sms-{timestamp}-{phone後4碼}-{隨機4字}
+   * - timestamp 確保跨 12 小時不衝突（PDF 強調必須維持唯一性）
+   * - phone 後 4 碼讓 clientid 在 log 裡更易辨識
+   * - 隨機 4 字防同毫秒同手機 race condition
+   *
+   * 上層（CustomerNotificationService）若有更精準的去重 key（如 orderId:event）
+   * 可透過 send() 的 options.clientid 傳入，覆蓋此預設行為
+   */
+  private generateClientId(phone: string, _message: string): string {
+    const ts = Date.now();
+    const phoneTail = phone.slice(-4);
+    const rand = Math.random().toString(36).slice(2, 6);
+    return `sms-${ts}-${phoneTail}-${rand}`;
   }
 
   /**
