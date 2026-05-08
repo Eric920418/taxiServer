@@ -89,7 +89,8 @@ router.post('/phone-verify-driver', async (req: Request, res: Response) => {
       plate: driver.plate,
       availability: driver.availability,
       rating: parseFloat(driver.rating),
-      totalTrips: driver.total_trips
+      totalTrips: driver.total_trips,
+      shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
     });
   } catch (error) {
     console.error('[Phone Auth] 司機端錯誤:', error);

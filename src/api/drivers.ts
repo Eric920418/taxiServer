@@ -100,7 +100,8 @@ router.get('/:driverId', async (req: Request, res: Response) => {
       rating: parseFloat(driver.rating),
       totalTrips: driver.total_trips,
       totalEarnings: driver.total_earnings,
-      acceptanceRate: parseFloat(driver.acceptance_rate)
+      acceptanceRate: parseFloat(driver.acceptance_rate),
+      shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
     });
   } catch (error) {
     console.error('[Get Driver] 錯誤:', error);
