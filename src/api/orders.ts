@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
-import { broadcastOrderToDrivers, notifyPassengerOrderUpdate } from '../socket';
+import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets } from '../socket';
 import {
   registerOrder,
   handleDriverReject,
@@ -380,16 +380,43 @@ router.patch('/:orderId/accept', async (req, res) => {
       accepted = true;
     }
 
-    // 更新訂單狀態，AND status 限制防止雙重接單 race condition
-    const result = await query(`
-      UPDATE orders
-      SET status = 'ACCEPTED',
-          driver_id = $1,
-          accepted_at = CURRENT_TIMESTAMP
-      WHERE order_id = $2
-        AND status IN ('OFFERED', 'WAITING')
-      RETURNING *
-    `, [driverId, orderId]);
+    // 1+1 疊單偵測：司機目前 ON_TRIP 嗎？
+    const driverState = await queryOne(
+      `SELECT availability,
+        (SELECT order_id FROM orders WHERE driver_id = $1 AND status = 'ON_TRIP'
+          ORDER BY started_at DESC LIMIT 1) AS active_order_id
+       FROM drivers WHERE driver_id = $1`,
+      [driverId]
+    );
+    const isStackedAccept = driverState?.availability === 'ON_TRIP' && driverState?.active_order_id;
+
+    let result;
+    if (isStackedAccept) {
+      // 疊單模式：寫 queued_after_order_id，狀態維持 OFFERED 但綁定司機 + 標記 STACKED
+      // 訂單仍是 OFFERED → 不會被其他司機搶；行程結束後 PATCH /status DONE 會自動晉升
+      result = await query(`
+        UPDATE orders
+        SET driver_id = $1,
+            queued_after_order_id = $3,
+            assignment_mode = 'STACKED_1P1',
+            accepted_at = CURRENT_TIMESTAMP
+        WHERE order_id = $2
+          AND status IN ('OFFERED', 'WAITING')
+        RETURNING *
+      `, [driverId, orderId, driverState.active_order_id]);
+      console.log(`[Order] 1+1 疊單接單：${orderId} 排在 ${driverState.active_order_id} 之後`);
+    } else {
+      // 一般接單：原本邏輯
+      result = await query(`
+        UPDATE orders
+        SET status = 'ACCEPTED',
+            driver_id = $1,
+            accepted_at = CURRENT_TIMESTAMP
+        WHERE order_id = $2
+          AND status IN ('OFFERED', 'WAITING')
+        RETURNING *
+      `, [driverId, orderId]);
+    }
 
     // 若無 row 代表剛被其他司機搶走
     if (!result.rows[0]) {
@@ -667,6 +694,55 @@ router.patch('/:orderId/status', async (req, res) => {
     const updatedOrder = result.rows[0];
 
     console.log(`[Order] 訂單 ${orderId} 狀態更新為：${status}`);
+
+    // 1+1 疊單自動晉升：前單 DONE 時，找排在它之後的疊單訂單，狀態改 ACCEPTED 給司機接手
+    if (status === 'DONE') {
+      const queued = await queryOne(
+        `SELECT order_id, driver_id FROM orders
+         WHERE queued_after_order_id = $1 AND status = 'OFFERED'
+         LIMIT 1`,
+        [orderId]
+      );
+      if (queued) {
+        await query(
+          `UPDATE orders
+           SET status = 'ACCEPTED',
+               queued_after_order_id = NULL,
+               assignment_mode = 'SINGLE'
+           WHERE order_id = $1`,
+          [queued.order_id]
+        );
+        console.log(`[Order] 1+1 疊單自動晉升：${queued.order_id} 接手司機 ${queued.driver_id}`);
+
+        // 推 socket 給司機 — 讓 App 自動 refresh 訂單狀態
+        try {
+          const io = getSocketIO();
+          const socketId = driverSockets.get(queued.driver_id);
+          if (socketId) {
+            io.to(socketId).emit('order:status', {
+              orderId: queued.order_id,
+              status: 'ACCEPTED',
+              message: '前一趟已完成，下一單已接手',
+            });
+          }
+        } catch (e) {
+          console.error('[Order] 疊單晉升 socket 推播失敗:', e);
+        }
+
+        // LINE 推播給疊單客人 — 司機剛完成上一趟，5 分鐘內到達
+        try {
+          const lineNotifier = getLineNotifier();
+          if (lineNotifier) {
+            lineNotifier.notifyOrderStatusChange(queued.order_id, 'ACCEPTED', {
+              driverName: '司機',
+              plate: '',
+            }).catch((err: Error) => console.error('[Order] 疊單 LINE 推播失敗:', err));
+          }
+        } catch (e) {
+          console.error('[Order] 疊單 LINE 推播失敗:', e);
+        }
+      }
+    }
 
     // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`

@@ -25,6 +25,7 @@ import {
 } from './RejectionPredictor';
 import { getAutoAcceptService, AutoAcceptService } from './AutoAcceptService';
 import { getHotZoneQuotaService, HotZoneQuotaService, ZoneCheckResult, QueueEntry } from './HotZoneQuotaService';
+import { isOnShift } from './ShiftChecker';
 
 // ============================================
 // 類型定義
@@ -116,6 +117,11 @@ const CONFIG = {
   BATCH_TIMEOUT_MS: 20_000,           // 20 秒
   MAX_BATCHES: 5,
   ORDER_TOTAL_TIMEOUT_MS: 300_000,    // 5 分鐘
+
+  // 第 N 批的最大半徑（km）— 累進式：batch 1 只考慮 ≤2km 的司機，batch 2 ≤3km，依此類推。
+  // 為什麼累進不分段：邏輯簡單、不會「漏人」（近的司機沒接 batch 1，batch 2 仍在候選池）。
+  // 偏遠訂單前幾批可能候選池為空也沒關係，會自動往後批延伸到更大半徑。
+  BATCH_RADIUS_KM: [2, 3, 5, 8, 15],
 
   // 評分權重
   WEIGHTS: {
@@ -396,7 +402,10 @@ export class SmartDispatcherV2 {
     state.currentBatch++;
     const batchNumber = state.currentBatch;
 
-    console.log(`[SmartDispatcherV2] 執行第 ${batchNumber} 批派單`);
+    // 距離 bucket：第 N 批用 BATCH_RADIUS_KM[N-1]（累進）
+    const maxRadiusKm = CONFIG.BATCH_RADIUS_KM[batchNumber - 1] ?? CONFIG.BATCH_RADIUS_KM[CONFIG.BATCH_RADIUS_KM.length - 1];
+
+    console.log(`[SmartDispatcherV2] 執行第 ${batchNumber} 批派單（半徑 ${maxRadiusKm} km）`);
 
     // 選擇最佳司機
     const excludeDrivers = new Set([
@@ -408,7 +417,8 @@ export class SmartDispatcherV2 {
     const selectedDrivers = await this.selectBestDrivers(
       state.order,
       CONFIG.BATCH_SIZE,
-      excludeDrivers
+      excludeDrivers,
+      maxRadiusKm
     );
 
     if (selectedDrivers.length === 0) {
@@ -555,11 +565,14 @@ export class SmartDispatcherV2 {
 
   /**
    * 選擇最佳司機
+   * @param maxRadiusKm 距離 bucket 上限（累進式：第 N 批用 BATCH_RADIUS_KM[N-1]）。
+   *                    超過此距離的司機本批不考慮，下一批會自動納入更大半徑。
    */
   private async selectBestDrivers(
     order: OrderData,
     count: number,
-    excludeDrivers: Set<string>
+    excludeDrivers: Set<string>,
+    maxRadiusKm?: number
   ): Promise<DriverScore[]> {
     const availableDrivers = await this.getAvailableDrivers(excludeDrivers, order);
 
@@ -567,13 +580,18 @@ export class SmartDispatcherV2 {
       return [];
     }
 
-    console.log(`[SmartDispatcherV2] 評估 ${availableDrivers.length} 位可用司機`);
+    console.log(`[SmartDispatcherV2] 評估 ${availableDrivers.length} 位可用司機（半徑限制: ${maxRadiusKm ?? '無'} km）`);
 
     // 計算所有司機的評分
     const scoredDrivers: DriverScore[] = [];
 
     for (const driver of availableDrivers) {
       const score = await this.calculateDriverScore(driver, order);
+
+      // 半徑 bucket 過濾：超過本批最大半徑的司機跳過（下一批會自動納入）
+      if (maxRadiusKm !== undefined && score.distanceKm > maxRadiusKm) {
+        continue;
+      }
 
       // 過濾高拒單機率的司機
       if (score.rejectionProbability < CONFIG.REJECTION_PROBABILITY_THRESHOLD) {
@@ -1093,7 +1111,8 @@ export class SmartDispatcherV2 {
       capabilityFilter += ' AND d.can_pet = TRUE';
     }
 
-    // 從資料庫獲取司機詳細資訊
+    // 從資料庫獲取司機詳細資訊（含 shifts 用於排班過濾）
+    // 1+1 疊單：除了 AVAILABLE/REST，也納入 ON_TRIP 司機 — 之後用「離當前訂單目的地直線距離 ≤ 2km」過濾
     const result = await this.pool.query(`
       SELECT
         d.driver_id,
@@ -1107,18 +1126,56 @@ export class SmartDispatcherV2 {
         d.can_senior_card,
         d.can_love_card,
         d.can_pet,
+        d.shifts,
         COALESCE(de.total_trips, 0) as today_trips,
-        COALESCE(de.online_hours, 0) as online_hours
+        COALESCE(de.online_hours, 0) as online_hours,
+        -- 司機目前進行中訂單的目的地（給疊單 ETA 估算用，沒有當前訂單則 NULL）
+        (SELECT dest_lat FROM orders o WHERE o.driver_id = d.driver_id
+           AND o.status = 'ON_TRIP' ORDER BY started_at DESC LIMIT 1) AS current_dest_lat,
+        (SELECT dest_lng FROM orders o WHERE o.driver_id = d.driver_id
+           AND o.status = 'ON_TRIP' ORDER BY started_at DESC LIMIT 1) AS current_dest_lng,
+        (SELECT order_id FROM orders o WHERE o.driver_id = d.driver_id
+           AND o.status = 'ON_TRIP' ORDER BY started_at DESC LIMIT 1) AS current_order_id
       FROM drivers d
       LEFT JOIN daily_earnings de ON d.driver_id = de.driver_id AND de.date = CURRENT_DATE
       WHERE d.driver_id = ANY($1)
-        AND d.availability IN ('AVAILABLE', 'REST')
+        AND d.availability IN ('AVAILABLE', 'REST', 'ON_TRIP')
         ${capabilityFilter}
     `, [onlineDriverIds]);
+
+    // 1+1 疊單過濾：ON_TRIP 司機只有「離當前 dest 直線距離 ≤ 2km」才算候選（避免太早派疊單）
+    // 假設 30 km/h 平均車速 → 2km 直線 ≈ 4 分鐘車程，跟設計「< 5 分鐘」一致
+    const STACKED_DISPATCH_RADIUS_KM = 2;
+    const beforeStackedFilter = result.rows.length;
+    result.rows = result.rows.filter(d => {
+      if (d.availability !== 'ON_TRIP') return true;
+      // ON_TRIP 但沒有 current dest → 異常狀態，不派
+      if (d.current_dest_lat == null || d.current_dest_lng == null) return false;
+      // 沒有 current_lat/lng → 不派
+      if (d.current_lat == null || d.current_lng == null) return false;
+      // Haversine 直線距離
+      const dist = this.calculateDistance(
+        { lat: d.current_lat, lng: d.current_lng },
+        { lat: d.current_dest_lat, lng: d.current_dest_lng }
+      );
+      return dist <= STACKED_DISPATCH_RADIUS_KM;
+    });
+    if (beforeStackedFilter !== result.rows.length) {
+      console.log(`[SmartDispatcherV2] 1+1 疊單過濾: ${result.rows.length}/${beforeStackedFilter} (ON_TRIP 中只取距離 dest ≤ ${STACKED_DISPATCH_RADIUS_KM} km)`);
+    }
 
     if (order?.subsidyType && order.subsidyType !== 'NONE') {
       console.log(`[SmartDispatcherV2] 能力過濾: subsidyType=${order.subsidyType}, petPresent=${order.petPresent} → ${result.rows.length}/${onlineDriverIds.length} 位司機符合`);
     }
+
+    // 排班過濾：移除不在班次時間的司機（shifts 為空視同 24/7 在班）
+    const beforeShiftFilter = result.rows.length;
+    const now = new Date();
+    const onShiftRows = result.rows.filter(row => isOnShift(now, row.shifts));
+    if (beforeShiftFilter !== onShiftRows.length) {
+      console.log(`[SmartDispatcherV2] 排班過濾: ${onShiftRows.length}/${beforeShiftFilter} 位司機在班`);
+    }
+    result.rows = onShiftRows;
 
     // 補充實時位置
     return result.rows.map(row => {

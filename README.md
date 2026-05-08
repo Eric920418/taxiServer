@@ -2,9 +2,89 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-05-05
+> 更新日期：2026-05-08
 
-## 📝 最新修改（2026-05-05 #2）- 司機請客人重發位置（LINE push + LIFF 改訂單頁 + 補手機）
+## 📝 最新修改（2026-05-08）- 派單系統三大 feature：排班 / 距離 bucket / 1+1 疊單
+
+### 解決的問題
+SmartDispatcherV2 之前是「Top-N 評分批次派單」，三個結構性洞：
+1. 排班 schema (drivers.shifts) 進了 14 個月，但 dispatcher 從未檢查 → 司機不在班也照接
+2. 派單分批選的是「綜合分數高」不是「先近後遠」→ 偏遠地區可能近司機被擠掉
+3. 司機接單後直到下車才會被派下一單 → 浪費「快到目的地的 5 分鐘交接窗口」
+
+### F1: 排班過濾（drivers.shifts → dispatcher）
+新增 `src/services/ShiftChecker.ts` 提供 `isOnShift(now, shifts)` helper：
+- shifts 為空 → return true（24/7 在班，向後相容）
+- 跨日班次（end < start，例 22:00-06:00）自動拆兩段比對
+- 時區用 Asia/Taipei 比對 HH:MM
+- `minutesUntilShiftEnd()` 給 App 顯示「離下班還剩 X 分」用
+
+`SmartDispatcherV2.getAvailableDrivers` SELECT 加 `d.shifts`，後端 filter 移除不在班司機（log 印「排班過濾 X/Y 位在班」）。Admin Panel ShiftSelector 早已存在（4 種班次：早/中/晚/夜，每種可勾選 + 設時段），這次只是讓那些設定**真正生效**。
+
+### F2: 距離 bucket（半徑遞增派單）
+CONFIG 加 `BATCH_RADIUS_KM: [2, 3, 5, 8, 15]`，每批派單最大半徑遞增（**累進式**：batch 1 ≤2km，batch 2 ≤3km, ..., batch 5 ≤15km）。
+- 累進不分段：近的司機沒接 batch 1，batch 2 還會出現在候選
+- 偏遠訂單前幾批可能 0 候選沒關係，第 4-5 批自動納入更遠司機
+- bucket 內仍按既有評分排序
+
+`selectBestDrivers` 加 `maxRadiusKm` 參數，`executeBatch` 依 batchNumber 取對應半徑。
+
+### F3: 1+1 疊單（ON_TRIP 接下一單）
+
+**Migration 018**：orders 表加 `queued_after_order_id`、`assignment_mode`（部分索引只索引 queued 訂單）。
+
+**Dispatcher 改 `getAvailableDrivers`**：
+- 候選範圍從 `availability IN ('AVAILABLE','REST')` 擴大到 `('AVAILABLE','REST','ON_TRIP')`
+- ON_TRIP 司機加額外過濾：「目前位置到當前訂單目的地直線距離 ≤ 2km」（≈ 4 分鐘車程，用 Haversine 不打 Google API 控成本）
+- SQL 多 SELECT 三欄：current_dest_lat / current_dest_lng / current_order_id（跑 ON_TRIP 司機的當前訂單反查）
+
+**接單路徑分支** (`PATCH /:orderId/accept`)：
+- 偵測司機 availability=ON_TRIP → **疊單模式**：UPDATE 設 `driver_id`、`queued_after_order_id`、`assignment_mode='STACKED_1P1'`，**status 維持 OFFERED**（避免被其他司機搶 + 行程結束才晉升）
+- 一般司機 → 既有 ACCEPTED 邏輯不變
+
+**前單完成自動晉升** (`PATCH /:orderId/status` status='DONE')：
+1. 找 `queued_after_order_id == 該訂單` 的 OFFERED 訂單
+2. 有 → UPDATE status='ACCEPTED', queued_after_order_id=NULL, assignment_mode='SINGLE'
+3. emit `order:status` ACCEPTED 給司機（App 自動 refresh）
+4. LINE notifyOrderStatusChange 推 ACCEPTED 給疊單客人
+
+### 影響檔案
+- `src/services/ShiftChecker.ts` — **新增**
+- `src/services/SmartDispatcherV2.ts` — getAvailableDrivers shift filter + ON_TRIP 候選 + 距離過濾；CONFIG 加 BATCH_RADIUS_KM；selectBestDrivers 加 maxRadiusKm；executeBatch 用 bucket
+- `src/api/orders.ts` — PATCH /accept 分疊單／一般兩路；PATCH /status DONE 自動晉升 + 推 socket + LINE
+- `src/db/migrations/018-stacked-orders.sql` — **新增**
+- `src/db/migrate.ts` — 註冊 018
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull && pnpm install && pnpm build
+pnpm migrate stacked-orders
+pm2 restart taxiserver
+```
+
+**不需要 APK 更新** — 三項都是後端行為，司機端透過既有 socket 機制即時接收。
+
+### 驗證
+1. **F1 排班**：admin 設司機 D001「中班 14:00-22:00」→ 早上 10:00 派單 → log 應印「排班過濾: N/N+1 位在班」(D001 被剔除)
+2. **F2 bucket**：log 印 `[SmartDispatcherV2] 執行第 1 批派單（半徑 2 km）` → batch 2 印 3km、batch 3 印 5km
+3. **F3 疊單**：D001 在跑 ORDER_A 距 dest 1.5km → 派 ORDER_B → log 應印「1+1 疊單接單」 → ORDER_A 完成 → log 印「自動晉升」+ D001 收到 ACCEPTED
+4. SQL 抽檢：`SELECT order_id, status, queued_after_order_id, assignment_mode FROM orders WHERE assignment_mode = 'STACKED_1P1'`
+
+### 已知遺留（下個 commit 補）
+- 司機 App HomeScreen 加「上班中／不在班次」banner — 目前司機只透過「沒有訂單派來」感知不在班
+- 司機 App SimplifiedDriverScreen 加「下一單」UI — 目前疊單晉升靠 socket 自動 refresh 訂單卡，沒有「排隊中」視覺提示
+
+### 設計決策
+- **shifts 為空 = 24/7 在班**：保持向後相容
+- **bucket 累進不分段**：邏輯簡單、不會「漏人」
+- **ON_TRIP 直線距離 < 2km 才能被疊單派**：避免太早派客人等太久；2km 用 Haversine ≈ 4 分鐘車程，跟 spec「< 5 分鐘」一致
+- **不打 Google API 算 ETA-to-destination**：每筆派單對 N 個 ON_TRIP 司機 × 5 批 = 成本爆炸；Haversine 「夠好」proxy
+- **疊單 status 維持 OFFERED**：避免被其他司機搶；前單 DONE 才晉升 ACCEPTED
+
+---
+
+## 📝 歷史修改（2026-05-05 #2）- 司機請客人重發位置（LINE push + LIFF 改訂單頁 + 補手機）
 
 ### 解決的問題
 司機接到 LINE 訂單後，常遇到客人傳的上車點座標不準（geocode 不準、客人手 slip 點錯）。
