@@ -19,6 +19,7 @@ import adminPartnersRouter from './api/admin-partners';
 import adminDriverPartnersRouter from './api/admin-driver-partners';
 import adminCommissionRulesRouter from './api/admin-commission-rules';
 import adminQueueZonesRouter from './api/admin-queue-zones';
+import adminBillingRouter from './api/admin-billing';
 import queueRouter from './api/queue';
 import landmarksSyncRouter from './api/landmarks';
 import ratingsRouter from './api/ratings';
@@ -275,6 +276,7 @@ app.use('/api/admin/address-failures', adminAddressFailuresRouter);
 app.use('/api/admin/partners', adminPartnersRouter);
 app.use('/api/admin/commission-rules', adminCommissionRulesRouter);
 app.use('/api/admin/queue-zones', adminQueueZonesRouter);
+app.use('/api/admin/billing', adminBillingRouter);
 app.use('/api/admin/drivers', adminDriverPartnersRouter);  // /:driverId/partners 子路徑
 app.use('/api/admin', adminRouter);
 app.use('/api/queue', queueRouter);

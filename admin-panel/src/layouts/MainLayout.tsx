@@ -17,6 +17,7 @@ import {
   QuestionCircleOutlined,
   ExclamationCircleOutlined,
   StopOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -100,6 +101,11 @@ const MainLayout: React.FC = () => {
       key: '/queue-zones',
       icon: <EnvironmentOutlined />,
       label: '排班區',
+    },
+    {
+      key: '/billing',
+      icon: <FileTextOutlined />,
+      label: '結算報表',
     },
     {
       key: '/landmarks',

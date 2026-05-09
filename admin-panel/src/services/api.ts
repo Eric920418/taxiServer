@@ -621,6 +621,86 @@ export const queueZoneAPI = {
   delete: (id: string) => api.delete<{ success: boolean }>(`/admin/queue-zones/${id}`),
 };
 
+// ========== Billing Reports ==========
+
+export interface BillingPartnerMonthlyResponse {
+  success: boolean;
+  partner_id: string;
+  year: number;
+  month: number;
+  total_orders: number;
+  total_revenue: number;
+  total_partner_share: number;
+  by_driver: Array<{
+    driver_id: string;
+    driver_name: string;
+    orders: number;
+    revenue: number;
+    partner_share: number;
+  }>;
+  reconciled: boolean;
+  sum_by_driver: number;
+  details: any[];
+}
+
+export interface BillingDriverMonthlyResponse {
+  success: boolean;
+  driver_id: string;
+  year: number;
+  month: number;
+  partners: Array<{
+    partner_id: string;
+    relationship_type: string;
+    partner_name: string;
+    partner_type: string;
+  }>;
+  total_orders: number;
+  queue_orders: number;
+  regular_orders: number;
+  total_fare: number;
+  total_commission: number;
+  total_driver_net: number;
+  orders: any[];
+}
+
+export interface BillingPlatformMonthlyResponse {
+  success: boolean;
+  year: number;
+  month: number;
+  overall: {
+    total_orders: number;
+    total_fare: number;
+    total_commission: number;
+    total_driver_net: number;
+    queue_orders: number;
+    regular_orders: number;
+  };
+  by_partner: Array<{
+    partner_id: string | null;
+    partner_role: 'PLATFORM' | 'FLEET' | 'BRAND' | 'RECRUITER';
+    partner_name: string | null;
+    partner_type: string | null;
+    orders: number;
+    total_amount: number;
+  }>;
+  platform_share: number;
+}
+
+export const billingAPI = {
+  partnerMonthly: (partnerId: string, year: number, month: number) =>
+    api.get<BillingPartnerMonthlyResponse>('/admin/billing/partner-monthly', {
+      params: { partner_id: partnerId, year, month },
+    }),
+  driverMonthly: (driverId: string, year: number, month: number) =>
+    api.get<BillingDriverMonthlyResponse>('/admin/billing/driver-monthly', {
+      params: { driver_id: driverId, year, month },
+    }),
+  platformMonthly: (year: number, month: number) =>
+    api.get<BillingPlatformMonthlyResponse>('/admin/billing/platform-monthly', {
+      params: { year, month },
+    }),
+};
+
 // ========== Driver Partner Bindings ==========
 
 export interface DriverPartnerBinding {

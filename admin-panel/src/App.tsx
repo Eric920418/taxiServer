@@ -23,6 +23,7 @@ import Blacklist from './pages/Blacklist';
 import Partners from './pages/Partners';
 import CommissionRules from './pages/CommissionRules';
 import QueueZones from './pages/QueueZones';
+import Billing from './pages/Billing';
 import './App.css';
 
 // 私有路由組件
@@ -70,6 +71,7 @@ function AppContent() {
           <Route path="partners" element={<Partners />} />
           <Route path="commission-rules" element={<CommissionRules />} />
           <Route path="queue-zones" element={<QueueZones />} />
+          <Route path="billing" element={<Billing />} />
         </Route>
       </Routes>
     </Router>
