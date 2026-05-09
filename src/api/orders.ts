@@ -14,6 +14,7 @@ import { getNotificationService } from '../services/NotificationService';
 import { getLineNotifier } from '../services/LineNotifier';
 import { getCustomerNotificationService } from '../services/CustomerNotificationService';
 import { fareConfigService } from '../services/FareConfigService';
+import { getBillingService } from '../services/BillingService';
 
 // 有效的拒單原因（強制選擇）
 const VALID_REJECTION_REASONS = [
@@ -695,6 +696,13 @@ router.patch('/:orderId/status', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 狀態更新為：${status}`);
 
+    // Billing Snapshot：訂單完成寫對帳 snapshot（fire-and-forget，不卡訂單流程）
+    if (status === 'DONE') {
+      getBillingService().writeSnapshotForOrder(orderId).catch((e: Error) =>
+        console.error('[Order] BillingSnapshot 寫入失敗（不影響訂單）:', e.message)
+      );
+    }
+
     // 1+1 疊單自動晉升：前單 DONE 時，找排在它之後的疊單訂單，狀態改 ACCEPTED 給司機接手
     if (status === 'DONE') {
       const queued = await queryOne(
@@ -1265,6 +1273,11 @@ async function handleSubmitFare(req: any, res: any) {
     }
 
     console.log(`[Order] 訂單 ${orderId} 提交車資：NT$ ${meterAmount}`);
+
+    // Billing Snapshot：訂單完成寫對帳 snapshot（fire-and-forget）
+    getBillingService().writeSnapshotForOrder(orderId).catch((e: Error) =>
+      console.error('[Order/submitFare] BillingSnapshot 寫入失敗（不影響訂單）:', e.message)
+    );
 
     // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`

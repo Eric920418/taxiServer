@@ -20,6 +20,7 @@ const MIGRATIONS = {
   'pickup-note': '016-landmark-pickup-note.sql',                 // 地標上車提示備註
   'line-states': '017-line-conversation-states.sql',             // 補新 conversation_state 白名單
   'stacked-orders': '018-stacked-orders.sql',                    // 1+1 疊單欄位
+  'queue-billing': '019-queue-and-billing.sql',                  // Queue 排班 + 跨車隊媒合 + 對帳基礎
 };
 
 /**

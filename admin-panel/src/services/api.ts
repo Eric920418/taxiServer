@@ -542,4 +542,75 @@ export const addressFailureAPI = {
   dismiss: (id: number) => api.delete(`/admin/address-failures/${id}`),
 };
 
+// ========== Partners (車隊/品牌/招募人) ==========
+
+export interface Partner {
+  partner_id: string;
+  name: string;
+  type: 'FLEET' | 'BRAND' | 'RECRUITER';
+  parent_partner_id: string | null;
+  contact_phone: string | null;
+  contact_name: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export const partnerAPI = {
+  list: (type?: 'FLEET' | 'BRAND' | 'RECRUITER', activeOnly = true) =>
+    api.get<{ success: boolean; data: Partner[] }>('/admin/partners', {
+      params: { type, is_active: activeOnly },
+    }),
+  get: (id: string) => api.get<{ success: boolean; data: Partner }>(`/admin/partners/${id}`),
+  create: (payload: Partial<Partner>) =>
+    api.post<{ success: boolean }>('/admin/partners', payload),
+  update: (id: string, payload: Partial<Partner>) =>
+    api.put<{ success: boolean; data: Partner }>(`/admin/partners/${id}`, payload),
+  delete: (id: string) => api.delete<{ success: boolean }>(`/admin/partners/${id}`),
+};
+
+// ========== Commission Rules ==========
+
+export interface CommissionRule {
+  rule_id: number;
+  partner_id: string;
+  partner_name?: string;
+  partner_type?: string;
+  rule_type: 'FIXED_PER_ORDER' | 'PERCENTAGE';
+  amount: number;
+  effective_from: string;
+  effective_to: string | null;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+}
+
+export const commissionRuleAPI = {
+  list: (params?: { partner_id?: string; active_only?: boolean }) =>
+    api.get<{ success: boolean; data: CommissionRule[] }>('/admin/commission-rules', { params }),
+  create: (payload: Partial<CommissionRule>) =>
+    api.post<{ success: boolean; data: CommissionRule }>('/admin/commission-rules', payload),
+  update: (id: number, payload: Partial<CommissionRule>) =>
+    api.put<{ success: boolean; data: CommissionRule }>(`/admin/commission-rules/${id}`, payload),
+  delete: (id: number) => api.delete<{ success: boolean }>(`/admin/commission-rules/${id}`),
+};
+
+// ========== Driver Partner Bindings ==========
+
+export interface DriverPartnerBinding {
+  partner_id: string;
+  partner_name: string;
+  partner_type: 'FLEET' | 'BRAND' | 'RECRUITER';
+  relationship_type: 'PRIMARY_FLEET' | 'BRAND' | 'RECRUITED_BY';
+  is_active: boolean;
+}
+
+export const driverPartnersAPI = {
+  list: (driverId: string) =>
+    api.get<{ success: boolean; data: DriverPartnerBinding[] }>(`/admin/drivers/${driverId}/partners`),
+  // body: { PRIMARY_FLEET?: 'partner_id'|null, BRAND?: ..., RECRUITED_BY?: ... }
+  setBindings: (driverId: string, bindings: Record<string, string | null>) =>
+    api.put<{ success: boolean; data: DriverPartnerBinding[] }>(`/admin/drivers/${driverId}/partners`, bindings),
+};
+
 export default api;

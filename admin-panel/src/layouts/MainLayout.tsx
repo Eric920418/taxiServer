@@ -87,6 +87,16 @@ const MainLayout: React.FC = () => {
       label: '車隊管理',
     },
     {
+      key: '/partners',
+      icon: <TeamOutlined />,
+      label: '合作對象',
+    },
+    {
+      key: '/commission-rules',
+      icon: <SettingOutlined />,
+      label: '分潤規則',
+    },
+    {
       key: '/landmarks',
       icon: <EnvironmentOutlined />,
       label: '地標管理',

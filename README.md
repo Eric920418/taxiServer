@@ -2,9 +2,106 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.0-MVP
-> 更新日期：2026-05-08
+> 更新日期：2026-05-09
 
-## 📝 最新修改（2026-05-08）- 派單系統三大 feature：排班 / 距離 bucket / 1+1 疊單
+## 📝 最新修改（2026-05-09）- GoGoCha 跨車隊媒合平台 Phase 1：Partner 抽象 + 對帳基礎建設
+
+### 解決的問題
+業主把方向拉到「跨車隊媒合平台」，需要：
+1. 多種合作對象（車隊 / 品牌 / 招募人）統一管理
+2. 一個司機可同時屬多個 partner（例：原車隊 + 透過某招募人加入 + 某品牌營運）
+3. 彈性分潤規則（每個 partner 各自設 FIXED_PER_ORDER 或 PERCENTAGE）
+4. 每筆訂單寫永久 BillingSnapshot，月底對帳精準（Σ司機單 == 車隊總單）
+5. 派單**完全不受 partner 限制**（跨車隊媒合）
+
+Phase 1 範圍：DB schema + 後端 CRUD + admin UI（Partners 頁 + 分潤規則頁）+ 訂單 DONE 自動寫 snapshot。
+
+**核心設計：3 層抽象**
+- **Layer 0 派遣**：既有 SmartDispatcherV2 不動
+- **Layer 1 Queue 排班優先層**：P3 才做
+- **Layer 2 Partner 結算層**：本次 P1 重點，**完全跨層、不影響派遣**
+
+### Migration 019 — 7 張新表 + drivers/orders 加欄位
+
+```
+partners                    車隊/品牌/招募人（type 區分）
+driver_partners             N:N，每 relationship_type (PRIMARY_FLEET/BRAND/RECRUITED_BY) 每司機 1 筆
+commission_rules            分潤規則（FIXED_PER_ORDER / PERCENTAGE）
+queue_zones                 排班區（圓形：center + radius）— P2 才用
+queue_entries               排班記錄 — P2 才用
+billing_snapshots           訂單完成永久寫一筆
+billing_distributions       一張單拆給多 partner（PLATFORM 拿剩餘）
+```
+
+加欄位：
+- `drivers.max_acceptable_commission_pct` — 司機接受抽成上限（P3 用）
+- `orders.commission_pct` / `dispatch_type` / `dispatched_from_zone`
+
+### 後端新增
+
+| 檔案 | 功能 |
+|------|------|
+| `src/services/BillingService.ts` | `writeSnapshotForOrder(orderId)`：訂單 DONE 自動寫 snapshot + 拆 distribution |
+| `src/api/admin-partners.ts` | Partner CRUD (GET 含 type 過濾 / POST / PUT / DELETE 軟刪) |
+| `src/api/admin-driver-partners.ts` | 司機綁定 partner（PUT 整批設 PRIMARY_FLEET/BRAND/RECRUITED_BY） |
+| `src/api/admin-commission-rules.ts` | 分潤規則 CRUD |
+| `src/api/orders.ts` | PATCH /status DONE + submitFare 都呼叫 BillingService |
+| `src/db/migrations/019-queue-and-billing.sql` | Schema |
+| `src/db/migrate.ts` | 註冊 019 |
+| `src/index.ts` | 註冊 3 個新 router |
+
+### Admin Panel 新增
+
+| 檔案 | 功能 |
+|------|------|
+| `admin-panel/src/pages/Partners.tsx` | 三 tab (車隊 / 品牌 / 招募人) CRUD |
+| `admin-panel/src/pages/CommissionRules.tsx` | 分潤規則 CRUD（含時段生效 from/to） |
+| `admin-panel/src/services/api.ts` | partnerAPI / commissionRuleAPI / driverPartnersAPI |
+| `admin-panel/src/App.tsx` | 加路由 |
+| `admin-panel/src/layouts/MainLayout.tsx` | 菜單加「合作對象」「分潤規則」 |
+
+### 部署步驟
+```bash
+cd /var/www/taxiServer
+git pull && pnpm install && pnpm build
+pnpm migrate queue-billing
+pm2 restart taxiserver
+
+cd admin-panel && pnpm build
+```
+
+### 驗證（Phase 1 結束時）
+1. SQL `\d partners` 等 7 張表存在
+2. admin 後台「合作對象」頁建立 Partner 「大豐」(FLEET)
+3. 「分潤規則」頁建立規則：partner=大豐, type=PERCENTAGE, amount=5
+4. SQL 直接 INSERT driver_partners 綁司機 D001 PRIMARY_FLEET=大豐
+5. 跑一筆訂單 DONE，車資 200
+6. SQL 抽檢：
+   - `billing_snapshots` 1 筆 (driver_id=D001, fare=200, commission_pct=0)
+   - `billing_distributions` 至少 2 筆：FLEET amount=10、PLATFORM amount=-10（負數警示）
+   - **(P1 commission_pct 都先設 0，但拆分結構已就位；P3/P4 commission 才會寫實值)**
+
+### 設計決策
+- **Partner 三類型同一抽象**：避免未來加新類型還要 migrate
+- **driver_partners N:N + relationship_type**：每角色 1 partner（PRIMARY_FLEET 1 個 / BRAND 1 個 / RECRUITED_BY 1 個）
+- **billing_snapshots ↔ distributions 1:N**：永久保留分潤歷史；rule 改了不影響舊單
+- **commission_pct 在 orders 而非 snapshot**：派單時就決定，便於 query
+- **Layer 2 結算對 Layer 0 派遣無影響**：snapshot 寫失敗只 log，不卡訂單完成
+
+### 下個 Phase（已規劃）
+- **P2** (5-6 天)：Queue Zone admin 頁 + 司機 App 排班 UI
+- **P3** (4-5 天)：QueuePriorityLayer 整合派單 + 防作弊 cron
+- **P4** (8-10 天)：訂單 commission_pct 動態設定 + 完整 Billing 報表頁
+- **P5** (5+ 天)：邊角優化（多邊形 zone、自動跳排、PDF 匯出）
+
+### 已知遺留（P2 補）
+- Drivers.tsx 編輯頁加 partner 綁定 UI（目前 admin 需透過 SQL 或直接 API 綁）
+- 司機 commission 接受度設定 UI
+- LINE/App 客人 commission tier 選擇
+
+---
+
+## 📝 歷史修改（2026-05-08）- 派單系統三大 feature：排班 / 距離 bucket / 1+1 疊單
 
 ### 解決的問題
 SmartDispatcherV2 之前是「Top-N 評分批次派單」，三個結構性洞：
