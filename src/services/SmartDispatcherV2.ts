@@ -26,6 +26,8 @@ import {
 import { getAutoAcceptService, AutoAcceptService } from './AutoAcceptService';
 import { getHotZoneQuotaService, HotZoneQuotaService, ZoneCheckResult, QueueEntry } from './HotZoneQuotaService';
 import { isOnShift } from './ShiftChecker';
+import { queueZoneResolver } from './QueueZoneResolver';
+import { queueOrderingService } from './QueueOrderingService';
 
 // ============================================
 // 類型定義
@@ -105,6 +107,9 @@ interface OrderDispatchState {
   // 熱區配額擴展
   hotZoneQuota?: ZoneCheckResult;
   queuePosition?: number;
+  // Queue Priority Layer：訂單 pickup 落在某 zone 時，第一批先派 queue 司機
+  queueZoneId?: string;
+  queueDriverIds?: string[];  // 待派 queue 司機 ID list（已排序：rebate>FIFO>距離）
 }
 
 // ============================================
@@ -345,6 +350,40 @@ export class SmartDispatcherV2 {
       }
     }
 
+    // ============================================
+    // Queue Priority Layer：判斷上車點是否落在排班區
+    // 命中 → 第一批派 queue 司機；queue 全拒/超時自然 fallback 既有評分派遣
+    // ============================================
+    let queueZoneId: string | undefined;
+    let queueDriverIds: string[] | undefined;
+    try {
+      const zone = await queueZoneResolver.resolveZone(order.pickup.lat, order.pickup.lng);
+      if (zone) {
+        const orderCommissionPct = (order as any).commissionPct ?? 0;
+        const candidates = await queueOrderingService.getQueueDriversForOrder(
+          zone.zone_id,
+          orderCommissionPct,
+          order.pickup.lat,
+          order.pickup.lng,
+        );
+        if (candidates.length > 0) {
+          queueZoneId = zone.zone_id;
+          queueDriverIds = candidates.map(c => c.driver_id);
+          console.log(`[QueuePriority] 訂單 ${order.orderId} 落在 zone "${zone.name}"，使用 ${queueDriverIds.length} 位 queue 司機`);
+          // 標記 orders 表 dispatch_type='QUEUE'
+          await this.pool.query(
+            `UPDATE orders SET dispatch_type = 'QUEUE', dispatched_from_zone = $1 WHERE order_id = $2`,
+            [zone.zone_id, order.orderId]
+          );
+        } else {
+          console.log(`[QueuePriority] 訂單 ${order.orderId} 在 zone "${zone.name}" 但無合資格司機，fallback 一般派遣`);
+        }
+      }
+    } catch (e: any) {
+      // Queue 失敗不擋一般派遣
+      console.error('[QueuePriority] resolveZone 失敗，fallback 一般派遣:', e.message);
+    }
+
     // 初始化派單狀態
     const state: OrderDispatchState = {
       order,
@@ -356,6 +395,8 @@ export class SmartDispatcherV2 {
       allTimedOutDriverIds: new Set(),
       createdAt: Date.now(),
       hotZoneQuota,
+      queueZoneId,
+      queueDriverIds,
     };
 
     this.activeOrders.set(order.orderId, state);
@@ -405,21 +446,81 @@ export class SmartDispatcherV2 {
     // 距離 bucket：第 N 批用 BATCH_RADIUS_KM[N-1]（累進）
     const maxRadiusKm = CONFIG.BATCH_RADIUS_KM[batchNumber - 1] ?? CONFIG.BATCH_RADIUS_KM[CONFIG.BATCH_RADIUS_KM.length - 1];
 
-    console.log(`[SmartDispatcherV2] 執行第 ${batchNumber} 批派單（半徑 ${maxRadiusKm} km）`);
-
-    // 選擇最佳司機
+    // 排除已試過的司機
     const excludeDrivers = new Set([
       ...state.allOfferedDriverIds,
       ...state.allRejectedDriverIds,
       ...state.allTimedOutDriverIds,
     ]);
 
-    const selectedDrivers = await this.selectBestDrivers(
-      state.order,
-      CONFIG.BATCH_SIZE,
-      excludeDrivers,
-      maxRadiusKm
-    );
+    // ============================================
+    // Queue Priority：若 state.queueDriverIds 還有人，本批優先派 queue 司機
+    // queue 全部派完/全拒/全超時 → state.queueDriverIds 變空 → 自然 fallback 評分派遣
+    // ============================================
+    let selectedDrivers: DriverScore[] = [];
+    if (state.queueDriverIds && state.queueDriverIds.length > 0) {
+      // 取下一批 queue 司機（已排序好，不再評分）
+      const queueBatch = state.queueDriverIds
+        .filter(id => !excludeDrivers.has(id))
+        .slice(0, CONFIG.BATCH_SIZE);
+
+      if (queueBatch.length > 0) {
+        console.log(`[SmartDispatcherV2] 第 ${batchNumber} 批走 Queue 模式（zone=${state.queueZoneId}, 候選 ${queueBatch.length} 位）`);
+        // 把 queue 司機 ID 包成 DriverScore 結構（部分欄位用預設）
+        // 簡化：直接 query 補齊必要欄位
+        const driverDetails = await this.pool.query(
+          `SELECT driver_id, name, phone, plate, current_lat, current_lng
+           FROM drivers WHERE driver_id = ANY($1)`,
+          [queueBatch]
+        );
+        const detailMap = new Map(driverDetails.rows.map((r: any) => [r.driver_id, r]));
+
+        selectedDrivers = queueBatch
+          .map(id => {
+            const d = detailMap.get(id);
+            if (!d) return null;
+            const score: DriverScore = {
+              driverId: id,
+              driverName: d.name || '',
+              currentLocation: {
+                lat: d.current_lat ? parseFloat(d.current_lat) : 0,
+                lng: d.current_lng ? parseFloat(d.current_lng) : 0,
+              } as any,
+              distanceKm: 0,
+              etaMinutes: 0,
+              etaSeconds: 0,
+              etaSource: 'QUEUE' as any,
+              components: {
+                distance: 100, eta: 100, earningsBalance: 0,
+                acceptancePrediction: 0, efficiencyMatch: 0, hotZone: 0,
+              } as any,
+              totalScore: 100,  // queue 司機本質上就是「最佳」，不走評分
+              rejectionProbability: 0,
+              reason: 'QUEUE_PRIORITY',
+            } as DriverScore;
+            return score;
+          })
+          .filter((x): x is DriverScore => x !== null);
+
+        // 從 queueDriverIds 移除本批已派的
+        state.queueDriverIds = state.queueDriverIds.filter(id => !queueBatch.includes(id));
+      } else {
+        // queue 司機都被 exclude（已試過/拒/超時）→ queue 失效，clear 之後 fallback
+        console.log(`[SmartDispatcherV2] Queue 司機都被排除，fallback 評分派遣`);
+        state.queueDriverIds = [];
+      }
+    }
+
+    // Queue 沒有結果 → fallback 既有評分派遣（依 batchNumber 半徑 bucket）
+    if (selectedDrivers.length === 0) {
+      console.log(`[SmartDispatcherV2] 執行第 ${batchNumber} 批派單（半徑 ${maxRadiusKm} km，評分模式）`);
+      selectedDrivers = await this.selectBestDrivers(
+        state.order,
+        CONFIG.BATCH_SIZE,
+        excludeDrivers,
+        maxRadiusKm
+      );
+    }
 
     if (selectedDrivers.length === 0) {
       console.log(`[SmartDispatcherV2] 第 ${batchNumber} 批無可用司機`);
@@ -809,6 +910,15 @@ export class SmartDispatcherV2 {
     if (state.batchTimeoutTimer) clearTimeout(state.batchTimeoutTimer);
     if (state.orderTimeoutTimer) clearTimeout(state.orderTimeoutTimer);
 
+    // Queue 模式：標記司機 entry 為 LEFT (reason=ACCEPTED)
+    if (state.queueZoneId) {
+      try {
+        await queueOrderingService.markDispatched(driverId);
+      } catch (e: any) {
+        console.error('[QueuePriority] markDispatched 失敗:', e.message);
+      }
+    }
+
     // 更新當前批次結果
     const currentBatch = state.batches[state.batches.length - 1];
     if (currentBatch) {
@@ -867,6 +977,16 @@ export class SmartDispatcherV2 {
 
     // 記錄拒單
     state.allRejectedDriverIds.add(driverId);
+
+    // Queue 模式：拒單司機移到隊尾（status 維持 ACTIVE，joined_at 更新為現在）
+    if (state.queueZoneId) {
+      try {
+        await queueOrderingService.moveToTail(driverId);
+        console.log(`[QueuePriority] 司機 ${driverId} 拒 queue 訂單，移至隊尾`);
+      } catch (e: any) {
+        console.error('[QueuePriority] moveToTail 失敗:', e.message);
+      }
+    }
 
     const currentBatch = state.batches[state.batches.length - 1];
     if (currentBatch) {

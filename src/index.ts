@@ -214,6 +214,23 @@ if (process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.LINE_CHANNEL_SECRET) {
         console.error('[LINE] 對話超時清理失敗:', err);
       }
     }, 10 * 60 * 1000);
+
+    // Queue Zone resolver 預載 + Queue 防作弊 cron（每分鐘掃 ACTIVE 排班）
+    Promise.all([
+      import('./services/QueueZoneResolver'),
+      import('./services/QueueFraudChecker'),
+    ]).then(([resolverMod, fraudMod]) => {
+      resolverMod.queueZoneResolver.refresh().then(() => {
+        console.log('[系統] QueueZoneResolver 已預載 zones');
+      }).catch((e: Error) => console.warn('[系統] QueueZoneResolver 預載失敗:', e.message));
+
+      setInterval(() => {
+        fraudMod.queueFraudChecker.checkOnce().catch((e: Error) =>
+          console.error('[QueueFraudChecker] 掃描異常:', e.message)
+        );
+      }, 60 * 1000);
+      console.log('[系統] Queue 防作弊 cron 已啟動（每 60s）');
+    }).catch((e: Error) => console.warn('[系統] Queue 模組初始化失敗:', e.message));
   } catch (error) {
     console.warn('[系統] LINE 叫車處理引擎初始化失敗:', (error as Error).message);
   }
