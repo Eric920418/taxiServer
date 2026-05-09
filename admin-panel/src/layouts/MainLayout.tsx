@@ -97,6 +97,11 @@ const MainLayout: React.FC = () => {
       label: '分潤規則',
     },
     {
+      key: '/queue-zones',
+      icon: <EnvironmentOutlined />,
+      label: '排班區',
+    },
+    {
       key: '/landmarks',
       icon: <EnvironmentOutlined />,
       label: '地標管理',

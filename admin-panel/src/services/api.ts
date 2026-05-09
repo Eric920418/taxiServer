@@ -595,6 +595,32 @@ export const commissionRuleAPI = {
   delete: (id: number) => api.delete<{ success: boolean }>(`/admin/commission-rules/${id}`),
 };
 
+// ========== Queue Zones ==========
+
+export interface QueueZone {
+  zone_id: string;
+  name: string;
+  center_lat: number | string;
+  center_lng: number | string;
+  radius_meters: number;
+  is_active: boolean;
+  active_drivers?: number;  // GET 列表時有
+  created_at?: string;
+  updated_at?: string;
+}
+
+export const queueZoneAPI = {
+  list: (includeInactive = false) =>
+    api.get<{ success: boolean; data: QueueZone[] }>('/admin/queue-zones', {
+      params: { include_inactive: includeInactive },
+    }),
+  create: (payload: Partial<QueueZone>) =>
+    api.post<{ success: boolean }>('/admin/queue-zones', payload),
+  update: (id: string, payload: Partial<QueueZone>) =>
+    api.put<{ success: boolean; data: QueueZone }>(`/admin/queue-zones/${id}`, payload),
+  delete: (id: string) => api.delete<{ success: boolean }>(`/admin/queue-zones/${id}`),
+};
+
 // ========== Driver Partner Bindings ==========
 
 export interface DriverPartnerBinding {
