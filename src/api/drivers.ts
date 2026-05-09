@@ -102,10 +102,60 @@ router.get('/:driverId', async (req: Request, res: Response) => {
       totalEarnings: driver.total_earnings,
       acceptanceRate: parseFloat(driver.acceptance_rate),
       shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
+      maxAcceptableCommissionPct: driver.max_acceptable_commission_pct ?? 100,
     });
   } catch (error) {
     console.error('[Get Driver] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 更新司機抽成接受度（GoGoCha Queue 媒合用）
+ * PATCH /api/drivers/:driverId/commission
+ * body: { maxAcceptableCommissionPct: 0-100 }
+ *
+ * 影響：
+ *   - 該司機加入 Queue 排班時，訂單 commission_pct ≤ 此值才會被派
+ *   - 排序時也用此值（高的優先）
+ */
+router.patch('/:driverId/commission', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+  const { maxAcceptableCommissionPct } = req.body || {};
+
+  if (typeof maxAcceptableCommissionPct !== 'number' ||
+      maxAcceptableCommissionPct < 0 || maxAcceptableCommissionPct > 100) {
+    return res.status(400).json({ error: 'maxAcceptableCommissionPct 必須是 0-100 數字' });
+  }
+
+  try {
+    const result = await query(
+      `UPDATE drivers
+       SET max_acceptable_commission_pct = $1
+       WHERE driver_id = $2
+       RETURNING driver_id, max_acceptable_commission_pct`,
+      [Math.round(maxAcceptableCommissionPct), driverId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: '司機不存在' });
+    }
+
+    // 同步更新該司機目前 ACTIVE 排班 entry 的 max_acceptable（影響後續派單匹配）
+    await query(
+      `UPDATE queue_entries
+       SET max_acceptable_commission_pct = $1
+       WHERE driver_id = $2 AND status = 'ACTIVE'`,
+      [Math.round(maxAcceptableCommissionPct), driverId]
+    );
+
+    res.json({
+      success: true,
+      driver_id: result.rows[0].driver_id,
+      max_acceptable_commission_pct: result.rows[0].max_acceptable_commission_pct,
+    });
+  } catch (error: any) {
+    console.error('[Driver Commission] 錯誤:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
