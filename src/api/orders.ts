@@ -437,6 +437,30 @@ router.patch('/:orderId/accept', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 已被司機 ${driverName}(${driverId}) 接受`);
 
+    // [Cap 1] 用司機 PRIMARY_FLEET partner 的 default_order_commission_pct 覆蓋訂單抽成
+    try {
+      const partnerCommission = await queryOne(
+        `SELECT p.default_order_commission_pct
+         FROM driver_partners dp
+         JOIN partners p ON p.partner_id = dp.partner_id
+         WHERE dp.driver_id = $1
+           AND dp.relationship_type = 'PRIMARY_FLEET'
+           AND dp.is_active = true
+           AND p.is_active = true
+         LIMIT 1`,
+        [driverId]
+      );
+      if (partnerCommission && partnerCommission.default_order_commission_pct !== null) {
+        await query(
+          `UPDATE orders SET commission_pct = $1 WHERE order_id = $2`,
+          [partnerCommission.default_order_commission_pct, orderId]
+        );
+        console.log(`[Order] 訂單 ${orderId} commission_pct → ${partnerCommission.default_order_commission_pct}% (司機 partner 預設)`);
+      }
+    } catch (e: any) {
+      console.error(`[Order] partner commission 覆蓋失敗（不影響接單）:`, e.message);
+    }
+
     // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`
       SELECT o.*,
@@ -701,6 +725,47 @@ router.patch('/:orderId/status', async (req, res) => {
       getBillingService().writeSnapshotForOrder(orderId).catch((e: Error) =>
         console.error('[Order] BillingSnapshot 寫入失敗（不影響訂單）:', e.message)
       );
+    }
+
+    // [Cap 3] 司機接完訂單自動回排班：若仍在 dispatched_from_zone 範圍內，重新加入排班
+    if (status === 'DONE' && updatedOrder.driver_id && updatedOrder.dispatched_from_zone) {
+      try {
+        const zoneInfo = await queryOne(
+          `SELECT zone_id, center_lat, center_lng, radius_meters
+           FROM queue_zones WHERE zone_id = $1 AND is_active = true`,
+          [updatedOrder.dispatched_from_zone]
+        );
+        const driverLoc = await queryOne(
+          `SELECT current_lat, current_lng, max_acceptable_commission_pct
+           FROM drivers WHERE driver_id = $1`,
+          [updatedOrder.driver_id]
+        );
+        if (zoneInfo && driverLoc && driverLoc.current_lat && driverLoc.current_lng) {
+          // Haversine 計算距離
+          const toRad = (n: number) => (n * Math.PI) / 180;
+          const R = 6371000;
+          const dLat = toRad(Number(driverLoc.current_lat) - Number(zoneInfo.center_lat));
+          const dLng = toRad(Number(driverLoc.current_lng) - Number(zoneInfo.center_lng));
+          const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(Number(zoneInfo.center_lat))) *
+            Math.cos(toRad(Number(driverLoc.current_lat))) *
+            Math.sin(dLng / 2) ** 2;
+          const dist = 2 * R * Math.asin(Math.sqrt(a));
+          if (dist <= Number(zoneInfo.radius_meters)) {
+            await query(
+              `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_commission_pct, status)
+               VALUES ($1, $2, $3, 'ACTIVE')
+               ON CONFLICT DO NOTHING`,
+              [updatedOrder.driver_id, zoneInfo.zone_id, driverLoc.max_acceptable_commission_pct ?? 100]
+            );
+            console.log(`[Order] 司機 ${updatedOrder.driver_id} 接完單自動回 ${zoneInfo.zone_id} 排班 (距離 ${Math.round(dist)}m)`);
+          } else {
+            console.log(`[Order] 司機 ${updatedOrder.driver_id} 已離開排班區 ${zoneInfo.zone_id} (${Math.round(dist)}m > ${zoneInfo.radius_meters}m)，不自動回排班`);
+          }
+        }
+      } catch (e: any) {
+        console.error(`[Order] 自動回排班失敗（不影響訂單完成）:`, e.message);
+      }
     }
 
     // 1+1 疊單自動晉升：前單 DONE 時，找排在它之後的疊單訂單，狀態改 ACCEPTED 給司機接手

@@ -155,6 +155,7 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     mode, scheduledAt,
     paymentType: rawPaymentType,
     subsidyType: rawSubsidyType,
+    commissionPct: rawCommissionPct,
     notes: rawNotes,
   } = req.body;
 
@@ -169,6 +170,14 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
   const notes = typeof rawNotes === 'string' && rawNotes.trim()
     ? rawNotes.trim().substring(0, MAX_NOTES_LENGTH)
     : null;
+
+  // 派單優先度（commissionPct）— LIFF 客人可主動加價，0/5/10/20%
+  // 範圍限制 0-100，未傳或非法則用 DB DEFAULT (5)
+  let commissionPctValue: number | null = null;
+  if (rawCommissionPct !== undefined && rawCommissionPct !== null) {
+    const n = parseInt(String(rawCommissionPct), 10);
+    if (!isNaN(n) && n >= 0 && n <= 100) commissionPctValue = n;
+  }
 
   // 段數正規化：1段→一段
   const normalizedPickupAddress = pickupAddress ? hualienAddressDB.cleanupDisplay(pickupAddress) : pickupAddress;
@@ -230,6 +239,15 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
       now.getHours(), now.getDay(),
       userId, isScheduled ? scheduledAt : null,
     ]);
+
+    // 客人指定 commissionPct → 覆蓋 DB DEFAULT
+    if (commissionPctValue !== null) {
+      await pool.query(
+        'UPDATE orders SET commission_pct = $1 WHERE order_id = $2',
+        [commissionPctValue, orderId]
+      );
+      console.log(`[LIFF] 訂單 ${orderId} 客人指定 commission_pct = ${commissionPctValue}%`);
+    }
 
     // 更新 LINE 使用者統計
     await pool.query(

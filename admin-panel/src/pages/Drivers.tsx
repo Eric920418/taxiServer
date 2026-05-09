@@ -55,7 +55,7 @@ import {
 } from '../store/slices/driversSlice';
 import { type RootState, type AppDispatch } from '../store';
 import { type Driver, type Team } from '../types';
-import { teamsAPI, driverAPI } from '../services/api';
+import { teamsAPI, driverAPI, partnerAPI, driverPartnersAPI, type Partner } from '../services/api';
 
 const { Search, TextArea } = Input;
 const { Option } = Select;
@@ -164,11 +164,13 @@ const Drivers: React.FC = () => {
   const [isDrawerVisible, setIsDrawerVisible] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
   const [form] = Form.useForm();
 
   useEffect(() => {
     loadDrivers();
     loadTeams();
+    loadPartners();
   }, []);
 
   const loadTeams = async () => {
@@ -180,6 +182,17 @@ const Drivers: React.FC = () => {
     } catch (err) {
       // 車隊列表載入失敗不阻塞頁面；Modal 開啟時使用者仍會看到空 Select
       console.error('載入車隊清單失敗', err);
+    }
+  };
+
+  const loadPartners = async () => {
+    try {
+      const { data } = await partnerAPI.list(undefined, true);
+      if (data?.success && Array.isArray(data.data)) {
+        setPartners(data.data);
+      }
+    } catch (err) {
+      console.error('載入 Partner 清單失敗', err);
     }
   };
 
@@ -232,10 +245,26 @@ const Drivers: React.FC = () => {
     setIsModalVisible(true);
   };
 
-  const handleEditDriver = (driver: Driver) => {
+  const handleEditDriver = async (driver: Driver) => {
     setEditingDriver(driver);
     // dayjs 物件給 DatePicker 用；driver.* 是 ISO 字串
     const toDayjs = (s?: string | null) => (s ? dayjs(s) : undefined);
+
+    // 載入該司機現有 Partner 綁定
+    let partnerFields: Record<string, string | undefined> = {};
+    try {
+      const { data: bindRes } = await driverPartnersAPI.list(driver.driver_id);
+      if (bindRes?.success && Array.isArray(bindRes.data)) {
+        for (const b of bindRes.data) {
+          if (b.is_active) {
+            partnerFields[`partner_${b.relationship_type}`] = b.partner_id;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('載入司機 Partner 綁定失敗', err);
+    }
+
     form.setFieldsValue({
       ...driver,
       acceptedOrderTypes: driver.acceptedOrderTypes ?? [],
@@ -245,6 +274,7 @@ const Drivers: React.FC = () => {
       compulsoryInsuranceExpiry: toDayjs((driver as any).compulsoryInsuranceExpiry),
       voluntaryInsuranceExpiry: toDayjs((driver as any).voluntaryInsuranceExpiry),
       shifts: (driver as any).shifts ?? [],
+      ...partnerFields,
     });
     setIsModalVisible(true);
   };
@@ -273,16 +303,40 @@ const Drivers: React.FC = () => {
         values.shifts = values.shifts.filter((s: any) => s && s.shift_type);
       }
 
+      // 抽出 partner_* 欄位（不送進 driver 主表 update）
+      const partnerBindings: Record<string, string | null> = {
+        PRIMARY_FLEET: values.partner_PRIMARY_FLEET ?? null,
+        BRAND: values.partner_BRAND ?? null,
+        RECRUITED_BY: values.partner_RECRUITED_BY ?? null,
+      };
+      delete values.partner_PRIMARY_FLEET;
+      delete values.partner_BRAND;
+      delete values.partner_RECRUITED_BY;
+
+      let targetDriverId: string;
       if (editingDriver) {
         await dispatch(updateDriver({
           driverId: editingDriver.driver_id,
           updates: values,
         })).unwrap();
+        targetDriverId = editingDriver.driver_id;
         message.success('司機資料更新成功！');
       } else {
-        await dispatch(createDriver(values)).unwrap();
+        const created = await dispatch(createDriver(values)).unwrap() as any;
+        targetDriverId = created?.driver_id || created?.driverId || '';
         message.success('新增司機成功！');
       }
+
+      // 同步 Partner 綁定（PRIMARY_FLEET / BRAND / RECRUITED_BY）
+      if (targetDriverId) {
+        try {
+          await driverPartnersAPI.setBindings(targetDriverId, partnerBindings);
+        } catch (err: any) {
+          console.error('Partner 綁定更新失敗', err);
+          message.warning(`Partner 綁定同步失敗：${err?.message || err}`);
+        }
+      }
+
       setIsModalVisible(false);
       loadDrivers();
     } catch (error: any) {
@@ -793,6 +847,52 @@ const Drivers: React.FC = () => {
           <Form.Item label="備註" name="note">
             <TextArea rows={2} placeholder="司機備註（可多行）" />
           </Form.Item>
+
+          <Divider orientation="left" plain>
+            <Space>🤝 合作關係（GoGoCha 跨車隊媒合）</Space>
+          </Divider>
+
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                label="主要車隊 (PRIMARY_FLEET)"
+                name="partner_PRIMARY_FLEET"
+                tooltip="司機主要服務車隊；接單時用此 partner 的 default_order_commission_pct 覆蓋訂單抽成"
+              >
+                <Select placeholder="未綁定" allowClear>
+                  {partners.filter(p => p.type === 'FLEET').map(p => (
+                    <Option key={p.partner_id} value={p.partner_id}>{p.name}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                label="顯示品牌 (BRAND)"
+                name="partner_BRAND"
+                tooltip="App / 乘客端顯示的品牌名稱（可選，與車隊不同）"
+              >
+                <Select placeholder="未綁定" allowClear>
+                  {partners.filter(p => p.type === 'BRAND').map(p => (
+                    <Option key={p.partner_id} value={p.partner_id}>{p.name}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                label="招募人 (RECRUITED_BY)"
+                name="partner_RECRUITED_BY"
+                tooltip="招募此司機的人員；月底結算會分潤給該招募人"
+              >
+                <Select placeholder="未綁定" allowClear>
+                  {partners.filter(p => p.type === 'RECRUITER').map(p => (
+                    <Option key={p.partner_id} value={p.partner_id}>{p.name}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Divider orientation="left" plain>
             <Space><SafetyCertificateOutlined />證件日期 / 車型</Space>

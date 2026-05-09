@@ -69,6 +69,29 @@
       </div>
     </div>
 
+    <!-- 派單優先度（影響平台抽成；給司機更多誘因加快接單） -->
+    <div class="option-section">
+      <label class="section-label">派單優先度</label>
+      <div class="radio-group" id="priorityGroup">
+        <label class="radio-option selected">
+          <input type="radio" name="priority" value="0" checked>
+          <span>一般</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="5">
+          <span>快速</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="10">
+          <span>優先</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="20">
+          <span>急件</span>
+        </label>
+      </div>
+    </div>
+
     <!-- 備註 -->
     <div class="option-section">
       <label class="section-label">備註（選填）</label>
@@ -165,10 +188,11 @@
         showToast('LIFF 初始化失敗：' + (e.message || e));
       }
 
-      // 付款方式 radio 視覺更新
-      document.querySelectorAll('input[name="payment"]').forEach(input => {
+      // Radio (payment + priority) 視覺更新 — selected 只在同 group 內切換
+      document.querySelectorAll('input[name="payment"], input[name="priority"]').forEach(input => {
         input.addEventListener('change', () => {
-          document.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
+          const group = input.closest('.radio-group');
+          if (group) group.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
           input.closest('.radio-option').classList.add('selected');
         });
       });
@@ -439,6 +463,10 @@
       }
       const notes = document.getElementById('notesInput')?.value?.trim() || undefined;
 
+      // 派單優先度（commissionPct）— 客人選的越高，平台抽越多，但派給更多接受高 commission 的司機
+      const priorityValue = document.querySelector('input[name="priority"]:checked')?.value || '0';
+      const commissionPct = parseInt(priorityValue, 10);
+
       const body = {
         pickupLat: pickupData.lat,
         pickupLng: pickupData.lng,
@@ -449,6 +477,7 @@
         mode,
         paymentType,
         subsidyType,
+        commissionPct,
         notes,
       };
 
