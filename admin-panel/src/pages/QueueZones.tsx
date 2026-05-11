@@ -15,6 +15,14 @@ import { queueZoneAPI, type QueueZone } from '../services/api';
 
 const { Title, Text } = Typography;
 
+
+// 自動生成 zone_id：例 zone_a3b9k2x7
+// 規則：zone_ + 8 字 base36 隨機（符合 pattern ^[A-Za-z0-9_-]{1,50}$）
+function generateZoneId(): string {
+  const rand = Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+  return `zone_${rand}`;
+}
+
 const QueueZones: React.FC = () => {
   const { message } = AntdApp.useApp();
   const [list, setList] = useState<QueueZone[]>([]);
@@ -43,7 +51,11 @@ const QueueZones: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ radius_meters: 300, is_active: true });
+    form.setFieldsValue({
+      zone_id: generateZoneId(),
+      radius_meters: 300,
+      is_active: true,
+    });
     setFormLat(null);
     setFormLng(null);
     setRadius(300);
@@ -168,20 +180,21 @@ const QueueZones: React.FC = () => {
         destroyOnHidden
       >
         <Form form={form} layout="vertical">
+          {/* zone_id 新建時隱藏（系統自動生成），編輯時顯示給 user 參考 */}
+          {!editing && (
+            <Form.Item name="zone_id" hidden>
+              <Input />
+            </Form.Item>
+          )}
           <Row gutter={16}>
-            <Col span={10}>
-              <Form.Item
-                label="ID（建立後不可改）"
-                name="zone_id"
-                rules={[
-                  { required: true, message: '必填' },
-                  { pattern: /^[A-Za-z0-9_-]{1,50}$/, message: '只能含英數、底線、連字號' },
-                ]}
-              >
-                <Input disabled={!!editing} placeholder="例：front_station / tzuchi" />
-              </Form.Item>
-            </Col>
-            <Col span={14}>
+            {editing && (
+              <Col span={10}>
+                <Form.Item label="ID（系統自動生成）" name="zone_id">
+                  <Input disabled />
+                </Form.Item>
+              </Col>
+            )}
+            <Col span={editing ? 14 : 24}>
               <Form.Item label="名稱（顯示給司機）" name="name" rules={[{ required: true, max: 50 }]}>
                 <Input placeholder="例：前站 / 慈濟 / 美崙" />
               </Form.Item>
