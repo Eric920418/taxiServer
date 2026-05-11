@@ -26,6 +26,14 @@ const TYPE_COLORS: Record<string, string> = {
   RECRUITER: 'orange',
 };
 
+// 自動生成 partner_id：例 fleet_a3b9k2x7 / brand_x7y8z9q1
+// 規則：type 小寫 + 底線 + 8 字 base36 隨機（總長 ≤ 14 字，符合 pattern ^[A-Za-z0-9_-]{1,50}$）
+function generatePartnerId(type: 'FLEET' | 'BRAND' | 'RECRUITER'): string {
+  const rand = Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+  return `${type.toLowerCase()}_${rand}`;
+}
+
+
 const Partners: React.FC = () => {
   const { message } = AntdApp.useApp();
   const [activeType, setActiveType] = useState<'FLEET' | 'BRAND' | 'RECRUITER'>('FLEET');
@@ -52,7 +60,12 @@ const Partners: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ type: activeType, is_active: true });
+    form.setFieldsValue({
+      partner_id: generatePartnerId(activeType),
+      type: activeType,
+      is_active: true,
+      default_order_discount_amount: 0,
+    });
     setModalOpen(true);
   };
 
@@ -153,16 +166,16 @@ const Partners: React.FC = () => {
         destroyOnHidden
       >
         <Form form={form} layout="vertical">
-          <Form.Item
-            label="ID（建立後不可改）"
-            name="partner_id"
-            rules={[
-              { required: true, message: '必填' },
-              { pattern: /^[A-Za-z0-9_-]{1,50}$/, message: '只能含英數、底線、連字號' },
-            ]}
-          >
-            <Input disabled={!!editing} placeholder="例：dafeng / brand_a / recruiter_eric" />
-          </Form.Item>
+          {editing ? (
+            <Form.Item label="ID（系統自動生成）" name="partner_id">
+              <Input disabled />
+            </Form.Item>
+          ) : (
+            // 新建模式：partner_id 隱藏，由 openCreate 自動填入
+            <Form.Item name="partner_id" hidden>
+              <Input />
+            </Form.Item>
+          )}
           <Form.Item label="類型" name="type" rules={[{ required: true }]}>
             <Input disabled />
           </Form.Item>
