@@ -69,25 +69,29 @@
       </div>
     </div>
 
-    <!-- 派單優先度（影響平台抽成；給司機更多誘因加快接單） -->
+    <!-- 加價找車（給司機折扣金額，提高司機接單意願） -->
     <div class="option-section">
-      <label class="section-label">派單優先度</label>
+      <label class="section-label">給司機折扣</label>
       <div class="radio-group" id="priorityGroup">
         <label class="radio-option selected">
           <input type="radio" name="priority" value="0" checked>
-          <span>一般</span>
-        </label>
-        <label class="radio-option">
-          <input type="radio" name="priority" value="5">
-          <span>快速</span>
+          <span>不打折</span>
         </label>
         <label class="radio-option">
           <input type="radio" name="priority" value="10">
-          <span>優先</span>
+          <span>10 元</span>
         </label>
         <label class="radio-option">
           <input type="radio" name="priority" value="20">
-          <span>急件</span>
+          <span>20 元</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="30">
+          <span>30 元</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="40">
+          <span>40 元</span>
         </label>
       </div>
     </div>
@@ -463,9 +467,9 @@
       }
       const notes = document.getElementById('notesInput')?.value?.trim() || undefined;
 
-      // 派單優先度（commissionPct）— 客人選的越高，平台抽越多，但派給更多接受高 commission 的司機
+      // 給司機折扣（discountAmount）— NT$ 元，0/10/20/30/40 5 段制，數字越大越快有司機接
       const priorityValue = document.querySelector('input[name="priority"]:checked')?.value || '0';
-      const commissionPct = parseInt(priorityValue, 10);
+      const discountAmount = parseInt(priorityValue, 10);
 
       const body = {
         pickupLat: pickupData.lat,
@@ -477,7 +481,7 @@
         mode,
         paymentType,
         subsidyType,
-        commissionPct,
+        discountAmount,
         notes,
       };
 

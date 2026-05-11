@@ -10,6 +10,7 @@ import OpenAI from 'openai';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
 import { getSocketIO, driverSockets } from '../socket';
 import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } from './HualienAddressDB';
+import { query, queryOne } from '../db/connection';
 import { recordFailedQuery, attachGoogleResult, shouldLogFailure } from './AddressFailureLogger';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
 import { getScheduledOrderService } from './ScheduledOrderService';
@@ -301,6 +302,123 @@ export class LineMessageProcessor {
           break;
         }
         await this.showConfirmCard(userId, data, event.replyToken);
+        break;
+      }
+
+      case 'FALLBACK_RAISE': {
+        // 加碼折扣 → UPDATE orders.discount_amount，清 fallback_prompted_at 允許下次重推
+        const orderId = params.get('orderId');
+        const to = parseInt(params.get('to') || '0', 10);
+        if (!orderId || isNaN(to) || to < 0 || to > 40) {
+          await this.lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '參數異常' }],
+          });
+          break;
+        }
+        await query(
+          `UPDATE orders SET discount_amount = $1, fallback_prompted_at = NULL WHERE order_id = $2 AND status = 'OFFERED'`,
+          [to, orderId]
+        );
+        // 重新派單（用既有 dispatcher）
+        try {
+          const dispatcher = (await import('./SmartDispatcherV2')).getSmartDispatcherV2();
+          const orderRow = await queryOne(
+            `SELECT o.*, p.name AS passenger_name FROM orders o
+             LEFT JOIN passengers p ON p.passenger_id = o.passenger_id
+             WHERE o.order_id = $1`,
+            [orderId]
+          );
+          if (orderRow) {
+            await dispatcher.startDispatch({
+              orderId: orderRow.order_id,
+              passengerId: orderRow.passenger_id,
+              passengerName: orderRow.passenger_name || '',
+              passengerPhone: '',
+              pickup: { lat: Number(orderRow.pickup_lat), lng: Number(orderRow.pickup_lng), address: orderRow.pickup_address || '' },
+              destination: orderRow.dest_lat ? { lat: Number(orderRow.dest_lat), lng: Number(orderRow.dest_lng), address: orderRow.dest_address || '' } : null,
+              paymentType: orderRow.payment_type || 'CASH',
+              createdAt: Date.now(),
+              source: 'LINE',
+              discountAmount: to,
+              preferredFleetPartnerId: orderRow.preferred_fleet_partner_id,
+            });
+          }
+        } catch (e: any) {
+          console.error('[LINE] FALLBACK_RAISE 重派失敗:', e.message);
+        }
+        await this.lineClient.replyMessage({
+          replyToken: event.replyToken,
+          messages: [{ type: 'text', text: `已加碼到 NT$ ${to} 元，重新尋找司機中...` }],
+        });
+        break;
+      }
+
+      case 'FALLBACK_ALLOW_DISPATCH': {
+        // 清 preferred_fleet → 允許外調合作司機
+        const orderId = params.get('orderId');
+        if (!orderId) {
+          await this.lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '參數異常' }],
+          });
+          break;
+        }
+        await query(
+          `UPDATE orders SET preferred_fleet_partner_id = NULL, fallback_prompted_at = NULL WHERE order_id = $1 AND status = 'OFFERED'`,
+          [orderId]
+        );
+        // 重新派單
+        try {
+          const dispatcher = (await import('./SmartDispatcherV2')).getSmartDispatcherV2();
+          const orderRow = await queryOne(
+            `SELECT o.*, p.name AS passenger_name FROM orders o
+             LEFT JOIN passengers p ON p.passenger_id = o.passenger_id
+             WHERE o.order_id = $1`,
+            [orderId]
+          );
+          if (orderRow) {
+            await dispatcher.startDispatch({
+              orderId: orderRow.order_id,
+              passengerId: orderRow.passenger_id,
+              passengerName: orderRow.passenger_name || '',
+              passengerPhone: '',
+              pickup: { lat: Number(orderRow.pickup_lat), lng: Number(orderRow.pickup_lng), address: orderRow.pickup_address || '' },
+              destination: orderRow.dest_lat ? { lat: Number(orderRow.dest_lat), lng: Number(orderRow.dest_lng), address: orderRow.dest_address || '' } : null,
+              paymentType: orderRow.payment_type || 'CASH',
+              createdAt: Date.now(),
+              source: 'LINE',
+              discountAmount: Number(orderRow.discount_amount) || 0,
+              preferredFleetPartnerId: null,
+            });
+          }
+        } catch (e: any) {
+          console.error('[LINE] FALLBACK_ALLOW_DISPATCH 重派失敗:', e.message);
+        }
+        await this.lineClient.replyMessage({
+          replyToken: event.replyToken,
+          messages: [{ type: 'text', text: '已開放外調司機，重新尋找中...' }],
+        });
+        break;
+      }
+
+      case 'FALLBACK_CANCEL': {
+        const orderId = params.get('orderId');
+        if (!orderId) {
+          await this.lineClient.replyMessage({
+            replyToken: event.replyToken,
+            messages: [{ type: 'text', text: '參數異常' }],
+          });
+          break;
+        }
+        await query(
+          `UPDATE orders SET status = 'CANCELLED', cancelled_at = CURRENT_TIMESTAMP, cancel_reason = '客人取消（fallback prompt）' WHERE order_id = $1 AND status = 'OFFERED'`,
+          [orderId]
+        );
+        await this.lineClient.replyMessage({
+          replyToken: event.replyToken,
+          messages: [{ type: 'text', text: '已取消叫車。' }],
+        });
         break;
       }
 

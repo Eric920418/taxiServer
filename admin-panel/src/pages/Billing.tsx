@@ -411,7 +411,7 @@ const DriverReport: React.FC<{ month: Dayjs }> = ({ month }) => {
                       : <Tag>一般</Tag>,
                 },
                 { title: '車資', dataIndex: 'fare', width: 80, align: 'right' as const, render: (v: number) => `$${v}` },
-                { title: '抽成%', dataIndex: 'commission_pct', width: 80, align: 'right' as const, render: (v: number) => `${v}%` },
+                { title: '折扣元', dataIndex: 'discount_amount', width: 80, align: 'right' as const, render: (v: number) => `NT$ ${v}` },
                 {
                   title: '司機淨拿',
                   dataIndex: 'driver_net',

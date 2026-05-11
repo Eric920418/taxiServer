@@ -552,6 +552,8 @@ export interface Partner {
   contact_phone: string | null;
   contact_name: string | null;
   is_active: boolean;
+  notes: string | null;
+  default_order_discount_amount: number | null;
   created_at: string;
   updated_at: string;
 }

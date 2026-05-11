@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Table, Button, Modal, Form, Input, Tabs, Tag, Space, Popconfirm,
-  App as AntdApp, Typography, Switch,
+  App as AntdApp, Typography, Switch, InputNumber
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { partnerAPI, type Partner } from '../services/api';
@@ -174,6 +174,20 @@ const Partners: React.FC = () => {
           </Form.Item>
           <Form.Item label="聯絡電話" name="contact_phone">
             <Input placeholder="（選填）" />
+          </Form.Item>
+          <Form.Item
+            label="預設訂單折扣金額"
+            name="default_order_discount_amount"
+            tooltip="此 partner 帶來的訂單預設給司機多少折扣（NT$ 元，4 段制 0/10/20/30/40）。LINE 官方/電話來源若無客人指定則套用此值"
+          >
+            <InputNumber min={0} max={40} step={10} style={{ width: '100%' }} addonAfter="元" />
+          </Form.Item>
+          <Form.Item
+            label="備註"
+            name="notes"
+            tooltip="會出現在月結報表中，給合作代理人/合作車隊看的說明（例：30 元折扣車隊／2026 Q2 合作）"
+          >
+            <Input.TextArea rows={2} placeholder="（選填）合作條件、報表備註等" maxLength={500} />
           </Form.Item>
           <Form.Item label="啟用" name="is_active" valuePropName="checked">
             <Switch />

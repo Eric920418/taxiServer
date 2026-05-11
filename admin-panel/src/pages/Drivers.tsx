@@ -857,7 +857,7 @@ const Drivers: React.FC = () => {
               <Form.Item
                 label="主要車隊 (PRIMARY_FLEET)"
                 name="partner_PRIMARY_FLEET"
-                tooltip="司機主要服務車隊；接單時用此 partner 的 default_order_commission_pct 覆蓋訂單抽成"
+                tooltip="司機主要服務車隊；月結報表時帶入此 partner 的 default_order_discount_amount 與 notes（接單時不再覆蓋訂單折扣）"
               >
                 <Select placeholder="未綁定" allowClear>
                   {partners.filter(p => p.type === 'FLEET').map(p => (

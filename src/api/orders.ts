@@ -437,29 +437,7 @@ router.patch('/:orderId/accept', async (req, res) => {
 
     console.log(`[Order] 訂單 ${orderId} 已被司機 ${driverName}(${driverId}) 接受`);
 
-    // [Cap 1] 用司機 PRIMARY_FLEET partner 的 default_order_commission_pct 覆蓋訂單抽成
-    try {
-      const partnerCommission = await queryOne(
-        `SELECT p.default_order_commission_pct
-         FROM driver_partners dp
-         JOIN partners p ON p.partner_id = dp.partner_id
-         WHERE dp.driver_id = $1
-           AND dp.relationship_type = 'PRIMARY_FLEET'
-           AND dp.is_active = true
-           AND p.is_active = true
-         LIMIT 1`,
-        [driverId]
-      );
-      if (partnerCommission && partnerCommission.default_order_commission_pct !== null) {
-        await query(
-          `UPDATE orders SET commission_pct = $1 WHERE order_id = $2`,
-          [partnerCommission.default_order_commission_pct, orderId]
-        );
-        console.log(`[Order] 訂單 ${orderId} commission_pct → ${partnerCommission.default_order_commission_pct}% (司機 partner 預設)`);
-      }
-    } catch (e: any) {
-      console.error(`[Order] partner commission 覆蓋失敗（不影響接單）:`, e.message);
-    }
+    // 註：discount_amount 由客人下單時決定（LIFF 4 段 / 電話單 admin 填），司機不能覆蓋
 
     // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`
@@ -736,7 +714,7 @@ router.patch('/:orderId/status', async (req, res) => {
           [updatedOrder.dispatched_from_zone]
         );
         const driverLoc = await queryOne(
-          `SELECT current_lat, current_lng, max_acceptable_commission_pct
+          `SELECT current_lat, current_lng, max_acceptable_discount_amount
            FROM drivers WHERE driver_id = $1`,
           [updatedOrder.driver_id]
         );
@@ -753,10 +731,10 @@ router.patch('/:orderId/status', async (req, res) => {
           const dist = 2 * R * Math.asin(Math.sqrt(a));
           if (dist <= Number(zoneInfo.radius_meters)) {
             await query(
-              `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_commission_pct, status)
+              `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount, status)
                VALUES ($1, $2, $3, 'ACTIVE')
                ON CONFLICT DO NOTHING`,
-              [updatedOrder.driver_id, zoneInfo.zone_id, driverLoc.max_acceptable_commission_pct ?? 100]
+              [updatedOrder.driver_id, zoneInfo.zone_id, driverLoc.max_acceptable_discount_amount ?? 0]
             );
             console.log(`[Order] 司機 ${updatedOrder.driver_id} 接完單自動回 ${zoneInfo.zone_id} 排班 (距離 ${Math.round(dist)}m)`);
           } else {

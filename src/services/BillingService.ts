@@ -4,13 +4,13 @@
  * 設計原則：
  *   - 每訂單 DONE 寫一筆 billing_snapshot（永久保留）
  *   - 同時依司機綁定的 partners + 適用 commission_rules 拆 N 筆 distribution
- *   - 對帳：Σ distribution.amount per snapshot == snapshot.total_commission_amount
+ *   - 對帳：Σ distribution.amount per snapshot == snapshot.total_discount_amount
  *   - 寫入失敗只 log warn，不卡訂單完成（snapshot 失敗可後補）
  *
  * 拆分演算法：
- *   1. 算 total_commission = fare * commission_pct / 100
+ *   1. 算 total_discount = discount_amount（固定元）
  *   2. 對司機所屬每個 partner（PRIMARY_FLEET / BRAND / RECRUITED_BY）找最新 active rule
- *   3. 依 rule 算金額：FIXED_PER_ORDER → 固定值；PERCENTAGE → fare * pct / 100
+ *   3. 依 rule 算金額：FIXED_PER_ORDER → 固定值；PERCENTAGE → totalDiscount * pct / 100
  *   4. PLATFORM 拿剩餘（total_commission - Σ partner amounts）
  *   5. 若 PLATFORM 算出負數（partner 拿超過抽成）→ log error 但仍寫入（業主應檢查 rule）
  */
@@ -22,7 +22,7 @@ interface SnapshotInput {
   driverId: string;
   source: string;          // APP / LINE / PHONE
   fare: number;
-  commissionPct: number;   // 0-100
+  discountAmount: number;   // 0-40 元
   dispatchType: 'QUEUE' | 'REGULAR';
   zoneId?: string | null;
   completedAt: Date;
@@ -66,12 +66,12 @@ export class BillingService {
         driver_id: string;
         source: string;
         meter_amount: number | null;
-        commission_pct: number | null;
+        discount_amount: number | null;
         dispatch_type: string | null;
         dispatched_from_zone: string | null;
         completed_at: Date;
       }>(
-        `SELECT order_id, driver_id, source, meter_amount, commission_pct,
+        `SELECT order_id, driver_id, source, meter_amount, discount_amount,
                 dispatch_type, dispatched_from_zone, completed_at
          FROM orders WHERE order_id = $1`,
         [orderId]
@@ -87,9 +87,10 @@ export class BillingService {
       }
 
       const fare = Math.max(0, Math.round(Number(o.meter_amount) || 0));
-      const commissionPct = Math.max(0, Math.min(100, Number(o.commission_pct) || 0));
-      const totalCommission = Math.round(fare * commissionPct / 100 * 100) / 100;
-      const driverNet = fare - totalCommission;
+      // discount_amount 是 NT$ 元固定金額（4 段制：0/10/20/30/40），不再是百分比
+      const discountAmount = Math.max(0, Math.min(40, Number(o.discount_amount) || 0));
+      const totalDiscount = discountAmount;
+      const driverNet = fare - totalDiscount;
       const dispatchType = (o.dispatch_type === 'QUEUE' ? 'QUEUE' : 'REGULAR') as 'QUEUE' | 'REGULAR';
 
       // 在 transaction 內：寫 snapshot + 拆 distribution
@@ -99,7 +100,7 @@ export class BillingService {
 
         const snapshotRes = await client.query<{ snapshot_id: number }>(
           `INSERT INTO billing_snapshots
-            (order_id, driver_id, source, fare, commission_pct, total_commission_amount,
+            (order_id, driver_id, source, fare, discount_amount, total_discount_amount,
              driver_net, dispatch_type, zone_id, completed_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING snapshot_id`,
@@ -108,8 +109,8 @@ export class BillingService {
             o.driver_id,
             o.source || 'APP',
             fare,
-            commissionPct,
-            totalCommission,
+            discountAmount,
+            totalDiscount,
             driverNet,
             dispatchType,
             o.dispatched_from_zone,
@@ -119,7 +120,7 @@ export class BillingService {
         const snapshotId = snapshotRes.rows[0].snapshot_id;
 
         // 拆分：抓司機的 partner 綁定 + 各自的 active rule
-        const distributionAmounts = await this.computeDistribution(client, o.driver_id, fare, totalCommission);
+        const distributionAmounts = await this.computeDistribution(client, o.driver_id, fare, totalDiscount);
 
         // 寫每筆 distribution
         let partnerSum = 0;
@@ -134,7 +135,7 @@ export class BillingService {
         }
 
         // PLATFORM 拿剩餘
-        const platformAmount = Math.round((totalCommission - partnerSum) * 100) / 100;
+        const platformAmount = Math.round((totalDiscount - partnerSum) * 100) / 100;
         await client.query(
           `INSERT INTO billing_distributions
             (snapshot_id, partner_id, partner_role, amount, rule_id_used)
@@ -147,7 +148,7 @@ export class BillingService {
         }
 
         await client.query('COMMIT');
-        console.log(`[Billing] ✓ snapshot ${snapshotId} for order ${orderId}: fare=${fare}, commission=${totalCommission}, partners=${distributionAmounts.length}, platform=${platformAmount}`);
+        console.log(`[Billing] ✓ snapshot ${snapshotId} for order ${orderId}: fare=${fare}, discount=${totalDiscount}, partners=${distributionAmounts.length}, platform=${platformAmount}`);
         return snapshotId;
       } catch (e) {
         await client.query('ROLLBACK');
@@ -169,7 +170,7 @@ export class BillingService {
     client: any,
     driverId: string,
     fare: number,
-    totalCommission: number,
+    totalDiscount: number,
   ): Promise<Array<{ partner_id: string; partner_role: 'FLEET' | 'BRAND' | 'RECRUITER'; amount: number; rule_id_used: number | null }>> {
     // 抓司機的 partner 綁定
     const bindings = await client.query(
@@ -202,7 +203,8 @@ export class BillingService {
       if (rule.rule_type === 'FIXED_PER_ORDER') {
         amount = Number(rule.amount);
       } else if (rule.rule_type === 'PERCENTAGE') {
-        amount = Math.round(fare * Number(rule.amount) / 100 * 100) / 100;
+        // PERCENTAGE 改成「對 discount 額抽 %」，例如 partner 設 20% → 拿 totalDiscount * 0.2
+        amount = Math.round(totalDiscount * Number(rule.amount) / 100 * 100) / 100;
       }
 
       // partner_role 來自 partner type（不是 relationship_type，因為一個招募人可能其實是個品牌）

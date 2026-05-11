@@ -2,13 +2,13 @@
  * QueueOrderingService — 取得某 zone 內可派的排班司機，依規則排序
  *
  * 排序規則（業主 spec）：
- *   1. 回饋金接受度（max_acceptable_commission_pct DESC）— 願意被抽多的優先
+ *   1. 折扣接受度（max_acceptable_discount_amount DESC）— 願意給客人折扣多的優先
  *   2. FIFO（joined_at ASC）— 先進先出
  *   3. 距離（pickup 到司機目前位置 ASC）— 最後 tiebreaker
  *
  * 匹配條件：
  *   - status = 'ACTIVE'
- *   - max_acceptable_commission_pct >= order.commission_pct
+ *   - max_acceptable_discount_amount >= order.discount_amount
  *     （訂單抽成 ≤ 司機能接受的最大抽成）
  *   - 司機目前在線（driverSockets 有 socket 連線）
  *
@@ -23,7 +23,7 @@ export interface QueueDriverCandidate {
   driver_id: string;
   entry_id: number;
   joined_at: Date;
-  max_acceptable_commission_pct: number;
+  max_acceptable_discount_amount: number;
   current_lat: number | null;
   current_lng: number | null;
   distance_meters_to_pickup: number | null;
@@ -35,25 +35,25 @@ export class QueueOrderingService {
    * 取得某 zone 內合資格的排班司機（排序好的）
    *
    * @param zoneId
-   * @param orderCommissionPct 訂單抽成 % (司機 max_acceptable >= 此值才符合)
+   * @param orderDiscountAmount 訂單抽成 % (司機 max_acceptable >= 此值才符合)
    * @param pickupLat / pickupLng 訂單上車點，給距離排序用
    */
   async getQueueDriversForOrder(
     zoneId: string,
-    orderCommissionPct: number,
+    orderDiscountAmount: number,
     pickupLat: number,
     pickupLng: number,
   ): Promise<QueueDriverCandidate[]> {
     const result = await pool.query(
-      `SELECT qe.entry_id, qe.driver_id, qe.joined_at, qe.max_acceptable_commission_pct,
+      `SELECT qe.entry_id, qe.driver_id, qe.joined_at, qe.max_acceptable_discount_amount,
               d.current_lat, d.current_lng, d.availability
        FROM queue_entries qe
        JOIN drivers d ON d.driver_id = qe.driver_id
        WHERE qe.zone_id = $1
          AND qe.status = 'ACTIVE'
-         AND qe.max_acceptable_commission_pct >= $2
+         AND qe.max_acceptable_discount_amount >= $2
          AND d.availability = 'AVAILABLE'`,
-      [zoneId, orderCommissionPct]
+      [zoneId, orderDiscountAmount]
     );
 
     if (result.rows.length === 0) return [];
@@ -78,7 +78,7 @@ export class QueueOrderingService {
         driver_id: row.driver_id,
         entry_id: row.entry_id,
         joined_at: row.joined_at,
-        max_acceptable_commission_pct: row.max_acceptable_commission_pct,
+        max_acceptable_discount_amount: row.max_acceptable_discount_amount,
         current_lat: lat,
         current_lng: lng,
         distance_meters_to_pickup: distance,
@@ -88,9 +88,9 @@ export class QueueOrderingService {
 
     // 排序：回饋金 DESC > FIFO ASC > 距離 ASC
     candidates.sort((a, b) => {
-      // 1. max_acceptable_commission_pct DESC
-      if (b.max_acceptable_commission_pct !== a.max_acceptable_commission_pct) {
-        return b.max_acceptable_commission_pct - a.max_acceptable_commission_pct;
+      // 1. max_acceptable_discount_amount DESC
+      if (b.max_acceptable_discount_amount !== a.max_acceptable_discount_amount) {
+        return b.max_acceptable_discount_amount - a.max_acceptable_discount_amount;
       }
       // 2. joined_at ASC
       const tA = new Date(a.joined_at).getTime();

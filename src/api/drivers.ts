@@ -102,7 +102,7 @@ router.get('/:driverId', async (req: Request, res: Response) => {
       totalEarnings: driver.total_earnings,
       acceptanceRate: parseFloat(driver.acceptance_rate),
       shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
-      maxAcceptableCommissionPct: driver.max_acceptable_commission_pct ?? 100,
+      maxAcceptableDiscountAmount: driver.max_acceptable_discount_amount ?? 0,
     });
   } catch (error) {
     console.error('[Get Driver] 錯誤:', error);
@@ -111,30 +111,30 @@ router.get('/:driverId', async (req: Request, res: Response) => {
 });
 
 /**
- * 更新司機抽成接受度（GoGoCha Queue 媒合用）
- * PATCH /api/drivers/:driverId/commission
- * body: { maxAcceptableCommissionPct: 0-100 }
+ * 更新司機折扣接受度（GoGoCha Queue 媒合用）
+ * PATCH /api/drivers/:driverId/discount
+ * body: { maxAcceptableDiscountAmount: 0-40 }
  *
  * 影響：
- *   - 該司機加入 Queue 排班時，訂單 commission_pct ≤ 此值才會被派
- *   - 排序時也用此值（高的優先）
+ *   - 該司機加入 Queue 排班時，訂單 discount_amount ≤ 此值才會被派（司機願意接受的最高折扣）
+ *   - 排序時也用此值（高的（願意讓利多的）優先）
  */
-router.patch('/:driverId/commission', async (req: Request, res: Response) => {
+router.patch('/:driverId/discount', async (req: Request, res: Response) => {
   const { driverId } = req.params;
-  const { maxAcceptableCommissionPct } = req.body || {};
+  const { maxAcceptableDiscountAmount } = req.body || {};
 
-  if (typeof maxAcceptableCommissionPct !== 'number' ||
-      maxAcceptableCommissionPct < 0 || maxAcceptableCommissionPct > 100) {
-    return res.status(400).json({ error: 'maxAcceptableCommissionPct 必須是 0-100 數字' });
+  if (typeof maxAcceptableDiscountAmount !== 'number' ||
+      maxAcceptableDiscountAmount < 0 || maxAcceptableDiscountAmount > 40) {
+    return res.status(400).json({ error: 'maxAcceptableDiscountAmount 必須是 0-40 數字（NT$ 元）' });
   }
 
   try {
     const result = await query(
       `UPDATE drivers
-       SET max_acceptable_commission_pct = $1
+       SET max_acceptable_discount_amount = $1
        WHERE driver_id = $2
-       RETURNING driver_id, max_acceptable_commission_pct`,
-      [Math.round(maxAcceptableCommissionPct), driverId]
+       RETURNING driver_id, max_acceptable_discount_amount`,
+      [Math.round(maxAcceptableDiscountAmount), driverId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: '司機不存在' });
@@ -143,15 +143,15 @@ router.patch('/:driverId/commission', async (req: Request, res: Response) => {
     // 同步更新該司機目前 ACTIVE 排班 entry 的 max_acceptable（影響後續派單匹配）
     await query(
       `UPDATE queue_entries
-       SET max_acceptable_commission_pct = $1
+       SET max_acceptable_discount_amount = $1
        WHERE driver_id = $2 AND status = 'ACTIVE'`,
-      [Math.round(maxAcceptableCommissionPct), driverId]
+      [Math.round(maxAcceptableDiscountAmount), driverId]
     );
 
     res.json({
       success: true,
       driver_id: result.rows[0].driver_id,
-      max_acceptable_commission_pct: result.rows[0].max_acceptable_commission_pct,
+      max_acceptable_discount_amount: result.rows[0].max_acceptable_discount_amount,
     });
   } catch (error: any) {
     console.error('[Driver Commission] 錯誤:', error);

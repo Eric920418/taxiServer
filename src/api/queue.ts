@@ -58,7 +58,7 @@ router.get('/my-status', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `SELECT qe.entry_id, qe.zone_id, qe.joined_at, qe.max_acceptable_commission_pct,
+      `SELECT qe.entry_id, qe.zone_id, qe.joined_at, qe.max_acceptable_discount_amount,
               z.name AS zone_name
        FROM queue_entries qe
        JOIN queue_zones z ON z.zone_id = qe.zone_id
@@ -77,7 +77,7 @@ router.get('/my-status', async (req: Request, res: Response) => {
       zone_name: row.zone_name,
       joined_at: row.joined_at,
       minutes_in_queue: minutesInQueue,
-      max_acceptable_commission_pct: row.max_acceptable_commission_pct,
+      max_acceptable_discount_amount: row.max_acceptable_discount_amount,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -85,9 +85,9 @@ router.get('/my-status', async (req: Request, res: Response) => {
 });
 
 // POST /api/queue/join
-// body: { driver_id, zone_id, current_lat, current_lng, max_acceptable_commission_pct? }
+// body: { driver_id, zone_id, current_lat, current_lng, max_acceptable_discount_amount? }
 router.post('/join', async (req: Request, res: Response) => {
-  const { driver_id, zone_id, current_lat, current_lng, max_acceptable_commission_pct } = req.body || {};
+  const { driver_id, zone_id, current_lat, current_lng, max_acceptable_discount_amount } = req.body || {};
 
   if (!driver_id || !zone_id) {
     return res.status(400).json({ error: '缺少 driver_id 或 zone_id' });
@@ -148,10 +148,10 @@ router.post('/join', async (req: Request, res: Response) => {
 
     // 5. 寫入 queue_entry
     const insertRes = await pool.query(
-      `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_commission_pct)
+      `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount)
        VALUES ($1, $2, $3)
        RETURNING entry_id, joined_at`,
-      [driver_id, zone_id, max_acceptable_commission_pct ?? 100]
+      [driver_id, zone_id, max_acceptable_discount_amount ?? 100]
     );
 
     res.status(201).json({

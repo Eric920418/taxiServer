@@ -23,6 +23,7 @@ const MIGRATIONS = {
   'queue-billing': '019-queue-and-billing.sql',                  // Queue 排班 + 跨車隊媒合 + 對帳基礎
   'commission-defaults': '020-commission-defaults.sql',           // 訂單 commission 系統+partner 預設
   'fix-missing-cols': '021-fix-missing-columns.sql',              // 補 fcm_token / phone_or_line_id 等遺漏欄位
+  'discount-rename': '022-discount-rename.sql',                // commission_pct (%) → discount_amount (元) 全域翻轉
 };
 
 /**

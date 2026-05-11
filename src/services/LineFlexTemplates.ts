@@ -1569,3 +1569,106 @@ export function askScheduleTimeMessage(): Message {
     },
   };
 }
+
+/**
+ * 30 秒沒車 fallback prompt — 客人 3 選 1
+ *  - 加碼折扣（提升 discount_amount）
+ *  - 改派排班司機（清 preferred_fleet）
+ *  - 取消叫車
+ */
+export function fallbackPromptCarousel(orderId: string, currentDiscount: number, fleetName: string): FlexMessage {
+  const nextDiscount = Math.min(40, currentDiscount + 10);
+  const canRaiseDiscount = currentDiscount < 40;
+  return {
+    type: 'flex',
+    altText: `${fleetName} 暫無司機，請選擇下一步`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#FFA000',
+        paddingAll: '16px',
+        contents: [
+          { type: 'text', text: `🔍 ${fleetName} 暫無司機`, color: '#FFFFFF', weight: 'bold', size: 'lg' },
+          { type: 'text', text: '請選擇下一步', color: '#FFFFFF', size: 'sm', margin: 'sm' },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        paddingAll: '16px',
+        contents: [
+          {
+            type: 'text',
+            text: `${fleetName} 司機目前忙線中。您可以：`,
+            wrap: true,
+            size: 'sm',
+            color: '#333333',
+          },
+          {
+            type: 'box',
+            layout: 'vertical',
+            margin: 'md',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  { type: 'text', text: '目前折扣', size: 'sm', color: '#999999', flex: 4 },
+                  { type: 'text', text: `NT$ ${currentDiscount} 元`, size: 'sm', color: '#333333', weight: 'bold', flex: 4 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '12px',
+        contents: [
+          ...(canRaiseDiscount ? [{
+            type: 'button' as const,
+            style: 'primary' as const,
+            color: '#FF6B35',
+            height: 'sm' as const,
+            action: {
+              type: 'postback' as const,
+              label: `💸 加碼到 NT$ ${nextDiscount} 元`,
+              data: `action=FALLBACK_RAISE&orderId=${orderId}&to=${nextDiscount}`,
+              displayText: `加碼到 ${nextDiscount} 元`,
+            },
+          }] : []),
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#1976D2',
+            height: 'sm',
+            action: {
+              type: 'postback',
+              label: '🚖 改派排班司機',
+              data: `action=FALLBACK_ALLOW_DISPATCH&orderId=${orderId}`,
+              displayText: '改派排班司機',
+            },
+          },
+          {
+            type: 'button',
+            style: 'secondary',
+            height: 'sm',
+            action: {
+              type: 'postback',
+              label: '❌ 取消叫車',
+              data: `action=FALLBACK_CANCEL&orderId=${orderId}`,
+              displayText: '取消叫車',
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+

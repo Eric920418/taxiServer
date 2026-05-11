@@ -61,7 +61,7 @@ router.get('/partner-monthly', async (req: AuthedRequest, res: Response) => {
     const detailRes = await pool.query(
       `SELECT
          bs.snapshot_id, bs.order_id, bs.driver_id, bs.source, bs.fare,
-         bs.commission_pct, bs.dispatch_type, bs.zone_id, bs.completed_at,
+         bs.discount_amount, bs.dispatch_type, bs.zone_id, bs.completed_at,
          d.name AS driver_name,
          bd.amount AS partner_share,
          bd.rule_id_used
@@ -141,7 +141,7 @@ router.get('/driver-monthly', async (req: AuthedRequest, res: Response) => {
     const snapshotRes = await pool.query(
       `SELECT
          bs.snapshot_id, bs.order_id, bs.source, bs.fare,
-         bs.commission_pct, bs.total_commission_amount, bs.driver_net,
+         bs.discount_amount, bs.total_discount_amount, bs.driver_net,
          bs.dispatch_type, bs.zone_id, bs.completed_at,
          qz.name AS zone_name
        FROM billing_snapshots bs
@@ -160,7 +160,7 @@ router.get('/driver-monthly', async (req: AuthedRequest, res: Response) => {
 
     for (const r of snapshotRes.rows) {
       totalFare += Number(r.fare);
-      totalCommission += Number(r.total_commission_amount);
+      totalCommission += Number(r.total_discount_amount);
       totalDriverNet += Number(r.driver_net);
       if (r.dispatch_type === 'QUEUE') queueOrders++;
     }
@@ -211,7 +211,7 @@ router.get('/platform-monthly', async (req: AuthedRequest, res: Response) => {
       `SELECT
          COUNT(*)::int AS total_orders,
          COALESCE(SUM(fare), 0)::int AS total_fare,
-         COALESCE(SUM(total_commission_amount), 0)::numeric(12,2) AS total_commission,
+         COALESCE(SUM(total_discount_amount), 0)::numeric(12,2) AS total_commission,
          COALESCE(SUM(driver_net), 0)::numeric(12,2) AS total_driver_net,
          COUNT(*) FILTER (WHERE dispatch_type = 'QUEUE')::int AS queue_orders,
          COUNT(*) FILTER (WHERE dispatch_type = 'REGULAR')::int AS regular_orders

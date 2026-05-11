@@ -32,6 +32,8 @@ interface PartnerInput {
   contact_phone?: string | null;
   contact_name?: string | null;
   is_active?: boolean;
+  notes?: string | null;
+  default_order_discount_amount?: number | null;
 }
 
 function validate(input: PartnerInput, isCreate: boolean): string | null {
@@ -47,6 +49,10 @@ function validate(input: PartnerInput, isCreate: boolean): string | null {
     return 'partner_id 只能含英數、底線、連字號，最多 50 字元';
   }
   if (input.name !== undefined && input.name.length > 100) return '名稱超過 100 字元';
+  if (input.default_order_discount_amount !== undefined && input.default_order_discount_amount !== null) {
+    const n = Number(input.default_order_discount_amount);
+    if (isNaN(n) || n < 0 || n > 40) return 'default_order_discount_amount 必須為 0-40 元';
+  }
   return null;
 }
 
@@ -69,7 +75,7 @@ router.get('/', async (req: AuthedRequest, res: Response) => {
 
     const result = await pool.query(
       `SELECT partner_id, name, type, parent_partner_id, contact_phone, contact_name,
-              is_active, created_at, updated_at
+              is_active, notes, default_order_discount_amount, created_at, updated_at
        FROM partners
        ${where}
        ORDER BY type, name`,
@@ -115,8 +121,8 @@ router.post(
       }
 
       await pool.query(
-        `INSERT INTO partners (partner_id, name, type, parent_partner_id, contact_phone, contact_name, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO partners (partner_id, name, type, parent_partner_id, contact_phone, contact_name, is_active, notes, default_order_discount_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           input.partner_id,
           input.name,
@@ -125,6 +131,8 @@ router.post(
           input.contact_phone || null,
           input.contact_name || null,
           input.is_active !== false,
+          input.notes ?? null,
+          input.default_order_discount_amount ?? 0,
         ]
       );
       res.status(201).json({ success: true, message: 'Partner 已建立' });
@@ -154,6 +162,8 @@ router.put(
         contact_phone: input.contact_phone,
         contact_name: input.contact_name,
         is_active: input.is_active,
+        notes: input.notes,
+        default_order_discount_amount: input.default_order_discount_amount,
       };
       for (const [col, val] of Object.entries(fieldMap)) {
         if (val !== undefined) {

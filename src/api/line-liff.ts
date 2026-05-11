@@ -20,6 +20,7 @@ const router = Router();
 interface LiffRequest extends Request {
   lineUserId?: string;
   lineDisplayName?: string;
+  lineChannelId?: string;
 }
 
 async function verifyLiffToken(req: LiffRequest, res: Response, next: NextFunction): Promise<void> {
@@ -54,6 +55,18 @@ async function verifyLiffToken(req: LiffRequest, res: Response, next: NextFuncti
 
     req.lineUserId = profile.userId;
     req.lineDisplayName = profile.displayName || 'LINE 用戶';
+
+    // 取得 access token 所屬的 LINE channel_id (用於 partner mapping)
+    // GET /v2/oauth/verify 回傳 { client_id: "channel_id", expires_in, scope }
+    try {
+      const verifyRes = await fetch(`https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(accessToken)}`);
+      if (verifyRes.ok) {
+        const verifyData = await verifyRes.json() as { client_id?: string };
+        if (verifyData.client_id) req.lineChannelId = verifyData.client_id;
+      }
+    } catch (e) {
+      // verify 失敗不擋登入，僅 preferred_fleet mapping 不會生效
+    }
     next();
   } catch (error: any) {
     console.error('[LIFF Auth] Token 驗證失敗:', error.message);
@@ -155,7 +168,7 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     mode, scheduledAt,
     paymentType: rawPaymentType,
     subsidyType: rawSubsidyType,
-    commissionPct: rawCommissionPct,
+    discountAmount: rawDiscountAmount,
     notes: rawNotes,
   } = req.body;
 
@@ -171,12 +184,35 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     ? rawNotes.trim().substring(0, MAX_NOTES_LENGTH)
     : null;
 
-  // 派單優先度（commissionPct）— LIFF 客人可主動加價，0/5/10/20%
-  // 範圍限制 0-100，未傳或非法則用 DB DEFAULT (5)
-  let commissionPctValue: number | null = null;
-  if (rawCommissionPct !== undefined && rawCommissionPct !== null) {
-    const n = parseInt(String(rawCommissionPct), 10);
-    if (!isNaN(n) && n >= 0 && n <= 100) commissionPctValue = n;
+  // 派單優先度（discountAmount）— LIFF 客人選的折扣 NT$ 元，0/10/20/30/40 5 段制
+  // 範圍 0-40 元，未傳或非法則用 DB DEFAULT (0)
+  let discountAmountValue: number | null = null;
+  if (rawDiscountAmount !== undefined && rawDiscountAmount !== null) {
+    const n = parseInt(String(rawDiscountAmount), 10);
+    if (!isNaN(n) && n >= 0 && n <= 40) discountAmountValue = n;
+  }
+
+  // 從 LIFF channelId → preferred_fleet_partner_id mapping（LINE 官方綁特定車隊）
+  // 例如：GoGoCha 花蓮-大豐 channel → partner_dafeng
+  let preferredFleetPartnerId: string | null = null;
+  try {
+    const mapJson = process.env.LINE_CHANNEL_TO_PARTNER_MAP || '{}';
+    const map: Record<string, string> = JSON.parse(mapJson);
+    if (req.lineChannelId && map[req.lineChannelId]) {
+      preferredFleetPartnerId = map[req.lineChannelId];
+      // 若有 preferred fleet + 客人沒主動指定折扣 → 用 partner 預設值
+      if (discountAmountValue === null) {
+        const partnerRes = await pool.query<{ default_order_discount_amount: number | null }>(
+          'SELECT default_order_discount_amount FROM partners WHERE partner_id = $1 AND is_active = true',
+          [preferredFleetPartnerId]
+        );
+        if (partnerRes.rows[0]?.default_order_discount_amount != null) {
+          discountAmountValue = Number(partnerRes.rows[0].default_order_discount_amount);
+        }
+      }
+    }
+  } catch (e: any) {
+    console.error('[LIFF] LINE_CHANNEL_TO_PARTNER_MAP 解析失敗:', e.message);
   }
 
   // 段數正規化：1段→一段
@@ -240,13 +276,24 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
       userId, isScheduled ? scheduledAt : null,
     ]);
 
-    // 客人指定 commissionPct → 覆蓋 DB DEFAULT
-    if (commissionPctValue !== null) {
+    // 客人指定 discountAmount 或 partner 預設 → 寫入 orders.discount_amount + preferred_fleet
+    if (discountAmountValue !== null || preferredFleetPartnerId !== null) {
+      const sets: string[] = [];
+      const params: any[] = [];
+      if (discountAmountValue !== null) {
+        params.push(discountAmountValue);
+        sets.push(`discount_amount = $${params.length}`);
+      }
+      if (preferredFleetPartnerId !== null) {
+        params.push(preferredFleetPartnerId);
+        sets.push(`preferred_fleet_partner_id = $${params.length}`);
+      }
+      params.push(orderId);
       await pool.query(
-        'UPDATE orders SET commission_pct = $1 WHERE order_id = $2',
-        [commissionPctValue, orderId]
+        `UPDATE orders SET ${sets.join(', ')} WHERE order_id = $${params.length}`,
+        params
       );
-      console.log(`[LIFF] 訂單 ${orderId} 客人指定 commission_pct = ${commissionPctValue}%`);
+      console.log(`[LIFF] 訂單 ${orderId} discount_amount=${discountAmountValue ?? '(default)'}, preferred_fleet=${preferredFleetPartnerId ?? 'none'}`);
     }
 
     // 更新 LINE 使用者統計
@@ -275,6 +322,8 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
         paymentType: 'CASH',
         createdAt: Date.now(),
         source: 'LINE',
+        discountAmount: discountAmountValue ?? 0,
+        preferredFleetPartnerId: preferredFleetPartnerId,
       };
       await dispatcher.startDispatch(orderData);
       console.log(`[LIFF] 訂單 ${orderId} 已派單`);

@@ -57,6 +57,9 @@ export interface OrderData {
   petPresent?: string;       // YES/NO/UNKNOWN
   petCarrier?: string;       // YES/NO/UNKNOWN
   customerPhone?: string;    // 來電號碼
+  // GoGoCha 媒合擴展
+  discountAmount?: number;             // 客人答應給的折扣 NT$ 元 (0/10/20/30/40)
+  preferredFleetPartnerId?: string | null;  // 優先派此 fleet 的司機（LINE 官方/電話來源）
 }
 
 export interface DriverScore {
@@ -359,10 +362,10 @@ export class SmartDispatcherV2 {
     try {
       const zone = await queueZoneResolver.resolveZone(order.pickup.lat, order.pickup.lng);
       if (zone) {
-        const orderCommissionPct = (order as any).commissionPct ?? 0;
+        const orderDiscountAmount = order.discountAmount ?? 0;
         const candidates = await queueOrderingService.getQueueDriversForOrder(
           zone.zone_id,
-          orderCommissionPct,
+          orderDiscountAmount,
           order.pickup.lat,
           order.pickup.lng,
         );
@@ -1231,6 +1234,20 @@ export class SmartDispatcherV2 {
       capabilityFilter += ' AND d.can_pet = TRUE';
     }
 
+    // [Layer 0.5] Preferred Fleet 過濾：訂單綁定特定車隊（LINE 官方/電話來源）
+    //   只派此 fleet 的 PRIMARY_FLEET 司機；30 秒 timeout 後客人可選擇解除
+    const preferredFleetPartnerId = order?.preferredFleetPartnerId || null;
+    if (preferredFleetPartnerId) {
+      capabilityFilter += ` AND EXISTS (
+        SELECT 1 FROM driver_partners dp
+        WHERE dp.driver_id = d.driver_id
+          AND dp.partner_id = $2
+          AND dp.relationship_type = 'PRIMARY_FLEET'
+          AND dp.is_active = true
+      )`;
+      console.log(`[SmartDispatcherV2] 訂單 ${order?.orderId || 'unknown'} 限定 preferred fleet = ${preferredFleetPartnerId}`);
+    }
+
     // 從資料庫獲取司機詳細資訊（含 shifts 用於排班過濾）
     // 1+1 疊單：除了 AVAILABLE/REST，也納入 ON_TRIP 司機 — 之後用「離當前訂單目的地直線距離 ≤ 2km」過濾
     const result = await this.pool.query(`
@@ -1261,7 +1278,7 @@ export class SmartDispatcherV2 {
       WHERE d.driver_id = ANY($1)
         AND d.availability IN ('AVAILABLE', 'REST', 'ON_TRIP')
         ${capabilityFilter}
-    `, [onlineDriverIds]);
+    `, preferredFleetPartnerId ? [onlineDriverIds, preferredFleetPartnerId] : [onlineDriverIds]);
 
     // 1+1 疊單過濾：ON_TRIP 司機只有「離當前 dest 直線距離 ≤ 2km」才算候選（避免太早派疊單）
     // 假設 30 km/h 平均車速 → 2km 直線 ≈ 4 分鐘車程，跟設計「< 5 分鐘」一致
