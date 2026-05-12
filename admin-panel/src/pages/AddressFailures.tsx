@@ -110,10 +110,21 @@ const AddressFailures: React.FC = () => {
   };
 
   const handleCreateSubmit = async () => {
+    // 座標走 useState (formLat/formLng) 而非 Form store
+    if (formLat == null || formLng == null || isNaN(formLat) || isNaN(formLng)) {
+      message.error('請先在下方地圖點擊或搜尋地點以自動填入座標');
+      return;
+    }
+    if (formLat < 23.0 || formLat > 24.6 || formLng < 121.0 || formLng > 122.0) {
+      message.error('座標須在花蓮縣範圍內（lat 23.0–24.6, lng 121.0–122.0）');
+      return;
+    }
     try {
       const values = await form.validateFields();
       const res = await landmarkAPI.create({
         ...values,
+        lat: formLat,
+        lng: formLng,
         aliases: values.aliases || [],
         taigi_aliases: values.taigi_aliases || [],
       });
@@ -369,18 +380,6 @@ const AddressFailures: React.FC = () => {
           </Row>
 
           {/* 經緯度隱藏 — 從地圖自動填，客服不用碰 */}
-          <Form.Item name="lat" hidden rules={[
-            { required: true, message: '請從地圖選地點' },
-            { type: 'number', min: 23.0, max: 24.6, message: '座標須在花蓮縣範圍內' },
-          ]}>
-            <InputNumber />
-          </Form.Item>
-          <Form.Item name="lng" hidden rules={[
-            { required: true, message: '請從地圖選地點' },
-            { type: 'number', min: 121.0, max: 122.0, message: '座標須在花蓮縣範圍內' },
-          ]}>
-            <InputNumber />
-          </Form.Item>
 
           <Alert
             type="info"
@@ -393,7 +392,6 @@ const AddressFailures: React.FC = () => {
             lat={formLat}
             lng={formLng}
             onChange={(d: GoogleMapsPickerChange) => {
-              form.setFieldsValue({ lat: d.lat, lng: d.lng });
               setFormLat(d.lat);
               setFormLng(d.lng);
 

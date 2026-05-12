@@ -80,7 +80,6 @@ const QueueZones: React.FC = () => {
   const handleMapChange = (change: GoogleMapsPickerChange) => {
     setFormLat(change.lat);
     setFormLng(change.lng);
-    form.setFieldsValue({ center_lat: change.lat, center_lng: change.lng });
     // 名稱建議：搜地點時 Google 給的 name 可作 zone 名
     if (change.name && !form.getFieldValue('name')) {
       form.setFieldsValue({ name: change.name });
@@ -88,13 +87,20 @@ const QueueZones: React.FC = () => {
   };
 
   const handleSubmit = async () => {
+    // 經緯度走 useState (formLat/formLng) 而非 Form store
+    // antd hidden InputNumber + setFieldsValue 同步有 bug
+    if (formLat == null || formLng == null || isNaN(formLat) || isNaN(formLng)) {
+      message.error('請先在下方地圖點擊或搜尋地點以自動填入座標');
+      return;
+    }
     try {
       const values = await form.validateFields();
+      const payload = { ...values, center_lat: formLat, center_lng: formLng };
       if (editing) {
-        await queueZoneAPI.update(editing.zone_id, values);
+        await queueZoneAPI.update(editing.zone_id, payload);
         message.success('已更新');
       } else {
-        await queueZoneAPI.create(values);
+        await queueZoneAPI.create(payload);
         message.success('已建立');
       }
       setModalOpen(false);
@@ -222,12 +228,7 @@ const QueueZones: React.FC = () => {
             />
           </Form.Item>
 
-          <Form.Item name="center_lat" hidden rules={[{ required: true, message: '請從地圖選位置' }]}>
-            <InputNumber />
-          </Form.Item>
-          <Form.Item name="center_lng" hidden rules={[{ required: true, message: '請從地圖選位置' }]}>
-            <InputNumber />
-          </Form.Item>
+
 
           <Form.Item label="啟用" name="is_active" valuePropName="checked">
             <Switch />
