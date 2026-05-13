@@ -80,6 +80,18 @@ router.post('/phone-verify-driver', async (req: Request, res: Response) => {
     // 登入成功
     console.log('[Phone Auth] 司機登入成功:', driver.name);
 
+    // 查 PRIMARY_FLEET 綁定 (車隊司機折扣鎖定)
+    const fleetRes = await query(
+      `SELECT p.partner_id, p.name AS partner_name, p.default_order_discount_amount
+       FROM driver_partners dp
+       JOIN partners p ON p.partner_id = dp.partner_id
+       WHERE dp.driver_id = $1 AND dp.relationship_type = 'PRIMARY_FLEET'
+         AND dp.is_active = true AND p.is_active = true
+       LIMIT 1`,
+      [driver.driver_id]
+    );
+    const fleet = fleetRes.rows[0] || null;
+
     res.json({
       success: true,
       token: `token_${driver.driver_id}_${Date.now()}`, // 簡易 token（實際應用 JWT）
@@ -91,7 +103,13 @@ router.post('/phone-verify-driver', async (req: Request, res: Response) => {
       rating: parseFloat(driver.rating),
       totalTrips: driver.total_trips,
       shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
-      maxAcceptableDiscountAmount: driver.max_acceptable_discount_amount ?? 100,
+      // 車隊司機 effective = partner default；外部司機 effective = 自己選的
+      maxAcceptableDiscountAmount: fleet
+        ? Number(fleet.default_order_discount_amount ?? 0)
+        : (driver.max_acceptable_discount_amount ?? 0),
+      fleetPartnerId: fleet ? fleet.partner_id : null,
+      fleetPartnerName: fleet ? fleet.partner_name : null,
+      fleetDefaultDiscountAmount: fleet ? Number(fleet.default_order_discount_amount ?? 0) : null,
     });
   } catch (error) {
     console.error('[Phone Auth] 司機端錯誤:', error);

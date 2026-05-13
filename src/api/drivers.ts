@@ -79,7 +79,15 @@ router.get('/:driverId', async (req: Request, res: Response) => {
 
   try {
     const driver = await queryOne(
-      'SELECT * FROM drivers WHERE driver_id = $1',
+      `SELECT d.*,
+              p.partner_id AS fleet_partner_id,
+              p.name AS fleet_partner_name,
+              p.default_order_discount_amount AS fleet_default_discount_amount
+       FROM drivers d
+       LEFT JOIN driver_partners dp ON dp.driver_id = d.driver_id
+         AND dp.relationship_type = 'PRIMARY_FLEET' AND dp.is_active = true
+       LEFT JOIN partners p ON p.partner_id = dp.partner_id AND p.is_active = true
+       WHERE d.driver_id = $1`,
       [driverId]
     );
 
@@ -102,7 +110,14 @@ router.get('/:driverId', async (req: Request, res: Response) => {
       totalEarnings: driver.total_earnings,
       acceptanceRate: parseFloat(driver.acceptance_rate),
       shifts: Array.isArray(driver.shifts) ? driver.shifts : [],
-      maxAcceptableDiscountAmount: driver.max_acceptable_discount_amount ?? 0,
+      maxAcceptableDiscountAmount: driver.fleet_default_discount_amount != null
+        ? Number(driver.fleet_default_discount_amount)
+        : (driver.max_acceptable_discount_amount ?? 0),
+      fleetPartnerId: driver.fleet_partner_id ?? null,
+      fleetPartnerName: driver.fleet_partner_name ?? null,
+      fleetDefaultDiscountAmount: driver.fleet_default_discount_amount != null
+        ? Number(driver.fleet_default_discount_amount)
+        : null,
     });
   } catch (error) {
     console.error('[Get Driver] 錯誤:', error);
@@ -129,6 +144,27 @@ router.patch('/:driverId/discount', async (req: Request, res: Response) => {
   }
 
   try {
+    // 車隊司機折扣由車隊統一管理，不可自行調整
+    const fleetCheck = await query(
+      `SELECT p.partner_id, p.name AS partner_name, p.default_order_discount_amount
+       FROM driver_partners dp
+       JOIN partners p ON p.partner_id = dp.partner_id
+       WHERE dp.driver_id = $1 AND dp.relationship_type = 'PRIMARY_FLEET'
+         AND dp.is_active = true AND p.is_active = true
+       LIMIT 1`,
+      [driverId]
+    );
+    if (fleetCheck.rows.length > 0) {
+      const f = fleetCheck.rows[0];
+      return res.status(403).json({
+        error: 'FLEET_DRIVER_LOCKED',
+        message: `您屬於「${f.partner_name}」車隊，折扣統一為 NT$ ${f.default_order_discount_amount} 元（不可變）。如需調整請聯絡車隊。`,
+        fleet_partner_id: f.partner_id,
+        fleet_partner_name: f.partner_name,
+        locked_discount_amount: Number(f.default_order_discount_amount ?? 0),
+      });
+    }
+
     const result = await query(
       `UPDATE drivers
        SET max_acceptable_discount_amount = $1

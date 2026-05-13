@@ -146,12 +146,27 @@ router.post('/join', async (req: Request, res: Response) => {
       });
     }
 
-    // 5. 寫入 queue_entry
+    // 5. 車隊司機 (PRIMARY_FLEET 綁定) → 強制用 partner.default_order_discount_amount
+    //    外部司機 (無綁定) → 用 caller 傳的 max_acceptable_discount_amount，預設 0
+    const fleetRes = await pool.query(
+      `SELECT p.default_order_discount_amount
+       FROM driver_partners dp
+       JOIN partners p ON p.partner_id = dp.partner_id
+       WHERE dp.driver_id = $1 AND dp.relationship_type = 'PRIMARY_FLEET'
+         AND dp.is_active = true AND p.is_active = true
+       LIMIT 1`,
+      [driver_id]
+    );
+    const effectiveMaxDiscount = fleetRes.rows.length > 0
+      ? Number(fleetRes.rows[0].default_order_discount_amount ?? 0)
+      : (max_acceptable_discount_amount ?? 0);
+
+    // 6. 寫入 queue_entry
     const insertRes = await pool.query(
       `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount)
        VALUES ($1, $2, $3)
        RETURNING entry_id, joined_at`,
-      [driver_id, zone_id, max_acceptable_discount_amount ?? 100]
+      [driver_id, zone_id, effectiveMaxDiscount]
     );
 
     res.status(201).json({
