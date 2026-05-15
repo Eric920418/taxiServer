@@ -11,6 +11,7 @@ import {
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { partnerAPI, type Partner } from '../services/api';
+import HealthBanner from '../components/HealthBanner';
 
 const { Title } = Typography;
 
@@ -131,6 +132,7 @@ const Partners: React.FC = () => {
 
   return (
     <div style={{ padding: 24 }}>
+      <HealthBanner currentPagePath="/admin/partners" />
       <Title level={3}>合作對象管理</Title>
       <Tabs
         activeKey={activeType}

@@ -11,6 +11,7 @@ import {
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import GoogleMapsPicker, { type GoogleMapsPickerChange } from '../components/GoogleMapsPicker';
+import HealthBanner from '../components/HealthBanner';
 import { queueZoneAPI, type QueueZone } from '../services/api';
 
 const { Title, Text } = Typography;
@@ -160,6 +161,7 @@ const QueueZones: React.FC = () => {
 
   return (
     <div style={{ padding: 24 }}>
+      <HealthBanner currentPagePath="/admin/queue-zones" />
       <Title level={3}><EnvironmentOutlined /> 排班區管理</Title>
       <Text type="secondary">
         司機可加入排班區。當該區內有訂單時，系統優先派給排班司機（P3 上線後生效）。

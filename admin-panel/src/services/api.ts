@@ -721,4 +721,25 @@ export const driverPartnersAPI = {
     api.put<{ success: boolean; data: DriverPartnerBinding[] }>(`/admin/drivers/${driverId}/partners`, bindings),
 };
 
+// ========== Health Check ==========
+export const healthAPI = {
+  check: () => api.get<{
+    success: boolean;
+    scanned_at: string;
+    checks: Array<{
+      id: string;
+      title: string;
+      description: string;
+      severity: 'high' | 'medium' | 'low';
+      count: number;
+      items: any[];
+      pages: string[];
+      auto_fix_endpoint?: string;
+    }>;
+    total_issues: number;
+    high_severity_count: number;
+  }>('/admin/health/data-integrity'),
+  autoFix: (checkId: string) => api.post<{ success: boolean; fixed: number; details?: any }>(`/admin/health/fix/${checkId}`),
+};
+
 export default api;

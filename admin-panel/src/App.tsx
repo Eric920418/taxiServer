@@ -16,6 +16,7 @@ import AdminManagement from './pages/AdminManagement';
 import Settings from './pages/Settings';
 import PhoneCalls from './pages/PhoneCalls';
 import Landmarks from './pages/Landmarks';
+import HealthCheck from './pages/HealthCheck';
 import AddressFailures from './pages/AddressFailures';
 import NoShowOrders from './pages/NoShowOrders';
 import Teams from './pages/Teams';
@@ -72,6 +73,7 @@ function AppContent() {
           <Route path="commission-rules" element={<CommissionRules />} />
           <Route path="queue-zones" element={<QueueZones />} />
           <Route path="billing" element={<Billing />} />
+          <Route path="health" element={<HealthCheck />} />
         </Route>
       </Routes>
     </Router>

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { healthAPI } from '../services/api';
 import { Layout, Menu, Avatar, Dropdown, Badge, Space, Typography } from 'antd';
 import {
   DashboardOutlined,
@@ -9,6 +10,7 @@ import {
   SettingOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
+  HeartOutlined,
   MenuUnfoldOutlined,
   BellOutlined,
   TeamOutlined,
@@ -40,6 +42,22 @@ const MainLayout: React.FC = () => {
     await dispatch(logout());
     navigate('/login');
   };
+
+  const [healthBadge, setHealthBadge] = useState(0);
+
+  useEffect(() => {
+    const fetchHealth = async () => {
+      try {
+        const res = await healthAPI.check();
+        setHealthBadge(res.data.high_severity_count || 0);
+      } catch {
+        // silent
+      }
+    };
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 5 * 60 * 1000); // 每 5 分鐘
+    return () => clearInterval(interval);
+  }, []);
 
   const menuItems = [
     {
@@ -126,6 +144,15 @@ const MainLayout: React.FC = () => {
       key: '/settings',
       icon: <SettingOutlined />,
       label: '系統設定',
+    },
+    {
+      key: '/health',
+      icon: <HeartOutlined />,
+      label: healthBadge > 0 ? (
+        <span>
+          系統健康 <Badge count={healthBadge} offset={[6, -3]} style={{ backgroundColor: '#ff4d4f' }} />
+        </span>
+      ) : '系統健康',
     },
   ];
 

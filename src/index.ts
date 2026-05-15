@@ -20,6 +20,7 @@ import adminDriverPartnersRouter from './api/admin-driver-partners';
 import adminCommissionRulesRouter from './api/admin-commission-rules';
 import adminQueueZonesRouter from './api/admin-queue-zones';
 import adminBillingRouter from './api/admin-billing';
+import adminHealthRouter from './api/admin-health';
 import queueRouter from './api/queue';
 import landmarksSyncRouter from './api/landmarks';
 import ratingsRouter from './api/ratings';
@@ -129,7 +130,19 @@ app.use(express.json());
 
 // 提供管理後台靜態檔案
 const adminPanelPath = path.join(__dirname, '../admin-panel/dist');
-app.use('/admin', express.static(adminPanelPath));
+// admin-panel：assets/* (帶 hash) 長 cache；index.html 強制 no-store 才能拿到新 bundle 引用
+app.use('/admin', express.static(adminPanelPath, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    } else if (filePath.includes('/assets/')) {
+      // Vite hash-stamped assets：immutable，可 cache 一年
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  },
+}));
 
 // 基礎路由
 app.get('/', (req, res) => {
@@ -278,6 +291,7 @@ app.use('/api/admin/address-failures', adminAddressFailuresRouter);
 app.use('/api/admin/partners', adminPartnersRouter);
 app.use('/api/admin/commission-rules', adminCommissionRulesRouter);
 app.use('/api/admin/queue-zones', adminQueueZonesRouter);
+app.use('/api/admin/health', adminHealthRouter);
 app.use('/api/admin/billing', adminBillingRouter);
 app.use('/api/admin/drivers', adminDriverPartnersRouter);  // /:driverId/partners 子路徑
 app.use('/api/admin', adminRouter);

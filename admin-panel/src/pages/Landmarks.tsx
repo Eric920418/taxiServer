@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { landmarkAPI, type Landmark, type LandmarkInput, type LandmarkAudit } from '../services/api';
+import HealthBanner from '../components/HealthBanner';
 import GoogleMapsPicker, { type GoogleMapsPickerChange } from '../components/GoogleMapsPicker';
 import dayjs from 'dayjs';
 
@@ -419,6 +420,7 @@ const Landmarks: React.FC = () => {
 
   return (
     <div>
+      <HealthBanner currentPagePath="/admin/landmarks" />
       <Title level={3}>
         <EnvironmentOutlined /> 地標管理
         <Text type="secondary" style={{ fontSize: 14, marginLeft: 12 }}>

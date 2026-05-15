@@ -730,13 +730,18 @@ router.patch('/:orderId/status', async (req, res) => {
             Math.sin(dLng / 2) ** 2;
           const dist = 2 * R * Math.asin(Math.sqrt(a));
           if (dist <= Number(zoneInfo.radius_meters)) {
-            await query(
+            const requeue = await query(
               `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount, status)
                VALUES ($1, $2, $3, 'ACTIVE')
-               ON CONFLICT DO NOTHING`,
+               ON CONFLICT DO NOTHING
+               RETURNING entry_id`,
               [updatedOrder.driver_id, zoneInfo.zone_id, driverLoc.max_acceptable_discount_amount ?? 0]
             );
-            console.log(`[Order] 司機 ${updatedOrder.driver_id} 接完單自動回 ${zoneInfo.zone_id} 排班 (距離 ${Math.round(dist)}m)`);
+            if (requeue.rows.length > 0) {
+              console.log(`[Order] 司機 ${updatedOrder.driver_id} 接完單自動回 ${zoneInfo.zone_id} 排班 (距離 ${Math.round(dist)}m, entry_id=${requeue.rows[0].entry_id})`);
+            } else {
+              console.log(`[Order] 司機 ${updatedOrder.driver_id} 已在排班，跳過自動 re-queue`);
+            }
           } else {
             console.log(`[Order] 司機 ${updatedOrder.driver_id} 已離開排班區 ${zoneInfo.zone_id} (${Math.round(dist)}m > ${zoneInfo.radius_meters}m)，不自動回排班`);
           }

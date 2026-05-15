@@ -24,6 +24,7 @@ const MIGRATIONS = {
   'commission-defaults': '020-commission-defaults.sql',           // 訂單 commission 系統+partner 預設
   'fix-missing-cols': '021-fix-missing-columns.sql',              // 補 fcm_token / phone_or_line_id 等遺漏欄位
   'discount-rename': '022-discount-rename.sql',                // commission_pct (%) → discount_amount (元) 全域翻轉
+  'data-integrity': '023-data-integrity-triggers.sql',         // schema-level 強制 (trigger 自動清 / partial unique)
 };
 
 /**
