@@ -335,20 +335,46 @@ router.post(
 
       // 別名
       for (const alias of input.aliases || []) {
-        if (alias.trim()) {
-          await client.query(
-            `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
-             VALUES ($1, $2, 'ALIAS') ON CONFLICT DO NOTHING`,
-            [landmark.id, alias.trim()]
-          );
+        const trimmed = alias.trim();
+        if (!trimmed) continue;
+        const conflict = await client.query(
+          `SELECT la.landmark_id, l.name AS landmark_name, l.deleted_at
+           FROM landmark_aliases la
+           JOIN landmarks l ON l.id = la.landmark_id
+           WHERE la.alias = $1 AND la.alias_type = 'ALIAS' LIMIT 1`,
+          [trimmed]
+        );
+        if (conflict.rows.length > 0) {
+          const c = conflict.rows[0];
+          const status = c.deleted_at ? '（已軟刪）' : '';
+          throw new Error(`別名「${trimmed}」已被地標「${c.landmark_name}」(id=${c.landmark_id})${status}佔用。`);
         }
+        await client.query(
+          `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
+           VALUES ($1, $2, 'ALIAS')`,
+          [landmark.id, trimmed]
+        );
       }
       for (const taigi of input.taigi_aliases || []) {
-        if (taigi.trim()) {
+        const trimmed = taigi.trim();
+        if (!trimmed) continue;
+        const conflict = await client.query(
+          `SELECT la.landmark_id, l.name AS landmark_name, l.deleted_at
+           FROM landmark_aliases la
+           JOIN landmarks l ON l.id = la.landmark_id
+           WHERE la.alias = $1 AND la.alias_type = 'TAIGI' LIMIT 1`,
+          [trimmed]
+        );
+        if (conflict.rows.length > 0) {
+          const c = conflict.rows[0];
+          const status = c.deleted_at ? '（已軟刪）' : '';
+          throw new Error(`台語別名「${trimmed}」已被地標「${c.landmark_name}」(id=${c.landmark_id})${status}佔用。`);
+        }
+        {
           await client.query(
             `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
-             VALUES ($1, $2, 'TAIGI') ON CONFLICT DO NOTHING`,
-            [landmark.id, taigi.trim()]
+             VALUES ($1, $2, 'TAIGI')`,
+            [landmark.id, trimmed]
           );
         }
       }
@@ -441,19 +467,37 @@ router.patch(
       }
 
       // 別名處理：如果傳了 aliases 陣列就整批替換，沒傳就保留
+      // 注意：(alias, alias_type) 是全 DB unique；若別人佔走必須明確 throw
+      // 避免 silent DO NOTHING 讓 user 以為儲存成功但沒寫入
       if (input.aliases !== undefined) {
         await client.query(
           `DELETE FROM landmark_aliases WHERE landmark_id = $1 AND alias_type = 'ALIAS'`,
           [id]
         );
         for (const alias of input.aliases) {
-          if (alias.trim()) {
-            await client.query(
-              `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
-               VALUES ($1, $2, 'ALIAS') ON CONFLICT DO NOTHING`,
-              [id, alias.trim()]
-            );
+          const trimmed = alias.trim();
+          if (!trimmed) continue;
+
+          // Pre-check：此 alias 是否已被別的 landmark 佔走（軟刪的也算，但 admin 看不見）
+          const conflict = await client.query(
+            `SELECT la.landmark_id, l.name AS landmark_name, l.deleted_at
+             FROM landmark_aliases la
+             JOIN landmarks l ON l.id = la.landmark_id
+             WHERE la.alias = $1 AND la.alias_type = 'ALIAS' AND la.landmark_id != $2
+             LIMIT 1`,
+            [trimmed, id]
+          );
+          if (conflict.rows.length > 0) {
+            const c = conflict.rows[0];
+            const status = c.deleted_at ? '（已軟刪 — 請聯絡工程師清掉殘留 alias）' : '';
+            throw new Error(`別名「${trimmed}」已被地標「${c.landmark_name}」(id=${c.landmark_id})${status}佔用，請改別的別名或先解除該綁定。`);
           }
+
+          await client.query(
+            `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
+             VALUES ($1, $2, 'ALIAS')`,
+            [id, trimmed]
+          );
         }
       }
       if (input.taigi_aliases !== undefined) {
@@ -462,13 +506,28 @@ router.patch(
           [id]
         );
         for (const taigi of input.taigi_aliases) {
-          if (taigi.trim()) {
-            await client.query(
-              `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
-               VALUES ($1, $2, 'TAIGI') ON CONFLICT DO NOTHING`,
-              [id, taigi.trim()]
-            );
+          const trimmed = taigi.trim();
+          if (!trimmed) continue;
+
+          const conflict = await client.query(
+            `SELECT la.landmark_id, l.name AS landmark_name, l.deleted_at
+             FROM landmark_aliases la
+             JOIN landmarks l ON l.id = la.landmark_id
+             WHERE la.alias = $1 AND la.alias_type = 'TAIGI' AND la.landmark_id != $2
+             LIMIT 1`,
+            [trimmed, id]
+          );
+          if (conflict.rows.length > 0) {
+            const c = conflict.rows[0];
+            const status = c.deleted_at ? '（已軟刪 — 請聯絡工程師清掉殘留 alias）' : '';
+            throw new Error(`台語別名「${trimmed}」已被地標「${c.landmark_name}」(id=${c.landmark_id})${status}佔用。`);
           }
+
+          await client.query(
+            `INSERT INTO landmark_aliases (landmark_id, alias, alias_type)
+             VALUES ($1, $2, 'TAIGI')`,
+            [id, trimmed]
+          );
         }
       }
 
@@ -522,6 +581,16 @@ router.delete(
         `UPDATE landmarks SET deleted_at = NOW(), updated_by = $2 WHERE id = $1`,
         [id, req.admin!.admin_id]
       );
+
+      // 軟刪時順帶清 landmark_aliases — 否則殘留 alias 會占用 (alias, alias_type) unique key，
+      // 之後想把同 alias 加到別的 landmark 會 silent fail (ON CONFLICT DO NOTHING)
+      const removedAliases = await client.query(
+        `DELETE FROM landmark_aliases WHERE landmark_id = $1 RETURNING alias, alias_type`,
+        [id]
+      );
+      if (removedAliases.rowCount && removedAliases.rowCount > 0) {
+        console.log(`[Admin Landmarks] 軟刪 landmark ${id}，順帶清 ${removedAliases.rowCount} 個 aliases`);
+      }
 
       await client.query(
         `INSERT INTO landmark_audit (landmark_id, admin_id, action, before_data, after_data)
