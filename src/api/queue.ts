@@ -58,8 +58,12 @@ router.get('/my-status', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `SELECT qe.entry_id, qe.zone_id, qe.joined_at, qe.max_acceptable_discount_amount,
-              z.name AS zone_name
+      `SELECT qe.entry_id, qe.zone_id, qe.joined_at, qe.max_acceptable_commission_pct,
+              z.name AS zone_name,
+              (SELECT COUNT(*) FROM queue_entries qe2
+                 WHERE qe2.zone_id = qe.zone_id
+                   AND qe2.status = 'ACTIVE'
+                   AND qe2.joined_at < qe.joined_at)::int + 1 AS position
        FROM queue_entries qe
        JOIN queue_zones z ON z.zone_id = qe.zone_id
        WHERE qe.driver_id = $1 AND qe.status = 'ACTIVE'`,
@@ -77,7 +81,8 @@ router.get('/my-status', async (req: Request, res: Response) => {
       zone_name: row.zone_name,
       joined_at: row.joined_at,
       minutes_in_queue: minutesInQueue,
-      max_acceptable_discount_amount: row.max_acceptable_discount_amount,
+      max_acceptable_commission_pct: row.max_acceptable_commission_pct,
+      position: row.position,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -85,9 +90,9 @@ router.get('/my-status', async (req: Request, res: Response) => {
 });
 
 // POST /api/queue/join
-// body: { driver_id, zone_id, current_lat, current_lng, max_acceptable_discount_amount? }
+// body: { driver_id, zone_id, current_lat, current_lng, max_acceptable_commission_pct? }
 router.post('/join', async (req: Request, res: Response) => {
-  const { driver_id, zone_id, current_lat, current_lng, max_acceptable_discount_amount } = req.body || {};
+  const { driver_id, zone_id, current_lat, current_lng, max_acceptable_commission_pct } = req.body || {};
 
   if (!driver_id || !zone_id) {
     return res.status(400).json({ error: '缺少 driver_id 或 zone_id' });
@@ -146,33 +151,27 @@ router.post('/join', async (req: Request, res: Response) => {
       });
     }
 
-    // 5. 車隊司機 (PRIMARY_FLEET 綁定) → 強制用 partner.default_order_discount_amount
-    //    外部司機 (無綁定) → 用 caller 傳的 max_acceptable_discount_amount，預設 0
-    const fleetRes = await pool.query(
-      `SELECT p.default_order_discount_amount
-       FROM driver_partners dp
-       JOIN partners p ON p.partner_id = dp.partner_id
-       WHERE dp.driver_id = $1 AND dp.relationship_type = 'PRIMARY_FLEET'
-         AND dp.is_active = true AND p.is_active = true
-       LIMIT 1`,
-      [driver_id]
-    );
-    const effectiveMaxDiscount = fleetRes.rows.length > 0
-      ? Number(fleetRes.rows[0].default_order_discount_amount ?? 0)
-      : (max_acceptable_discount_amount ?? 0);
-
-    // 6. 寫入 queue_entry
+    // 5. 寫入 queue_entry
     const insertRes = await pool.query(
-      `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount)
+      `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_commission_pct)
        VALUES ($1, $2, $3)
        RETURNING entry_id, joined_at`,
-      [driver_id, zone_id, effectiveMaxDiscount]
+      [driver_id, zone_id, max_acceptable_commission_pct ?? 100]
+    );
+
+    // 6. 計算順位（同 zone 內 ACTIVE、joined_at 比自己早的數量 + 1）
+    const positionRes = await pool.query(
+      `SELECT COUNT(*)::int + 1 AS position
+       FROM queue_entries
+       WHERE zone_id = $1 AND status = 'ACTIVE' AND joined_at < $2`,
+      [zone_id, insertRes.rows[0].joined_at]
     );
 
     res.status(201).json({
       success: true,
       entry_id: insertRes.rows[0].entry_id,
       joined_at: insertRes.rows[0].joined_at,
+      position: positionRes.rows[0].position,
     });
   } catch (e: any) {
     console.error('[Queue] join 錯誤:', e);

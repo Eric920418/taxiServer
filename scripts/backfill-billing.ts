@@ -1,10 +1,15 @@
 /**
  * backfill-billing.ts
- * 一次性：補寫 P1 部署前（或任何遺漏）DONE 訂單的 billing_snapshots
+ *
+ * 一次性：補寫 P1 部署前 (或任何遺漏) DONE 訂單的 billing_snapshots
  *
  * 用法：
- *   pnpm ts-node scripts/backfill-billing.ts             # dry-run（只列出待補訂單）
- *   pnpm ts-node scripts/backfill-billing.ts --apply     # 實際寫入
+ *   pnpm ts-node scripts/backfill-billing.ts                # dry-run
+ *   pnpm ts-node scripts/backfill-billing.ts --apply        # 真寫
+ *
+ * 邏輯：
+ *   1. 找所有 status='DONE' 但 billing_snapshots 沒紀錄的訂單
+ *   2. 對每筆呼叫 BillingService.writeSnapshotForOrder（已 idempotent）
  */
 
 import dotenv from 'dotenv';
@@ -48,12 +53,10 @@ async function main(): Promise<void> {
   let failed = 0;
 
   for (const r of result.rows) {
-    try {
-      const snapshotId = await billing.writeSnapshotForOrder(r.order_id);
-      if (snapshotId !== null) success++;
-      else failed++;
-    } catch (e: any) {
-      console.error(`  ✗ ${r.order_id}: ${e.message}`);
+    const snapshotId = await billing.writeSnapshotForOrder(r.order_id);
+    if (snapshotId !== null) {
+      success++;
+    } else {
       failed++;
     }
   }

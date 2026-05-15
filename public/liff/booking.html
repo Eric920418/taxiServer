@@ -50,6 +50,29 @@
       <input type="datetime-local" id="scheduledAt">
     </div>
 
+    <!-- 派車優先級（commission tier） -->
+    <div class="option-section">
+      <label class="section-label">派車優先級</label>
+      <div class="radio-group" id="priorityGroup">
+        <label class="radio-option selected">
+          <input type="radio" name="priority" value="0" checked>
+          <span>一般</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="5">
+          <span>快速</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="10">
+          <span>優先</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="priority" value="20">
+          <span>急件</span>
+        </label>
+      </div>
+    </div>
+
     <!-- 付款方式 -->
     <div class="option-section">
       <label class="section-label">付款方式</label>
@@ -65,33 +88,6 @@
         <label class="radio-option">
           <input type="radio" name="payment" value="SENIOR_CARD">
           <span>敬老卡</span>
-        </label>
-      </div>
-    </div>
-
-    <!-- 加價找車（給司機折扣金額，提高司機接單意願） -->
-    <div class="option-section">
-      <label class="section-label">給司機折扣</label>
-      <div class="radio-group" id="priorityGroup">
-        <label class="radio-option selected">
-          <input type="radio" name="priority" value="0" checked>
-          <span>不打折</span>
-        </label>
-        <label class="radio-option">
-          <input type="radio" name="priority" value="10">
-          <span>10 元</span>
-        </label>
-        <label class="radio-option">
-          <input type="radio" name="priority" value="20">
-          <span>20 元</span>
-        </label>
-        <label class="radio-option">
-          <input type="radio" name="priority" value="30">
-          <span>30 元</span>
-        </label>
-        <label class="radio-option">
-          <input type="radio" name="priority" value="40">
-          <span>40 元</span>
         </label>
       </div>
     </div>
@@ -192,12 +188,16 @@
         showToast('LIFF 初始化失敗：' + (e.message || e));
       }
 
-      // Radio (payment + priority) 視覺更新 — selected 只在同 group 內切換
-      document.querySelectorAll('input[name="payment"], input[name="priority"]').forEach(input => {
-        input.addEventListener('change', () => {
-          const group = input.closest('.radio-group');
-          if (group) group.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
-          input.closest('.radio-option').classList.add('selected');
+      // 付款方式 + 優先級 radio 視覺更新（同 group 內單選）
+      ['payment', 'priority'].forEach(name => {
+        document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
+          input.addEventListener('change', () => {
+            const group = input.closest('.radio-group');
+            if (group) {
+              group.querySelectorAll('.radio-option').forEach(opt => opt.classList.remove('selected'));
+              input.closest('.radio-option').classList.add('selected');
+            }
+          });
         });
       });
 
@@ -465,11 +465,11 @@
         paymentType = 'CASH'; // 敬老卡仍收現金，只是有補貼
         subsidyType = 'SENIOR_CARD';
       }
-      const notes = document.getElementById('notesInput')?.value?.trim() || undefined;
+      // 派車優先級（commission tier，平台抽成 %）
+      const priorityValue = document.querySelector('input[name="priority"]:checked')?.value;
+      const commissionPct = priorityValue ? parseInt(priorityValue, 10) : 0;
 
-      // 給司機折扣（discountAmount）— NT$ 元，0/10/20/30/40 5 段制，數字越大越快有司機接
-      const priorityValue = document.querySelector('input[name="priority"]:checked')?.value || '0';
-      const discountAmount = parseInt(priorityValue, 10);
+      const notes = document.getElementById('notesInput')?.value?.trim() || undefined;
 
       const body = {
         pickupLat: pickupData.lat,
@@ -481,7 +481,6 @@
         mode,
         paymentType,
         subsidyType,
-        discountAmount,
         notes,
       };
 
