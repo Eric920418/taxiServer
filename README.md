@@ -1,8 +1,30 @@
 # 花蓮計程車司機端 - 後端伺服器
 
 > **HualienTaxiServer** - 桌面自建後端系統
-> 版本：v1.7.0-MVP
-> 更新日期：2026-05-09
+> 版本：v1.7.1-MVP
+> 更新日期：2026-05-16
+
+## 📝 最新修改（2026-05-16）- LINE 叫車三項：訊息正名 + 預估金額 + 接單 ETA
+
+### 解決的問題
+LINE 叫車路徑在「使用者體驗」與「司機接單後資訊」兩端各有缺口：
+1. **「叫車成功！」訊息誤導**：使用者看到「叫車成功」會以為已媒合，實際才剛建單在等司機。
+2. **司機接單後 LINE 沒 ETA**：`orders.ts` 推給 `notifyDriverAccepted` 的 `etaMinutes` 來自 DB 不存在欄位 `eta_to_pickup`，永遠 null，導致 `driverAcceptedCard` 走 fallback「司機正在前往您的上車點」。
+3. **司機端看不到預估金額**：`line-liff.ts` 建單完全沒寫入 `estimated_fare`，司機 App `Order.estimatedFare` 為 null，HomeScreen 預估金額區塊不渲染。APP / 電話叫車路徑原本就有算，只有 LINE 路徑漏掉。
+
+### 改動範圍（server 三檔，以 1893bf6 為 base）
+- **`src/services/LineFlexTemplates.ts`**：`orderCreatedCard()` 標題 `'叫車成功！'` → `'正在媒合司機'`（綠色 #4CAF50），刪除重複副標題；altText 同步改。`driverAcceptedCard()` altText 把 ETA 放最前面（`🚕 司機約 X 分鐘到達｜車牌（姓名）`），確保手機鎖屏推播 / LINE 聊天列表預覽即使被截斷也看得到。
+- **`src/api/line-liff.ts`**：建單前用 `ETAService.getETA(pickup, dest)` 取得 Google Directions 道路距離，再呼叫 `fareConfigService.calculateFare()` 算花蓮費率，寫入 `orders.estimated_fare`，並傳入 SmartDispatcherV2 的 `orderData.estimatedFare`。
+- **`src/api/orders.ts`** (/accept)：司機接單時即時呼叫 `ETAService.getETA(司機位置, 上車點)` 算 ETA，傳給 `cns.notifyDriverAccepted({ etaMinutes })`。司機位置優先讀 `driverLocations` 記憶體 Map，fallback 讀 `drivers.current_lat/lng`。
+
+### 司機端 Android App
+**零修改**。`Order.estimatedFare`、`HomeScreen.kt:644` 預估金額渲染、`driverAcceptedCard()` 的 ETA 條件式均已就緒，server 補資料即生效。
+
+### 已知邊界
+LINE 預約叫車（mode=reserve）：不算 estimatedFare（時間未到，路況未知）。
+
+### Regression 防範
+這個 commit 在 revert 過時 commit `1b24b96` 後，以 `1893bf6` 為 base 重做。1b24b96 雖然有上述三項真改動，但同 commit 內 6 個過時副本檔（queue.ts/Drivers.tsx/booking.html/migrations 020-021）會 break commission→discount schema rename 後的 production，所以 revert 後重做 clean version。
 
 ## 📝 最新修改（2026-05-09）- GoGoCha 跨車隊媒合平台 Phase 1：Partner 抽象 + 對帳基礎建設
 

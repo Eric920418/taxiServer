@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
-import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets } from '../socket';
+import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations } from '../socket';
+import { getETAService } from '../services/ETAService';
 import {
   registerOrder,
   handleDriverReject,
@@ -486,10 +487,44 @@ router.patch('/:orderId/accept', async (req, res) => {
     // 若分派層未初始化或 flag=false 會自動 noop；否則寫 customer_notifications + 推播
     const cns = getCustomerNotificationService();
     if (cns) {
+      // 即時計算司機 → 上車點 ETA（不再讀 DB 不存在的 eta_to_pickup）
+      let etaMinutes: number | null = null;
+      try {
+        const memLoc = driverLocations.get(driverId);
+        let driverLat: number | null = null;
+        let driverLng: number | null = null;
+        if (memLoc) {
+          driverLat = memLoc.lat;
+          driverLng = memLoc.lng;
+        } else {
+          const dbDriver = await queryOne(
+            'SELECT current_lat, current_lng FROM drivers WHERE driver_id = $1',
+            [driverId]
+          );
+          if (dbDriver?.current_lat && dbDriver?.current_lng) {
+            driverLat = parseFloat(dbDriver.current_lat);
+            driverLng = parseFloat(dbDriver.current_lng);
+          }
+        }
+        if (driverLat !== null && driverLng !== null) {
+          const etaSvc = getETAService();
+          const result = await etaSvc.getETA(
+            { lat: driverLat, lng: driverLng },
+            { lat: parseFloat(fullOrder.pickup_lat), lng: parseFloat(fullOrder.pickup_lng) }
+          );
+          etaMinutes = Math.max(1, Math.ceil(result.seconds / 60));
+          console.log(`[Accept Order] ETA: ${etaMinutes} 分鐘 (來源 ${result.source})`);
+        } else {
+          console.warn(`[Accept Order] 司機 ${driverId} 無位置資料，ETA 無法計算`);
+        }
+      } catch (err) {
+        console.error('[Accept Order] ETA 計算失敗:', err);
+      }
+
       cns.notifyDriverAccepted(orderId, {
         driverName: fullOrder.driver_name || driverName,
         plate: fullOrder.plate || '',
-        etaMinutes: fullOrder.eta_to_pickup,
+        etaMinutes: etaMinutes ?? undefined,
       }).catch((err: Error) => console.error('[Order] CustomerNotification 失敗:', err));
     } else {
       // 分派層未啟用時保留舊行為（LINE-only shortcut）
