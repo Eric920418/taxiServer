@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
-import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations } from '../socket';
-import { getETAService } from '../services/ETAService';
+import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets } from '../socket';
 import {
   registerOrder,
   handleDriverReject,
@@ -430,31 +429,6 @@ router.patch('/:orderId/accept', async (req, res) => {
 
     const updatedOrder = result.rows[0];
 
-    // 接單時用司機 PRIMARY_FLEET 的 default_order_commission_pct 覆蓋訂單 commission_pct
-    // （訂單建立時用系統 default 5%；接單後依司機所屬車隊精準調整）
-    try {
-      const partnerCommission = await queryOne(
-        `SELECT p.default_order_commission_pct
-         FROM driver_partners dp
-         JOIN partners p ON p.partner_id = dp.partner_id
-         WHERE dp.driver_id = $1
-           AND dp.relationship_type = 'PRIMARY_FLEET'
-           AND dp.is_active = true
-           AND p.is_active = true
-         LIMIT 1`,
-        [driverId]
-      );
-      if (partnerCommission && partnerCommission.default_order_commission_pct !== null) {
-        await query(
-          `UPDATE orders SET commission_pct = $1 WHERE order_id = $2`,
-          [partnerCommission.default_order_commission_pct, orderId]
-        );
-        console.log(`[Order] commission_pct 套用司機 partner default: ${partnerCommission.default_order_commission_pct}% (order ${orderId})`);
-      }
-    } catch (e: any) {
-      console.warn('[Order] commission 套用失敗（不影響訂單）:', e.message);
-    }
-
     // 更新司機統計
     await query(
       'UPDATE drivers SET total_trips = total_trips + 1 WHERE driver_id = $1',
@@ -508,40 +482,6 @@ router.patch('/:orderId/accept', async (req, res) => {
       console.log(`[Order] ⚠️ 乘客 ${fullOrder.passenger_id} 不在線，無法即時通知`);
     }
 
-    // 即時計算司機 → 上車點 ETA（不再讀 DB 不存在的 eta_to_pickup）
-    let etaMinutes: number | null = null;
-    try {
-      const memLoc = driverLocations.get(driverId);
-      let driverLat: number | null = null;
-      let driverLng: number | null = null;
-      if (memLoc) {
-        driverLat = memLoc.lat;
-        driverLng = memLoc.lng;
-      } else {
-        const dbDriver = await queryOne(
-          'SELECT current_lat, current_lng FROM drivers WHERE driver_id = $1',
-          [driverId]
-        );
-        if (dbDriver?.current_lat && dbDriver?.current_lng) {
-          driverLat = parseFloat(dbDriver.current_lat);
-          driverLng = parseFloat(dbDriver.current_lng);
-        }
-      }
-      if (driverLat !== null && driverLng !== null) {
-        const etaSvc = getETAService();
-        const result = await etaSvc.getETA(
-          { lat: driverLat, lng: driverLng },
-          { lat: parseFloat(fullOrder.pickup_lat), lng: parseFloat(fullOrder.pickup_lng) }
-        );
-        etaMinutes = Math.max(1, Math.ceil(result.seconds / 60));
-        console.log(`[Accept Order] ETA: ${etaMinutes} 分鐘 (來源 ${result.source})`);
-      } else {
-        console.warn(`[Accept Order] 司機 ${driverId} 無位置資料，ETA 無法計算`);
-      }
-    } catch (err) {
-      console.error('[Accept Order] ETA 計算失敗:', err);
-    }
-
     // 客人反向通知（LINE 優先、SMS 備援）
     // 若分派層未初始化或 flag=false 會自動 noop；否則寫 customer_notifications + 推播
     const cns = getCustomerNotificationService();
@@ -549,7 +489,7 @@ router.patch('/:orderId/accept', async (req, res) => {
       cns.notifyDriverAccepted(orderId, {
         driverName: fullOrder.driver_name || driverName,
         plate: fullOrder.plate || '',
-        etaMinutes: etaMinutes ?? undefined,
+        etaMinutes: fullOrder.eta_to_pickup,
       }).catch((err: Error) => console.error('[Order] CustomerNotification 失敗:', err));
     } else {
       // 分派層未啟用時保留舊行為（LINE-only shortcut）
@@ -763,64 +703,6 @@ router.patch('/:orderId/status', async (req, res) => {
       getBillingService().writeSnapshotForOrder(orderId).catch((e: Error) =>
         console.error('[Order] BillingSnapshot 寫入失敗（不影響訂單）:', e.message)
       );
-
-      // 自動回排班：若司機 GPS 仍在某 active zone 內，重新加入隊
-      // 條件：(1) 司機本次接單前是從某 zone 派出（dispatched_from_zone）、(2) GPS 仍在該 zone、(3) 該 zone 仍 active
-      (async () => {
-        try {
-          const fullOrder = await queryOne(
-            `SELECT driver_id, dispatched_from_zone FROM orders WHERE order_id = $1`,
-            [orderId]
-          );
-          if (!fullOrder?.driver_id || !fullOrder?.dispatched_from_zone) return;
-
-          const driverInfo = await queryOne(
-            `SELECT current_lat, current_lng, max_acceptable_commission_pct
-             FROM drivers WHERE driver_id = $1`,
-            [fullOrder.driver_id]
-          );
-          if (!driverInfo?.current_lat || !driverInfo?.current_lng) return;
-
-          const zoneInfo = await queryOne(
-            `SELECT center_lat, center_lng, radius_meters
-             FROM queue_zones
-             WHERE zone_id = $1 AND is_active = true`,
-            [fullOrder.dispatched_from_zone]
-          );
-          if (!zoneInfo) return;
-
-          // Haversine 距離 vs radius
-          const R = 6371000;
-          const toRad = (d: number) => d * Math.PI / 180;
-          const lat1 = parseFloat(driverInfo.current_lat);
-          const lng1 = parseFloat(driverInfo.current_lng);
-          const lat2 = parseFloat(zoneInfo.center_lat);
-          const lng2 = parseFloat(zoneInfo.center_lng);
-          const dLat = toRad(lat2 - lat1);
-          const dLng = toRad(lng2 - lng1);
-          const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-          const dist = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-          if (dist <= Number(zoneInfo.radius_meters)) {
-            await query(
-              `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_commission_pct, status)
-               VALUES ($1, $2, $3, 'ACTIVE')
-               ON CONFLICT DO NOTHING`,
-              [
-                fullOrder.driver_id,
-                fullOrder.dispatched_from_zone,
-                driverInfo.max_acceptable_commission_pct ?? 100,
-              ]
-            );
-            console.log(`[AutoReQueue] ${fullOrder.driver_id} 行程結束 + GPS 仍在 ${fullOrder.dispatched_from_zone}，自動重新加入排班`);
-          } else {
-            console.log(`[AutoReQueue] ${fullOrder.driver_id} GPS 已離開 ${fullOrder.dispatched_from_zone} (${Math.round(dist)}m)，不自動 re-queue`);
-          }
-        } catch (e: any) {
-          console.warn('[AutoReQueue] 失敗（不影響訂單）:', e.message);
-        }
-      })();
     }
 
     // [Cap 3] 司機接完訂單自動回排班：若仍在 dispatched_from_zone 範圍內，重新加入排班

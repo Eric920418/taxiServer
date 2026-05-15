@@ -422,10 +422,17 @@ export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMe
       contents: [
         {
           type: 'text',
-          text: '正在媒合司機',
+          text: '叫車成功！',
           weight: 'bold',
           size: 'xl',
           color: '#4CAF50',
+        },
+        {
+          type: 'text',
+          text: '正在為您媒合司機，請稍候',
+          size: 'sm',
+          color: '#666666',
+          margin: 'xs',
         },
         { type: 'separator', margin: 'md' },
         {
@@ -513,7 +520,7 @@ export function orderCreatedCard(orderId: string, pickupAddress: string): FlexMe
 
   return {
     type: 'flex',
-    altText: `正在媒合司機...`,
+    altText: `叫車成功！正在為您媒合司機，請稍候...`,
     contents: bubble,
   };
 }
@@ -618,14 +625,9 @@ export function driverAcceptedCard(
     } : {}),
   };
 
-  // altText 把 ETA 放最前面，確保手機通知/聊天列表預覽即使被截斷也看得到「幾分鐘到」
-  const altText = etaMinutes
-    ? `🚕 司機約 ${etaMinutes} 分鐘到達｜${plate}（${driverName}）`
-    : `🚕 司機已接單，正在前往｜${plate}（${driverName}）`;
-
   return {
     type: 'flex',
-    altText,
+    altText: `已媒合到車！司機 ${driverName}（${plate}）正在路上，${etaText}`,
     contents: bubble,
   };
 }

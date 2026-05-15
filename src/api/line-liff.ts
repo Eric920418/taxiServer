@@ -11,8 +11,6 @@ import { getScheduledOrderService } from '../services/ScheduledOrderService';
 import { getLineNotifier } from '../services/LineNotifier';
 import { hualienAddressDB, isWithinHualienBounds } from '../services/HualienAddressDB';
 import { getSocketIO, driverSockets, driverLocations } from '../socket';
-import { getETAService } from '../services/ETAService';
-import { fareConfigService } from '../services/FareConfigService';
 import pool from '../db/connection';
 
 const router = Router();
@@ -249,23 +247,6 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
     const isScheduled = mode === 'reserve' && scheduledAt;
     const status = isScheduled ? 'WAITING' : 'OFFERED';
 
-    // 預估車資（即時模式且有下車點才算；用 Google Directions 道路距離 + 花蓮費率）
-    let estimatedFare: number | null = null;
-    if (!isScheduled && destLat && destLng) {
-      try {
-        const etaSvc = getETAService();
-        const result = await etaSvc.getETA(
-          { lat: pickupLat, lng: pickupLng },
-          { lat: destLat, lng: destLng }
-        );
-        const fareResult = fareConfigService.calculateFare(result.distanceMeters);
-        estimatedFare = fareResult.totalFare;
-        console.log(`[LIFF] 預估車資 ${estimatedFare} 元 (距離 ${result.distanceMeters}m, 來源 ${result.source})`);
-      } catch (err) {
-        console.error('[LIFF] 預估車資計算失敗:', err);
-      }
-    }
-
     // 統一 INSERT（不再依 isScheduled 拼字串，改為欄位都一致，scheduled_at 可 null）
     await pool.query(`
       INSERT INTO orders (
@@ -275,8 +256,7 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
         payment_type, subsidy_type, notes,
         created_at, offered_at,
         hour_of_day, day_of_week,
-        source, line_user_id, scheduled_at,
-        estimated_fare
+        source, line_user_id, scheduled_at
       ) VALUES (
         $1, $2, $3,
         $4, $5, $6,
@@ -284,8 +264,7 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
         $10, $11, $12,
         CURRENT_TIMESTAMP, $13,
         $14, $15,
-        'LINE', $16, $17,
-        $18
+        'LINE', $16, $17
       )
     `, [
       orderId, passengerId, status,
@@ -295,7 +274,6 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
       isScheduled ? null : new Date(), // offered_at：預約單先 null，到時間才派單
       now.getHours(), now.getDay(),
       userId, isScheduled ? scheduledAt : null,
-      estimatedFare,
     ]);
 
     // 客人指定 discountAmount 或 partner 預設 → 寫入 orders.discount_amount + preferred_fleet
@@ -346,7 +324,6 @@ router.post('/create-order', verifyLiffToken, async (req: LiffRequest, res: Resp
         source: 'LINE',
         discountAmount: discountAmountValue ?? 0,
         preferredFleetPartnerId: preferredFleetPartnerId,
-        estimatedFare: estimatedFare ?? undefined,
       };
       await dispatcher.startDispatch(orderData);
       console.log(`[LIFF] 訂單 ${orderId} 已派單`);
