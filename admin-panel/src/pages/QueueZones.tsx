@@ -186,20 +186,17 @@ const QueueZones: React.FC = () => {
         destroyOnHidden
       >
         <Form form={form} layout="vertical">
-          {/* zone_id 新建時隱藏（系統自動生成），編輯時顯示給 user 參考 */}
-          {!editing && (
-            <Form.Item name="zone_id" hidden>
-              <Input />
-            </Form.Item>
-          )}
+          {/* zone_id 永遠 mount，避免 conditional render 觸發 antd setFieldsValue 同步 bug */}
           <Row gutter={16}>
-            {editing && (
-              <Col span={10}>
-                <Form.Item label="ID（系統自動生成）" name="zone_id">
-                  <Input disabled />
-                </Form.Item>
-              </Col>
-            )}
+            <Col span={editing ? 10 : 0} style={{ display: editing ? undefined : 'none' }}>
+              <Form.Item
+                name="zone_id"
+                label={editing ? 'ID（系統自動生成）' : undefined}
+                hidden={!editing}
+              >
+                <Input disabled />
+              </Form.Item>
+            </Col>
             <Col span={editing ? 14 : 24}>
               <Form.Item label="名稱（顯示給司機）" name="name" rules={[{ required: true, max: 50 }]}>
                 <Input placeholder="例：前站 / 慈濟 / 美崙" />

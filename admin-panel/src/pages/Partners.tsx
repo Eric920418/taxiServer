@@ -166,16 +166,14 @@ const Partners: React.FC = () => {
         destroyOnHidden
       >
         <Form form={form} layout="vertical">
-          {editing ? (
-            <Form.Item label="ID（系統自動生成）" name="partner_id">
-              <Input disabled />
-            </Form.Item>
-          ) : (
-            // 新建模式：partner_id 隱藏，由 openCreate 自動填入
-            <Form.Item name="partner_id" hidden>
-              <Input />
-            </Form.Item>
-          )}
+          {/* partner_id 永遠 mount，只切換 hidden / label — 避免 conditional render 觸發 setFieldsValue 同步 bug */}
+          <Form.Item
+            name="partner_id"
+            label={editing ? 'ID（系統自動生成）' : undefined}
+            hidden={!editing}
+          >
+            <Input disabled />
+          </Form.Item>
           <Form.Item label="類型" name="type" rules={[{ required: true }]}>
             <Input disabled />
           </Form.Item>
