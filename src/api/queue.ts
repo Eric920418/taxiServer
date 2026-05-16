@@ -59,7 +59,11 @@ router.get('/my-status', async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT qe.entry_id, qe.zone_id, qe.joined_at, qe.max_acceptable_discount_amount,
-              z.name AS zone_name
+              z.name AS zone_name,
+              (SELECT COUNT(*) FROM queue_entries qe2
+                 WHERE qe2.zone_id = qe.zone_id
+                   AND qe2.status = 'ACTIVE'
+                   AND qe2.joined_at < qe.joined_at)::int + 1 AS position
        FROM queue_entries qe
        JOIN queue_zones z ON z.zone_id = qe.zone_id
        WHERE qe.driver_id = $1 AND qe.status = 'ACTIVE'`,
@@ -78,6 +82,7 @@ router.get('/my-status', async (req: Request, res: Response) => {
       joined_at: row.joined_at,
       minutes_in_queue: minutesInQueue,
       max_acceptable_discount_amount: row.max_acceptable_discount_amount,
+      position: row.position,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
