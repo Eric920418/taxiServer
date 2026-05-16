@@ -1,7 +1,7 @@
 /**
  * QueueZones 排班區管理頁
  *
- * 圓形排班區：地圖選圓心 + radius slider 50-1000m
+ * 圓形排班區：地圖選圓心 + radius slider 50-2000m
  * 顯示即時 active_drivers 數量
  */
 import React, { useEffect, useState } from 'react';
@@ -33,7 +33,7 @@ const QueueZones: React.FC = () => {
   const [form] = Form.useForm();
   const [formLat, setFormLat] = useState<number | null>(null);
   const [formLng, setFormLng] = useState<number | null>(null);
-  const [radius, setRadius] = useState<number>(300);
+  const [radius, setRadius] = useState<number>(1000);
 
   const fetchList = async () => {
     setLoading(true);
@@ -54,12 +54,12 @@ const QueueZones: React.FC = () => {
     form.resetFields();
     form.setFieldsValue({
       zone_id: generateZoneId(),
-      radius_meters: 300,
+      radius_meters: 1000,
       is_active: true,
     });
     setFormLat(null);
     setFormLng(null);
-    setRadius(300);
+    setRadius(1000);
     setModalOpen(true);
   };
 
@@ -222,7 +222,7 @@ const QueueZones: React.FC = () => {
             rules={[{ required: true }]}
             style={{ marginTop: 16 }}
           >
-            <Slider min={50} max={1000} step={50} marks={{ 50: '50m', 300: '300m', 500: '500m', 1000: '1km' }}
+            <Slider min={50} max={2000} step={50} marks={{ 50: '50m', 500: '500m', 1000: '1km', 1500: '1.5km', 2000: '2km' }}
               onChange={(v) => setRadius(v as number)}
             />
           </Form.Item>
