@@ -283,16 +283,13 @@ export class CustomerNotificationService {
 
     switch (event) {
       case 'DRIVER_ACCEPTED':
-        // TODO 你的文案：司機姓名 + 車牌 + 預計 N 分鐘到達
-        return `【大豐計程車】司機${ctx.driverName ?? ''}已接單，車牌${ctx.plate ?? ''}，預計${ctx.etaMinutes ?? '?'}分鐘到達。客服${cs}`;
+        return `【大豐計程車】${ctx.driverName ?? '司機'}車牌${ctx.plate ?? ''}已接單，約${ctx.etaMinutes ?? '?'}分鐘到。客服${cs}`;
 
       case 'DRIVER_ARRIVED':
-        // TODO 你的文案：司機已到達上車點
-        return `【大豐計程車】司機${ctx.driverName ?? ''}(${ctx.plate ?? ''})已到達${ctx.pickupAddress ?? '上車點'}，請準備上車`;
+        return `【大豐計程車】${ctx.driverName ?? '司機'}車牌${ctx.plate ?? ''}已抵達上車點，請出來搭車`;
 
       case 'DISPATCH_FAILED':
-        // TODO 你的文案：無司機可接
-        return `【大豐計程車】很抱歉目前無司機可接單（${ctx.reason ?? ''}），請稍後再試或致電客服${cs}`;
+        return `【大豐計程車】抱歉目前無司機可接單，請稍後再試或致電客服${cs}`;
     }
   }
 }

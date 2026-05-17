@@ -444,7 +444,7 @@ router.patch('/:orderId/accept', async (req, res) => {
     const fullOrder = await queryOne(`
       SELECT o.*,
              p.name as passenger_name, p.phone as passenger_phone,
-             d.name as driver_name, d.phone as driver_phone
+             d.name as driver_name, d.phone as driver_phone, d.plate
       FROM orders o
       LEFT JOIN passengers p ON o.passenger_id = p.passenger_id
       LEFT JOIN drivers d ON o.driver_id = d.driver_id
