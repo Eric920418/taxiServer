@@ -28,6 +28,8 @@ const CATEGORY_OPTIONS = [
   { value: 'ATTRACTION', label: '景點', color: 'green' },
   { value: 'HOTEL', label: '飯店', color: 'gold' },
   { value: 'TOWNSHIP', label: '鄉鎮', color: 'default' },
+  { value: 'NIGHTLIFE', label: '夜店', color: 'magenta' },
+  { value: 'FOOD', label: '飲食', color: 'volcano' },
 ];
 
 const DISTRICT_OPTIONS = [

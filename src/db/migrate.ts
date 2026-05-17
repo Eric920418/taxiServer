@@ -26,6 +26,7 @@ const MIGRATIONS = {
   'discount-rename': '022-discount-rename.sql',                // commission_pct (%) → discount_amount (元) 全域翻轉
   'data-integrity': '023-data-integrity-triggers.sql',         // schema-level 強制 (trigger 自動清 / partial unique)
   'order-rejections': '024-create-order-rejections.sql',       // 補建 RejectionPredictor 需要的拒單記錄表
+  'landmark-categories': '025-add-landmark-categories.sql',    // landmarks.category 加 NIGHTLIFE / FOOD
 };
 
 /**

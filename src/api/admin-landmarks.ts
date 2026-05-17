@@ -34,6 +34,7 @@ router.use(authenticateAdmin);
 const VALID_CATEGORIES = [
   'TRANSPORT', 'MEDICAL', 'SCHOOL', 'COMMERCIAL',
   'GOVERNMENT', 'ATTRACTION', 'HOTEL', 'TOWNSHIP',
+  'NIGHTLIFE', 'FOOD',
 ];
 
 interface LandmarkInput {
