@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import { getFcmService } from './services/FcmService';
 
 // Socket.io實例（將由index.ts設置）
 let io: Server;
@@ -56,10 +57,19 @@ export function broadcastOrderToDrivers(order: any) {
 
   const offeredDrivers: string[] = [];
 
+  const fcm = getFcmService();
   driverSockets.forEach((socketId, driverId) => {
     io.to(socketId).emit('order:offer', order);
     console.log(`[Order] 已推播訂單 ${order.orderId} 給司機 ${driverId}`);
     offeredDrivers.push(driverId);
+
+    // 並行送 FCM（背景叫醒）— 不 await 避免阻塞 socket loop
+    fcm?.sendNewOrderToDriver(driverId, {
+      orderId: order.orderId,
+      passengerName: order.passengerName || '乘客',
+      passengerPhone: order.passengerPhone,
+      pickup: typeof order.pickup === 'string' ? order.pickup : (order.pickup?.address || '未知地點'),
+    }).catch((e: Error) => console.error('[FCM] broadcast 推播失敗:', e.message));
   });
 
   return offeredDrivers;

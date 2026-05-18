@@ -4,6 +4,7 @@ import { broadcastOrderToDrivers, broadcastOrderStatusToDrivers, notifyDriverOrd
 import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
 import { hualienAddressDB } from '../services/HualienAddressDB';
+import { getFcmService } from '../services/FcmService';
 
 import { fareConfigService } from '../services/FareConfigService';
 const router = Router();
@@ -383,6 +384,10 @@ router.post('/cancel-order', async (req, res) => {
     if (cancelledOrder.driver_id) {
       notifyDriverOrderStatus(cancelledOrder.driver_id, orderForNotification);
       console.log(`[Cancel Order] 已通知司機 ${cancelledOrder.driver_id} 訂單被取消`);
+      // FCM 並行通知（背景時也能收到）
+      const fcm = getFcmService();
+      fcm?.sendOrderCancelledToDriver(cancelledOrder.driver_id, orderId, reason)
+        .catch((e: Error) => console.error('[FCM] cancel 推播失敗:', e.message));
     } else {
       // 否則廣播給所有在線司機（訂單可能還在派單中）
       broadcastOrderStatusToDrivers(orderForNotification);

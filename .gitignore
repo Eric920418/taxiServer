@@ -5,3 +5,7 @@ dist/
 .DS_Store
 *.sqlite
 *.db
+
+# Firebase Admin SDK 服務帳號密鑰 (機密，不可進 git)
+firebase-service-account.json
+**/firebase-adminsdk-*.json

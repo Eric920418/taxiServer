@@ -40,6 +40,7 @@ import { initPhoneCallProcessor } from './services/PhoneCallProcessor';
 import { initLineMessageProcessor } from './services/LineMessageProcessor';
 import { initLineNotifier, getLineNotifier } from './services/LineNotifier';
 import { initOrderFallbackService } from './services/OrderFallbackService';
+import { initFcmService } from './services/FcmService';
 import { initScheduledOrderService } from './services/ScheduledOrderService';
 import { initSmsNotifier, getSmsNotifier } from './services/SmsNotifier';
 import { initCustomerNotificationService } from './services/CustomerNotificationService';
@@ -210,6 +211,7 @@ if (process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.LINE_CHANNEL_SECRET) {
     initLineMessageProcessor(pool);
     initLineNotifier(pool);
     initOrderFallbackService(pool);
+    initFcmService(pool);
     initScheduledOrderService(pool);
     console.log('[系統] LINE 叫車處理引擎已初始化（含預約排程）');
 

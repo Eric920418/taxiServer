@@ -12,6 +12,7 @@ import { getLineNotifier } from '../services/LineNotifier';
 import { hualienAddressDB, isWithinHualienBounds } from '../services/HualienAddressDB';
 import { getSocketIO, driverSockets, driverLocations } from '../socket';
 import { getETAService } from '../services/ETAService';
+import { getFcmService } from '../services/FcmService';
 import { fareConfigService } from '../services/FareConfigService';
 import pool from '../db/connection';
 
@@ -555,6 +556,10 @@ router.post('/cancel-order/:orderId', verifyLiffToken, async (req: LiffRequest, 
           message: 'LINE 乘客取消訂單',
         });
       }
+      // FCM 並行通知（背景時也能收到）
+      const fcm = getFcmService();
+      fcm?.sendOrderCancelledToDriver(driver_id, orderId, 'LINE 乘客取消訂單')
+        .catch((e: Error) => console.error('[FCM] cancel 推播失敗:', e.message));
     }
 
     console.log(`[LIFF] 訂單 ${orderId} 已取消`);

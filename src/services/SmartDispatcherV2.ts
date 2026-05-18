@@ -10,6 +10,7 @@
  */
 
 import { Pool } from 'pg';
+import { getFcmService } from './FcmService';
 import { Server } from 'socket.io';
 import {
   driverSockets,
@@ -617,6 +618,15 @@ export class SmartDispatcherV2 {
 
         console.log(`[SmartDispatcherV2] ✅ 推送 order:offer 給司機 ${driver.driverId} (socket: ${socketId})`);
         io.to(socketId).emit('order:offer', orderOffer);
+
+        // 並行送 FCM 給該司機（背景叫醒）
+        const fcm = getFcmService();
+        fcm?.sendNewOrderToDriver(driver.driverId, {
+          orderId: orderOffer.orderId,
+          passengerName: orderOffer.passengerName || '乘客',
+          passengerPhone: orderOffer.passengerPhone,
+          pickup: typeof orderOffer.pickup === 'string' ? orderOffer.pickup : (orderOffer.pickup?.address || '未知地點'),
+        }).catch((e: Error) => console.error('[FCM] dispatch 推播失敗:', e.message));
 
         // 記錄自動接單決策
         if (this.autoAcceptService && driver.autoAcceptScore !== undefined) {
