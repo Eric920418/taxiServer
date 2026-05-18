@@ -357,7 +357,17 @@ io.on('connection', (socket) => {
       // 通知 OrderDispatcher 有新司機上線，推送待派發訂單（舊版兼容）
       onDriverOnline(driverId);
 
-      // SmartDispatcherV2 會在派單時動態查詢在線司機，無需額外通知
+      // SmartDispatcherV2: 司機重連時 replay active 但未過期的 order:offer
+      // 解決「App 切背景 → socket 斷 → 訂單派來 → 開回 App 沒卡片」的問題
+      try {
+        const dispatcher = getSmartDispatcherV2();
+        const replayed = dispatcher.replayActiveOffersForDriver(driverId);
+        if (replayed > 0) {
+          console.log(`[Driver] ${driverId} 重連 replay ${replayed} 個 active order:offer`);
+        }
+      } catch (replayErr) {
+        console.error('[Driver] replay 失敗:', replayErr);
+      }
 
       // 檢查待派發的電話訂單（30分鐘內）
       try {

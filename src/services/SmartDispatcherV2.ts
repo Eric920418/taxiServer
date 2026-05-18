@@ -114,6 +114,10 @@ interface OrderDispatchState {
   // Queue Priority Layer：訂單 pickup 落在某 zone 時，第一批先派 queue 司機
   queueZoneId?: string;
   queueDriverIds?: string[];  // 待派 queue 司機 ID list（已排序：rebate>FIFO>距離）
+
+  // 每位司機收到的最後一次 orderOffer payload（給 socket reconnect 後 replay 用）
+  // key = driverId, value = order:offer 完整 payload
+  perDriverOffers?: Map<string, any>;
 }
 
 // ============================================
@@ -617,6 +621,9 @@ export class SmartDispatcherV2 {
         };
 
         console.log(`[SmartDispatcherV2] ✅ 推送 order:offer 給司機 ${driver.driverId} (socket: ${socketId})`);
+        // 存 payload 供 socket reconnect 時 replay
+        if (!state.perDriverOffers) state.perDriverOffers = new Map();
+        state.perDriverOffers.set(driver.driverId, orderOffer);
         io.to(socketId).emit('order:offer', orderOffer);
 
         // 並行送 FCM 給該司機（背景叫醒）
@@ -1579,6 +1586,34 @@ export class SmartDispatcherV2 {
         this.driverStatsCache.delete(key);
       }
     }
+  }
+
+  /**
+   * Socket reconnect 補發：司機重連後，重新送他 active 但未過期的 order:offer
+   * 司機 App 切背景被 Doze 殺 socket → 訂單 timeout 前回前景時找不到卡片的 fix
+   *
+   * 過濾條件：
+   *   - state.status === 'DISPATCHING' （訂單仍在派發中沒人接）
+   *   - 該司機在 perDriverOffers 內（曾被 offer 過）
+   *   - 司機沒 rejected / timeout / acceptedBy（offer 仍對他有效）
+   */
+  public replayActiveOffersForDriver(driverId: string): number {
+    const socketId = driverSockets.get(driverId);
+    if (!socketId) return 0;
+    const io = getSocketIO();
+    let replayed = 0;
+    for (const [orderId, state] of this.activeOrders.entries()) {
+      if (state.status !== 'DISPATCHING') continue;
+      if (state.acceptedBy) continue;
+      if (state.allRejectedDriverIds.has(driverId)) continue;
+      if (state.allTimedOutDriverIds.has(driverId)) continue;
+      const offer = state.perDriverOffers?.get(driverId);
+      if (!offer) continue;
+      io.to(socketId).emit('order:offer', offer);
+      console.log(`[SmartDispatcherV2] 司機 ${driverId} 重連 → replay order:offer ${orderId}`);
+      replayed++;
+    }
+    return replayed;
   }
 
   /**
