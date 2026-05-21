@@ -41,6 +41,7 @@ import { initLineMessageProcessor } from './services/LineMessageProcessor';
 import { initLineNotifier, getLineNotifier } from './services/LineNotifier';
 import { initOrderFallbackService } from './services/OrderFallbackService';
 import { initFcmService } from './services/FcmService';
+import { initOrderCleanupService } from './services/OrderCleanupService';
 import { initScheduledOrderService } from './services/ScheduledOrderService';
 import { initSmsNotifier, getSmsNotifier } from './services/SmsNotifier';
 import { initCustomerNotificationService } from './services/CustomerNotificationService';
@@ -196,6 +197,11 @@ initETAService(pool, GOOGLE_MAPS_API_KEY);
 initRejectionPredictor(pool);
 initSmartDispatcherV2(pool);
 initWhisperService();
+
+// 殭屍訂單清理 cron（每 2 分鐘掃 OFFERED >10min，自動 CANCEL 並通知乘客）
+// 修補 SmartDispatcherV2 ALL_REJECTED 把 status 留在 OFFERED 但 in-memory state 已丟棄的設計、
+// 以及 pm2 restart 留下的孤兒訂單。
+initOrderCleanupService(pool).start();
 
 // 初始化電話叫車處理管線
 try {
