@@ -54,20 +54,44 @@ export class FcmService {
     if (!this.app) return;
     const token = await this.getToken(driverId);
     if (!token) return;
+    const title = '新訂單！';
+    const body = `${order.passengerName} 在 ${order.pickup} 叫車`;
     try {
+      // 雙重 payload 確保 App 死掉時系統仍會跳通知：
+      //   - notification: OS 層級直接顯示通知欄、跳鈴聲，不需 App 活著
+      //   - data:        App 活著時自行處理（路由、振動、自訂 UI）
+      // 原本只用 data-only → Android 殺掉 App 後通知不顯示 → 司機看不到訂單
       await this.app.messaging().send({
         token,
+        notification: { title, body },
         data: {
           type: 'new_order',
-          title: '新訂單！',
-          body: `${order.passengerName} 在 ${order.pickup} 叫車`,
+          title,
+          body,
           orderId: order.orderId,
           passengerName: order.passengerName,
           passengerPhone: order.passengerPhone ?? '',
           pickup: order.pickup,
         },
-        android: { priority: 'high' as const },
-        apns: { headers: { 'apns-priority': '10' } },
+        android: {
+          priority: 'high' as const,
+          notification: {
+            channelId: 'orders',           // App 端對應建 channel + sound
+            sound: 'default',
+            priority: 'max' as const,      // heads-up 通知（懸浮顯示在頂部）
+            defaultVibrateTimings: true,
+            defaultSound: true,
+          },
+        },
+        apns: {
+          headers: { 'apns-priority': '10' },
+          payload: {
+            aps: {
+              sound: 'default',
+              contentAvailable: true,
+            },
+          },
+        },
       });
       console.log(`[FCM] new_order → ${driverId}`);
     } catch (e: any) {
