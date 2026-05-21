@@ -29,6 +29,7 @@ import { getHotZoneQuotaService, HotZoneQuotaService, ZoneCheckResult, QueueEntr
 import { isOnShift } from './ShiftChecker';
 import { queueZoneResolver } from './QueueZoneResolver';
 import { queueOrderingService } from './QueueOrderingService';
+import { fareConfigService } from './FareConfigService';
 
 // ============================================
 // 類型定義
@@ -272,7 +273,8 @@ export class SmartDispatcherV2 {
 
     // === 熱區配額檢查 ===
     let hotZoneQuota: ZoneCheckResult | undefined;
-    const estimatedFare = order.estimatedFare || 200;
+    // 用 getOrComputeFare 取代舊 `|| 200`（沒有 fare 時用 0 表示「不適用熱區加成」，不假裝有基本價）
+    const estimatedFare = this.getOrComputeFare(order) ?? 0;
     if (this.hotZoneQuotaService) {
       try {
         hotZoneQuota = await this.hotZoneQuotaService.checkZoneAndQuota(
@@ -569,10 +571,10 @@ export class SmartDispatcherV2 {
     for (const driver of selectedDrivers) {
       const socketId = driverSockets.get(driver.driverId);
       if (socketId) {
-        // 計算最終車資（含熱區加成）
-        const baseFare = state.order.estimatedFare || 200;
+        // 計算最終車資（含熱區加成）— baseFare 可能是 undefined（純電話叫車無目的地）
+        const baseFare = this.getOrComputeFare(state.order);
         const surgeMultiplier = state.hotZoneQuota?.surgeMultiplier || 1.0;
-        const finalFare = Math.round(baseFare * surgeMultiplier);
+        const finalFare = baseFare !== undefined ? Math.round(baseFare * surgeMultiplier) : undefined;
 
         const orderOffer = {
           orderId: state.order.orderId,
@@ -647,7 +649,7 @@ export class SmartDispatcherV2 {
           } as const;
           const orderFeatures = {
             pickupDistanceKm: driver.distanceKm,
-            estimatedFare: state.order.estimatedFare || 200,
+            estimatedFare: this.getOrComputeFare(state.order) ?? 0,
             tripDistanceKm: state.order.destination
               ? this.calculateDistance(state.order.pickup, state.order.destination)
               : 5,
@@ -797,7 +799,7 @@ export class SmartDispatcherV2 {
         tripDistance: order.destination
           ? this.calculateDistance(order.pickup, order.destination)
           : 5,
-        estimatedFare: order.estimatedFare || 200,
+        estimatedFare: this.getOrComputeFare(order) ?? 0,
         hourOfDay: currentHour,
         dayOfWeek: new Date().getDay(),
         isHoliday: false,
@@ -854,7 +856,7 @@ export class SmartDispatcherV2 {
         const driverFeatures: PredictionFeatures = {
           distanceToPickup: distanceKm,
           tripDistance: tripDistance,
-          estimatedFare: order.estimatedFare || 200,
+          estimatedFare: this.getOrComputeFare(order) ?? 0,
           hourOfDay: currentHour,
           dayOfWeek: new Date().getDay(),
           isHoliday: false,
@@ -870,7 +872,7 @@ export class SmartDispatcherV2 {
           {
             pickupDistanceKm: distanceKm,
             tripDistanceKm: tripDistance,
-            estimatedFare: order.estimatedFare || 200,
+            estimatedFare: this.getOrComputeFare(order) ?? 0,
             hourOfDay: currentHour,
             dayOfWeek: new Date().getDay(),
           },
@@ -1417,6 +1419,27 @@ export class SmartDispatcherV2 {
   }
 
   /**
+   * 取得訂單預估車資 — 消除舊版 `|| 200` hardcoded fallback。
+   *
+   * 優先順序：
+   *   1. order.estimatedFare（passengers.ts / line-liff.ts 已算好的，最準）
+   *   2. 用 pickup + destination 透過 fareConfigService 即時算（保底，避免上游 race condition）
+   *   3. 都沒有（無目的地的純電話叫車）→ undefined，讓司機 UI 顯示「未估算」而非假的 200
+   */
+  private getOrComputeFare(order: {
+    pickup: { lat: number; lng: number };
+    destination?: { lat: number; lng: number } | null;
+    estimatedFare?: number;
+  }): number | undefined {
+    if (order.estimatedFare && order.estimatedFare > 0) return order.estimatedFare;
+    if (order.destination) {
+      const distKm = this.calculateDistance(order.pickup, order.destination);
+      return fareConfigService.calculateFare(distKm * 1000).totalFare;
+    }
+    return undefined;
+  }
+
+  /**
    * 生成派單原因
    */
   private generateDispatchReason(components: DriverScore['components']): string {
@@ -1673,8 +1696,8 @@ export class SmartDispatcherV2 {
           // 從排隊取消
           await this.hotZoneQuotaService.dequeue(orderId);
 
-          // 消費配額
-          const estimatedFare = state.order.estimatedFare || 200;
+          // 消費配額（用 getOrComputeFare 確保有正確的 fare 值）
+          const estimatedFare = this.getOrComputeFare(state.order) ?? 0;
           await this.hotZoneQuotaService.consumeQuota(
             zoneId,
             orderId,
