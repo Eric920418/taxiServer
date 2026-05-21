@@ -50,6 +50,11 @@ interface AuthenticatedRequest extends Request {
 
 /**
  * 中介軟體：驗證管理員 JWT Token
+ *
+ * Token 來源優先順序：
+ *   1. Authorization: Bearer xxx header（API 呼叫標準）
+ *   2. ?token=xxx query param（給 <audio>/<img> 等 HTML 元素用，
+ *      因為這些 tag 無法自訂 header；admin panel 內部使用、不外洩）
  */
 export const authenticateAdmin = async (
   req: AuthenticatedRequest,
@@ -57,7 +62,9 @@ export const authenticateAdmin = async (
   next: NextFunction
 ) => {
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
+    const headerToken = req.headers.authorization?.replace('Bearer ', '');
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+    const token = headerToken || queryToken;
 
     if (!token) {
       return res.status(401).json({

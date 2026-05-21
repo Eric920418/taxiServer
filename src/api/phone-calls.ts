@@ -5,9 +5,14 @@
  */
 
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { query, queryOne, queryMany } from '../db/connection';
 import { getPhoneCallProcessor } from '../services/PhoneCallProcessor';
 import { authenticateAdmin } from './admin';
+
+// 跟 PhoneCallProcessor.recordingsBasePath 同步（Asterisk 預設）
+const RECORDINGS_BASE_PATH = process.env.RECORDINGS_PATH || '/var/spool/asterisk/recording';
 
 const router = Router();
 
@@ -324,6 +329,82 @@ router.post('/:callId/review', authenticateAdmin as any, async (req: Authenticat
   } catch (error) {
     console.error('[PhoneCalls Review] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 取得電話音檔（給 admin panel <audio> 元素用）
+ * GET /api/phone-calls/:callId/audio[?token=xxx]
+ *
+ * 支援 HTTP Range request（讓 audio 元素可以 seek）。
+ * Token 可走 Bearer header 或 ?token= query param —
+ * <audio> 標籤無法自訂 header，必須走 query param（admin 內部 page 用、不外洩）。
+ *
+ * 檔案名 fallback 跟 PhoneCallProcessor.downloadRecording() 一致：
+ *   1. {callId}-caller.wav（Asterisk 客人專屬音軌）
+ *   2. {callId}.wav（混合音軌）
+ *   3. {callId}.m4a（備用格式）
+ */
+router.get('/:callId/audio', authenticateAdmin as any, async (req: AuthenticatedRequest, res: Response) => {
+  const { callId } = req.params;
+
+  // 防 path traversal：callId 只能含英數、底線、連字號
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(callId)) {
+    return res.status(400).json({ error: 'INVALID_CALL_ID' });
+  }
+
+  // 確認 DB 真的有這筆紀錄
+  const call = await queryOne(
+    'SELECT call_id, recording_url FROM phone_calls WHERE call_id = $1',
+    [callId]
+  );
+  if (!call) {
+    return res.status(404).json({ error: '電話記錄不存在' });
+  }
+
+  // 找實體檔案（caller 音軌優先、退回混合音軌、再退 m4a）
+  const candidates = [
+    path.join(RECORDINGS_BASE_PATH, path.basename(`${callId}-caller.wav`)),
+    path.join(RECORDINGS_BASE_PATH, path.basename(`${callId}.wav`)),
+    path.join(RECORDINGS_BASE_PATH, path.basename(`${callId}.m4a`)),
+  ];
+  const audioPath = candidates.find(p => fs.existsSync(p));
+  if (!audioPath) {
+    return res.status(404).json({ error: '該通電話沒有錄音檔' });
+  }
+
+  const ext = path.extname(audioPath).toLowerCase();
+  const contentType = ext === '.m4a' ? 'audio/mp4' : 'audio/wav';
+
+  // Range request 支援（讓 audio 元素可 seek）
+  const stat = fs.statSync(audioPath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+    if (!match) {
+      return res.status(416).json({ error: 'INVALID_RANGE' });
+    }
+    const start = parseInt(match[1], 10);
+    const end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+    if (start >= fileSize || end >= fileSize || start > end) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).json({ error: 'RANGE_NOT_SATISFIABLE' });
+    }
+    const chunkSize = end - start + 1;
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Length', String(chunkSize));
+    res.setHeader('Content-Type', contentType);
+    fs.createReadStream(audioPath, { start, end }).pipe(res);
+  } else {
+    res.status(200);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Length', String(fileSize));
+    res.setHeader('Content-Type', contentType);
+    fs.createReadStream(audioPath).pipe(res);
   }
 });
 

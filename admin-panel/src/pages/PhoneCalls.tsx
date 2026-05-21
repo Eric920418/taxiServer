@@ -28,6 +28,7 @@ import {
   CloseCircleOutlined,
   ExclamationCircleOutlined,
   SoundOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
 import { phoneCallAPI } from '../services/api';
 import dayjs from 'dayjs';
@@ -461,18 +462,38 @@ const PhoneCalls: React.FC = () => {
               </Card>
             )}
 
-            {/* 錄音播放 */}
-            {selectedRecord.recordingUrl && (
-              <Card size="small" title={<><SoundOutlined /> 錄音播放</>}>
-                <audio
-                  controls
-                  style={{ width: '100%' }}
-                  src={selectedRecord.recordingUrl}
+            {/* 錄音播放 — 走 backend stream endpoint，audio 元素無法帶 header
+                所以 token 走 ?token= query param（admin 內部 page、不外洩） */}
+            <Card
+              size="small"
+              title={<><SoundOutlined /> 錄音播放（聽客人原音）</>}
+              extra={
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  href={`/api/phone-calls/${selectedRecord.callId}/audio?token=${encodeURIComponent(localStorage.getItem('admin_token') || '')}`}
+                  download={`${selectedRecord.callId}.wav`}
+                  target="_blank"
                 >
-                  瀏覽器不支援音訊播放
-                </audio>
-              </Card>
-            )}
+                  下載
+                </Button>
+              }
+            >
+              <audio
+                controls
+                preload="metadata"
+                style={{ width: '100%' }}
+                src={`/api/phone-calls/${selectedRecord.callId}/audio?token=${encodeURIComponent(localStorage.getItem('admin_token') || '')}`}
+                onError={(e) => {
+                  console.warn('[PhoneCalls] 音檔載入失敗:', (e.target as HTMLAudioElement).error);
+                }}
+              >
+                瀏覽器不支援音訊播放
+              </audio>
+              <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                找不到音檔？檢查 server `/var/spool/asterisk/recording/{selectedRecord.callId}.wav` 是否存在
+              </div>
+            </Card>
 
             {/* 逐字稿 */}
             {selectedRecord.transcript && (
