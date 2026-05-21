@@ -174,10 +174,20 @@ router.post('/join', async (req: Request, res: Response) => {
       [driver_id, zone_id, effectiveMaxDiscount]
     );
 
+    // 7. 計算順位（同 zone 內 ACTIVE、joined_at 比自己早的數量 + 1）
+    //    跟 /my-status 邏輯一致，前端拿到後可立即顯示「排班 #3」不用再呼叫一次 my-status
+    const positionRes = await pool.query(
+      `SELECT COUNT(*)::int + 1 AS position
+       FROM queue_entries
+       WHERE zone_id = $1 AND status = 'ACTIVE' AND joined_at < $2`,
+      [zone_id, insertRes.rows[0].joined_at]
+    );
+
     res.status(201).json({
       success: true,
       entry_id: insertRes.rows[0].entry_id,
       joined_at: insertRes.rows[0].joined_at,
+      position: positionRes.rows[0].position,
     });
   } catch (e: any) {
     console.error('[Queue] join 錯誤:', e);
