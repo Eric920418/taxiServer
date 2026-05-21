@@ -17,6 +17,8 @@ export interface ZoneCacheEntry {
   center_lat: number;
   center_lng: number;
   radius_meters: number;
+  /** SERIAL = 嚴格排班順位（一次一人 15s）；PARALLEL = 批次推播（先按先贏）。Migration 026 加。 */
+  dispatch_mode: 'SERIAL' | 'PARALLEL';
 }
 
 class QueueZoneResolverImpl {
@@ -30,7 +32,8 @@ class QueueZoneResolverImpl {
   async refresh(): Promise<void> {
     try {
       const result = await pool.query(
-        `SELECT zone_id, name, center_lat, center_lng, radius_meters
+        `SELECT zone_id, name, center_lat, center_lng, radius_meters,
+                COALESCE(dispatch_mode, 'PARALLEL') AS dispatch_mode
          FROM queue_zones
          WHERE is_active = true`
       );
@@ -40,6 +43,7 @@ class QueueZoneResolverImpl {
         center_lat: parseFloat(r.center_lat),
         center_lng: parseFloat(r.center_lng),
         radius_meters: r.radius_meters,
+        dispatch_mode: (r.dispatch_mode === 'SERIAL' ? 'SERIAL' : 'PARALLEL') as 'SERIAL' | 'PARALLEL',
       }));
       this.lastRefreshAt = Date.now();
       console.log(`[QueueZoneResolver] 載入 ${this.zones.length} 個 active zones`);

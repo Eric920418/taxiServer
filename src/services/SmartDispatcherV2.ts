@@ -115,6 +115,8 @@ interface OrderDispatchState {
   // Queue Priority Layer：訂單 pickup 落在某 zone 時，第一批先派 queue 司機
   queueZoneId?: string;
   queueDriverIds?: string[];  // 待派 queue 司機 ID list（已排序：rebate>FIFO>距離）
+  // SERIAL = 嚴格排班順位（一次推 1 位、15s timeout）；PARALLEL = 批次推（BATCH_SIZE 位、20s）
+  queueDispatchMode?: 'SERIAL' | 'PARALLEL';
 
   // 每位司機收到的最後一次 orderOffer payload（給 socket reconnect 後 replay 用）
   // key = driverId, value = order:offer 完整 payload
@@ -128,7 +130,8 @@ interface OrderDispatchState {
 const CONFIG = {
   // 分層派單設定
   BATCH_SIZE: 3,
-  BATCH_TIMEOUT_MS: 20_000,           // 20 秒
+  BATCH_TIMEOUT_MS: 20_000,           // 20 秒（PARALLEL / 評分制）
+  BATCH_TIMEOUT_MS_SERIAL: 15_000,    // 15 秒（SERIAL 排班順位制，一位一位推、較短逾時換下一位）
   MAX_BATCHES: 5,
   ORDER_TOTAL_TIMEOUT_MS: 300_000,    // 5 分鐘
 
@@ -366,6 +369,7 @@ export class SmartDispatcherV2 {
     // ============================================
     let queueZoneId: string | undefined;
     let queueDriverIds: string[] | undefined;
+    let queueDispatchMode: 'SERIAL' | 'PARALLEL' = 'PARALLEL';
     try {
       const zone = await queueZoneResolver.resolveZone(order.pickup.lat, order.pickup.lng);
       if (zone) {
@@ -379,7 +383,8 @@ export class SmartDispatcherV2 {
         if (candidates.length > 0) {
           queueZoneId = zone.zone_id;
           queueDriverIds = candidates.map(c => c.driver_id);
-          console.log(`[QueuePriority] 訂單 ${order.orderId} 落在 zone "${zone.name}"，使用 ${queueDriverIds.length} 位 queue 司機`);
+          queueDispatchMode = zone.dispatch_mode;
+          console.log(`[QueuePriority] 訂單 ${order.orderId} 落在 zone "${zone.name}" (${queueDispatchMode})，使用 ${queueDriverIds.length} 位 queue 司機`);
           // 標記 orders 表 dispatch_type='QUEUE'
           await this.pool.query(
             `UPDATE orders SET dispatch_type = 'QUEUE', dispatched_from_zone = $1 WHERE order_id = $2`,
@@ -407,6 +412,7 @@ export class SmartDispatcherV2 {
       hotZoneQuota,
       queueZoneId,
       queueDriverIds,
+      queueDispatchMode,
     };
 
     this.activeOrders.set(order.orderId, state);
@@ -468,14 +474,19 @@ export class SmartDispatcherV2 {
     // queue 全部派完/全拒/全超時 → state.queueDriverIds 變空 → 自然 fallback 評分派遣
     // ============================================
     let selectedDrivers: DriverScore[] = [];
+    let batchIsSerial = false;  // 本批是否走 SERIAL 順位模式（決定 timeout 用 15s 還 20s）
     if (state.queueDriverIds && state.queueDriverIds.length > 0) {
+      // SERIAL 模式：每批只推 1 位（嚴格順位），PARALLEL 模式：推 BATCH_SIZE 位
+      const isSerial = state.queueDispatchMode === 'SERIAL';
+      const queueSliceSize = isSerial ? 1 : CONFIG.BATCH_SIZE;
+
       // 取下一批 queue 司機（已排序好，不再評分）
       const queueBatch = state.queueDriverIds
         .filter(id => !excludeDrivers.has(id))
-        .slice(0, CONFIG.BATCH_SIZE);
+        .slice(0, queueSliceSize);
 
       if (queueBatch.length > 0) {
-        console.log(`[SmartDispatcherV2] 第 ${batchNumber} 批走 Queue 模式（zone=${state.queueZoneId}, 候選 ${queueBatch.length} 位）`);
+        console.log(`[SmartDispatcherV2] 第 ${batchNumber} 批走 Queue 模式 (${isSerial ? 'SERIAL' : 'PARALLEL'}, zone=${state.queueZoneId}, 候選 ${queueBatch.length} 位)`);
         // 把 queue 司機 ID 包成 DriverScore 結構（部分欄位用預設）
         // 簡化：直接 query 補齊必要欄位
         const driverDetails = await this.pool.query(
@@ -511,6 +522,8 @@ export class SmartDispatcherV2 {
             return score;
           })
           .filter((x): x is DriverScore => x !== null);
+
+        batchIsSerial = isSerial;  // 標記本批用 SERIAL 模式，後面 timeout 採 15s
 
         // 從 queueDriverIds 移除本批已派的
         state.queueDriverIds = state.queueDriverIds.filter(id => !queueBatch.includes(id));
@@ -565,8 +578,10 @@ export class SmartDispatcherV2 {
     await this.logDispatchDecision(orderId, batchNumber, selectedDrivers);
 
     // 推送訂單給選中的司機
+    // SERIAL queue batch 用較短 timeout（15s）讓沒接的快速換下一位，PARALLEL/評分制用 20s
+    const batchTimeoutMs = batchIsSerial ? CONFIG.BATCH_TIMEOUT_MS_SERIAL : CONFIG.BATCH_TIMEOUT_MS;
     const io = getSocketIO();
-    const responseDeadline = Date.now() + CONFIG.BATCH_TIMEOUT_MS;
+    const responseDeadline = Date.now() + batchTimeoutMs;
 
     for (const driver of selectedDrivers) {
       const socketId = driverSockets.get(driver.driverId);
@@ -673,14 +688,14 @@ export class SmartDispatcherV2 {
       dispatchStatus: 'SEARCHING',
       currentBatch: batchNumber,
       offeredToCount: state.allOfferedDriverIds.size,
-      estimatedWaitTime: CONFIG.BATCH_TIMEOUT_MS / 1000,
+      estimatedWaitTime: batchTimeoutMs / 1000,
       message: `正在尋找司機 (第 ${batchNumber} 批)...`,
     });
 
-    // 設置批次超時
+    // 設置批次超時（SERIAL queue batch 15s, 其他 20s）
     state.batchTimeoutTimer = setTimeout(
       () => this.handleBatchTimeout(orderId, batchNumber),
-      CONFIG.BATCH_TIMEOUT_MS
+      batchTimeoutMs
     );
 
     return batchResult;

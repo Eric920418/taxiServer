@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Table, Button, Modal, Form, Input, InputNumber, Tag, Space, Popconfirm, Switch,
-  App as AntdApp, Typography, Slider, Row, Col,
+  App as AntdApp, Typography, Slider, Row, Col, Select,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import GoogleMapsPicker, { type GoogleMapsPickerChange } from '../components/GoogleMapsPicker';
@@ -56,6 +56,7 @@ const QueueZones: React.FC = () => {
       zone_id: generateZoneId(),
       radius_meters: 1000,
       is_active: true,
+      dispatch_mode: 'PARALLEL',  // 預設 PARALLEL（批次推播，向下相容）
     });
     setFormLat(null);
     setFormLng(null);
@@ -131,6 +132,15 @@ const QueueZones: React.FC = () => {
         `${parseFloat(row.center_lat as string).toFixed(5)}, ${parseFloat(row.center_lng as string).toFixed(5)}`,
     },
     { title: '半徑', dataIndex: 'radius_meters', width: 90, render: (v: number) => `${v} m` },
+    {
+      title: '派單模式',
+      dataIndex: 'dispatch_mode',
+      width: 110,
+      render: (v: string) =>
+        v === 'SERIAL'
+          ? <Tag color="purple">嚴格順位</Tag>
+          : <Tag color="blue">批次推播</Tag>,
+    },
     {
       title: '當前排班',
       dataIndex: 'active_drivers',
@@ -228,6 +238,20 @@ const QueueZones: React.FC = () => {
           </Form.Item>
 
 
+
+          <Form.Item
+            label="派單模式"
+            name="dispatch_mode"
+            tooltip="嚴格順位：訂單一次只推給 #1 司機，15s 沒接才推 #2（公平排班）。批次推播：訂單同時推給所有 queue 司機，先按先贏（原本行為）。"
+            rules={[{ required: true }]}
+          >
+            <Select
+              options={[
+                { value: 'PARALLEL', label: '批次推播（先按先贏，原本行為）' },
+                { value: 'SERIAL', label: '嚴格順位（一次一人 15s，公平排班）' },
+              ]}
+            />
+          </Form.Item>
 
           <Form.Item label="啟用" name="is_active" valuePropName="checked">
             <Switch />

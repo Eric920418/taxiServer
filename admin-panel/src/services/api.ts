@@ -606,6 +606,8 @@ export interface QueueZone {
   center_lng: number | string;
   radius_meters: number;
   is_active: boolean;
+  /** Migration 026 加：SERIAL=嚴格順位、PARALLEL=批次推播（先按先贏） */
+  dispatch_mode?: 'SERIAL' | 'PARALLEL';
   active_drivers?: number;  // GET 列表時有
   created_at?: string;
   updated_at?: string;

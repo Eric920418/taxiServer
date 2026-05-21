@@ -25,6 +25,8 @@ interface ZoneInput {
   center_lng?: number;
   radius_meters?: number;
   is_active?: boolean;
+  /** SERIAL = 嚴格排班順位（一次一人 15s）, PARALLEL = 批次推（誰按快誰拿）。Migration 026 加。 */
+  dispatch_mode?: 'SERIAL' | 'PARALLEL';
 }
 
 function validate(input: ZoneInput, isCreate: boolean): string | null {
@@ -53,6 +55,9 @@ function validate(input: ZoneInput, isCreate: boolean): string | null {
       return '半徑須為 50-5000 公尺';
     }
   }
+  if (input.dispatch_mode !== undefined && !['SERIAL', 'PARALLEL'].includes(input.dispatch_mode)) {
+    return 'dispatch_mode 必須是 SERIAL 或 PARALLEL';
+  }
   return null;
 }
 
@@ -64,6 +69,7 @@ router.get('/', async (req: AuthedRequest, res: Response) => {
     const result = await pool.query(
       `SELECT z.zone_id, z.name, z.center_lat, z.center_lng, z.radius_meters,
               z.is_active, z.created_at, z.updated_at,
+              COALESCE(z.dispatch_mode, 'PARALLEL') AS dispatch_mode,
               COALESCE((
                 SELECT COUNT(*) FROM queue_entries qe
                 WHERE qe.zone_id = z.zone_id AND qe.status = 'ACTIVE'
@@ -111,8 +117,8 @@ router.post(
       }
 
       await pool.query(
-        `INSERT INTO queue_zones (zone_id, name, center_lat, center_lng, radius_meters, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO queue_zones (zone_id, name, center_lat, center_lng, radius_meters, is_active, dispatch_mode)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           input.zone_id,
           input.name,
@@ -120,6 +126,7 @@ router.post(
           input.center_lng,
           input.radius_meters,
           input.is_active !== false,
+          input.dispatch_mode ?? 'PARALLEL',
         ]
       );
       res.status(201).json({ success: true, message: 'Zone 已建立' });
@@ -148,6 +155,7 @@ router.put(
         center_lng: input.center_lng,
         radius_meters: input.radius_meters,
         is_active: input.is_active,
+        dispatch_mode: input.dispatch_mode,
       };
       for (const [col, val] of Object.entries(fieldMap)) {
         if (val !== undefined) {
