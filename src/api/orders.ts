@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
-import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations } from '../socket';
+import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations, passengerSockets } from '../socket';
 import { getETAService } from '../services/ETAService';
 import {
   registerOrder,
@@ -1058,6 +1058,113 @@ router.post('/:orderId/notify-waiting', async (req, res) => {
  * 副作用：
  *   - LineNotifier.notifyRequestRelocation 推播 Flex card + LIFF deep link
  */
+/**
+ * 司機聯絡客人（找不到人時用）
+ * POST /api/orders/:orderId/contact-passenger
+ *
+ * Body: { driverId: string, message: string, preset?: string }
+ *
+ * 依訂單 source 自動選通道：
+ *   - 'APP'   → 推 socket event 'passenger:driver_message' 給乘客 socket
+ *   - 'LINE'  → LineNotifier.pushTextMessage 推到客人 LINE
+ *   - 'PHONE' → 回 passengerPhone 給 client，App 端用 tel: 撥號
+ *
+ * Auth: 驗證 driverId === orders.driver_id（基本確保只有承接該訂單的司機能聯絡乘客）。
+ * 跟既有 PATCH /:orderId/status 同樣的信任模型（無 JWT、靠 driverId match）。
+ *
+ * 回傳 { success, channel, passengerPhone?, message?, error? }
+ *   - channel = 'APP' | 'LINE' | 'TEL'
+ *   - TEL channel 必帶 passengerPhone 讓 client 撥號
+ *   - 失敗回 4xx + error
+ */
+router.post('/:orderId/contact-passenger', async (req, res) => {
+  const { orderId } = req.params;
+  const { driverId, message, preset } = (req.body || {}) as { driverId?: string; message?: string; preset?: string };
+
+  if (!driverId) return res.status(400).json({ success: false, error: '缺少 driverId' });
+  if (!message || !message.trim()) return res.status(400).json({ success: false, error: '訊息不可空白' });
+  if (message.length > 200) return res.status(400).json({ success: false, error: '訊息最長 200 字' });
+
+  try {
+    const order = await queryOne(
+      `SELECT order_id, source, line_user_id, passenger_id, passenger_phone, driver_id, status
+       FROM orders WHERE order_id = $1`,
+      [orderId]
+    );
+    if (!order) return res.status(404).json({ success: false, error: '訂單不存在' });
+    if (order.driver_id !== driverId) {
+      return res.status(403).json({ success: false, error: '此訂單非您承接' });
+    }
+
+    const source = String(order.source || 'APP').toUpperCase();
+    const prefixed = `【司機訊息】${message.trim()}`;
+    console.log(`[Order/Contact] 司機 ${driverId} 聯絡客人 (orderId=${orderId}, source=${source}, preset=${preset || '-'})`);
+
+    // ===== PHONE 客人：沒 app 沒 LINE，回電話讓 App 端撥號 =====
+    if (source === 'PHONE') {
+      if (!order.passenger_phone) {
+        return res.status(422).json({ success: false, channel: 'TEL', error: '客人電話不存在、無法聯絡' });
+      }
+      return res.json({
+        success: true,
+        channel: 'TEL',
+        passengerPhone: order.passenger_phone,
+        message: `請撥打客人電話 ${order.passenger_phone}`,
+      });
+    }
+
+    // ===== LINE 客人：透過 LINE Bot 推文字訊息 =====
+    if (source === 'LINE') {
+      if (!order.line_user_id) {
+        return res.status(422).json({ success: false, channel: 'LINE', error: '客人無 LINE userId、無法推訊息' });
+      }
+      const ln = getLineNotifier();
+      if (!ln) {
+        return res.status(503).json({ success: false, error: 'LINE 服務未啟用' });
+      }
+      try {
+        await ln.pushTextMessage(order.line_user_id, prefixed);
+        return res.json({
+          success: true,
+          channel: 'LINE',
+          message: '已透過 LINE 通知客人',
+        });
+      } catch (e: any) {
+        console.error(`[Order/Contact] LINE push 失敗 (${orderId}):`, e.message);
+        return res.status(502).json({ success: false, channel: 'LINE', error: `LINE 推播失敗：${e.message}` });
+      }
+    }
+
+    // ===== APP 客人：socket emit 給乘客 =====
+    const socketId = passengerSockets.get(order.passenger_id);
+    if (!socketId) {
+      // 客人 socket 不在線 — 回失敗讓 App 提示司機改打電話
+      return res.status(422).json({
+        success: false,
+        channel: 'APP',
+        passengerPhone: order.passenger_phone,  // 退路給司機撥號
+        error: '客人不在線，可改撥電話聯絡',
+      });
+    }
+    const io = getSocketIO();
+    io.to(socketId).emit('passenger:driver_message', {
+      orderId,
+      driverId,
+      message: prefixed,
+      preset: preset || null,
+      timestamp: Date.now(),
+    });
+    return res.json({
+      success: true,
+      channel: 'APP',
+      message: '已透過 App 訊息通知客人',
+    });
+  } catch (e: any) {
+    console.error(`[Order/Contact] 失敗 (${orderId}):`, e);
+    res.status(500).json({ success: false, error: e.message || 'INTERNAL_ERROR' });
+  }
+});
+
 router.post('/:orderId/request-relocation', async (req, res) => {
   const { orderId } = req.params;
   const { driverId } = req.body;

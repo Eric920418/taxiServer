@@ -266,6 +266,20 @@ export class LineNotifier {
     }
   }
 
+  /**
+   * 推一則純文字訊息給特定 LINE 用戶（司機聯絡客人用）
+   * 不查訂單、caller 提供 lineUserId 即可
+   */
+  async pushTextMessage(lineUserId: string, text: string): Promise<void> {
+    if (!lineUserId) throw new Error('lineUserId required');
+    if (!text || !text.trim()) throw new Error('text required');
+    await this.lineClient.pushMessage({
+      to: lineUserId,
+      messages: [{ type: 'text', text }],
+    });
+    console.log(`[LineNotifier] 推文字訊息給 ${lineUserId}: ${text.slice(0, 40)}...`);
+  }
+
   private formatDateTime(date: Date): string {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, '0');
