@@ -16,6 +16,7 @@ import { getLineNotifier } from '../services/LineNotifier';
 import { getCustomerNotificationService } from '../services/CustomerNotificationService';
 import { fareConfigService } from '../services/FareConfigService';
 import { getBillingService } from '../services/BillingService';
+import { queueZoneResolver } from '../services/QueueZoneResolver';
 
 // 有效的拒單原因（強制選擇）
 const VALID_REJECTION_REASONS = [
@@ -740,49 +741,77 @@ router.patch('/:orderId/status', async (req, res) => {
       );
     }
 
-    // [Cap 3] 司機接完訂單自動回排班：若仍在 dispatched_from_zone 範圍內，重新加入排班
-    if (status === 'DONE' && updatedOrder.driver_id && updatedOrder.dispatched_from_zone) {
+    // [Cap 3 v2] 訂單完成 → 依司機當前 GPS 重新評估 queue zone（方案 B）
+    //   1. 仍在原 ACTIVE zone → 不動（保留順位）
+    //   2. 跨到新 zone Y → LEFT 舊 entry + INSERT 新 ACTIVE at Y
+    //   3. 不在任何 zone → LEFT 舊 entry（如殘留 ACTIVE）
+    //   4. 沒 GPS → 跳過 log
+    // 取代舊 Cap 3「只 re-queue 同 zone」邏輯，補強跨 zone 場景。
+    if (status === 'DONE' && updatedOrder.driver_id) {
       try {
-        const zoneInfo = await queryOne(
-          `SELECT zone_id, center_lat, center_lng, radius_meters
-           FROM queue_zones WHERE zone_id = $1 AND is_active = true`,
-          [updatedOrder.dispatched_from_zone]
-        );
-        const driverLoc = await queryOne(
+        const realtime = driverLocations.get(updatedOrder.driver_id);
+        const driverDb = await queryOne(
           `SELECT current_lat, current_lng, max_acceptable_discount_amount
            FROM drivers WHERE driver_id = $1`,
           [updatedOrder.driver_id]
         );
-        if (zoneInfo && driverLoc && driverLoc.current_lat && driverLoc.current_lng) {
-          // Haversine 計算距離
-          const toRad = (n: number) => (n * Math.PI) / 180;
-          const R = 6371000;
-          const dLat = toRad(Number(driverLoc.current_lat) - Number(zoneInfo.center_lat));
-          const dLng = toRad(Number(driverLoc.current_lng) - Number(zoneInfo.center_lng));
-          const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(toRad(Number(zoneInfo.center_lat))) *
-            Math.cos(toRad(Number(driverLoc.current_lat))) *
-            Math.sin(dLng / 2) ** 2;
-          const dist = 2 * R * Math.asin(Math.sqrt(a));
-          if (dist <= Number(zoneInfo.radius_meters)) {
-            const requeue = await query(
-              `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount, status)
-               VALUES ($1, $2, $3, 'ACTIVE')
-               ON CONFLICT DO NOTHING
-               RETURNING entry_id`,
-              [updatedOrder.driver_id, zoneInfo.zone_id, driverLoc.max_acceptable_discount_amount ?? 0]
-            );
-            if (requeue.rows.length > 0) {
-              console.log(`[Order] 司機 ${updatedOrder.driver_id} 接完單自動回 ${zoneInfo.zone_id} 排班 (距離 ${Math.round(dist)}m, entry_id=${requeue.rows[0].entry_id})`);
+        const lat = realtime?.lat ?? (driverDb?.current_lat ? parseFloat(driverDb.current_lat) : null);
+        const lng = realtime?.lng ?? (driverDb?.current_lng ? parseFloat(driverDb.current_lng) : null);
+
+        if (lat == null || lng == null) {
+          console.log(`[Order] 司機 ${updatedOrder.driver_id} 無 GPS，跳過 auto-requeue`);
+        } else {
+          const currentZone = await queueZoneResolver.resolveZone(lat, lng);
+          const existing = await queryOne(
+            `SELECT entry_id, zone_id FROM queue_entries
+             WHERE driver_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+            [updatedOrder.driver_id]
+          );
+          const discountAmt = driverDb?.max_acceptable_discount_amount ?? 0;
+
+          if (currentZone) {
+            if (existing && existing.zone_id === currentZone.zone_id) {
+              // case 1: 仍在原 ACTIVE zone → 不動
+              console.log(`[Order] 司機 ${updatedOrder.driver_id} 完成訂單後仍在 ${currentZone.zone_id} 排班，維持`);
             } else {
-              console.log(`[Order] 司機 ${updatedOrder.driver_id} 已在排班，跳過自動 re-queue`);
+              if (existing) {
+                // case 2 part 1: 跨 zone → LEFT 舊 entry
+                await query(
+                  `UPDATE queue_entries
+                   SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
+                   WHERE entry_id = $2`,
+                  ['AUTO_TRIP_DONE_ZONE_CHANGED', existing.entry_id]
+                );
+              }
+              // case 2 part 2 / 新加入：INSERT ACTIVE at currentZone
+              const requeue = await query(
+                `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount, status)
+                 VALUES ($1, $2, $3, 'ACTIVE')
+                 ON CONFLICT DO NOTHING RETURNING entry_id`,
+                [updatedOrder.driver_id, currentZone.zone_id, discountAmt]
+              );
+              if (requeue.rows.length > 0) {
+                const note = existing
+                  ? `跨 zone 從 ${existing.zone_id} → ${currentZone.zone_id}`
+                  : `自動加入 ${currentZone.zone_id}`;
+                console.log(`[Order] 司機 ${updatedOrder.driver_id} ${note}（entry_id=${requeue.rows[0].entry_id}）`);
+              }
             }
           } else {
-            console.log(`[Order] 司機 ${updatedOrder.driver_id} 已離開排班區 ${zoneInfo.zone_id} (${Math.round(dist)}m > ${zoneInfo.radius_meters}m)，不自動回排班`);
+            // case 3: 不在任何 zone → 退出殘留 ACTIVE
+            if (existing) {
+              await query(
+                `UPDATE queue_entries
+                 SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
+                 WHERE entry_id = $2`,
+                ['AUTO_OUT_OF_ZONE_AFTER_TRIP', existing.entry_id]
+              );
+              console.log(`[Order] 司機 ${updatedOrder.driver_id} 完成訂單後不在任何 zone，已退出 ${existing.zone_id}`);
+            }
           }
         }
       } catch (e: any) {
-        console.error(`[Order] 自動回排班失敗（不影響訂單完成）:`, e.message);
+        console.error(`[Order] auto-requeue 失敗（不影響訂單完成）:`, e.message);
       }
     }
 
