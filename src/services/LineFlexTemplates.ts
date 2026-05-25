@@ -640,7 +640,8 @@ export function driverAcceptedCard(
 export function driverArrivedCard(
   driverName: string,
   plate: string,
-  pickupAddress: string
+  pickupAddress: string,
+  driverPhone?: string,
 ): FlexMessage {
   const bubble: FlexBubble = {
     type: 'bubble',
@@ -685,6 +686,17 @@ export function driverArrivedCard(
                 { type: 'text', text: driverName, size: 'md', color: '#333333', flex: 5 },
               ],
             },
+            // 司機電話（給客人回撥用，找不到人時可直接打）
+            ...(driverPhone ? [{
+              type: 'box' as const,
+              layout: 'horizontal' as const,
+              margin: 'sm' as const,
+              action: { type: 'uri' as const, label: '撥打司機', uri: `tel:${driverPhone}` },
+              contents: [
+                { type: 'text' as const, text: '電話', size: 'sm' as const, color: '#999999' as const, flex: 2 },
+                { type: 'text' as const, text: `📞 ${driverPhone}`, size: 'md' as const, color: '#1976D2' as const, weight: 'bold' as const, flex: 5 },
+              ],
+            }] : []),
             {
               type: 'box',
               layout: 'vertical',

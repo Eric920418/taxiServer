@@ -930,6 +930,7 @@ router.patch('/:orderId/status', async (req, res) => {
         cns.notifyDriverArrived(orderId, {
           driverName: fullOrder.driver_name,
           plate: fullOrder.plate,
+          driverPhone: fullOrder.driver_phone,
           pickupAddress: fullOrder.pickup_address,
         }).catch((err: Error) => console.error('[Order] CustomerNotification 失敗:', err));
       } else {

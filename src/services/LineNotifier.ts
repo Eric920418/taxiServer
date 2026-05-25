@@ -31,7 +31,7 @@ export class LineNotifier {
   async notifyOrderStatusChange(
     orderId: string,
     newStatus: string,
-    extraData?: { fare?: number; driverName?: string; plate?: string; etaMinutes?: number; reason?: string }
+    extraData?: { fare?: number; driverName?: string; plate?: string; driverPhone?: string; etaMinutes?: number; reason?: string }
   ): Promise<void> {
     try {
       // 查詢訂單的 line_user_id
@@ -74,10 +74,11 @@ export class LineNotifier {
           let driverName = extraData?.driverName || '司機';
           let plate = extraData?.plate || '';
           let pickupAddress = '';
+          let driverPhone = extraData?.driverPhone || '';
 
-          // 查詢訂單詳細資料（司機資訊 + 上車地址）
+          // 查詢訂單詳細資料（司機資訊 + 上車地址 + 司機電話）
           const detail = await this.pool.query(
-            `SELECT d.name AS driver_name, d.plate AS driver_plate, o.pickup_address
+            `SELECT d.name AS driver_name, d.plate AS driver_plate, d.phone AS driver_phone, o.pickup_address
              FROM orders o
              LEFT JOIN drivers d ON o.driver_id = d.driver_id
              WHERE o.order_id = $1`,
@@ -87,9 +88,10 @@ export class LineNotifier {
             driverName = extraData?.driverName || detail.rows[0].driver_name || driverName;
             plate = extraData?.plate || detail.rows[0].driver_plate || plate;
             pickupAddress = detail.rows[0].pickup_address || '';
+            driverPhone = extraData?.driverPhone || detail.rows[0].driver_phone || driverPhone;
           }
 
-          message = templates.driverArrivedCard(driverName, plate, pickupAddress);
+          message = templates.driverArrivedCard(driverName, plate, pickupAddress, driverPhone);
           break;
         }
 

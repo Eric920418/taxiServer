@@ -27,6 +27,7 @@ export type NotificationChannel = 'LINE' | 'SMS';
 export interface NotifyContext {
   driverName?: string;
   plate?: string;
+  driverPhone?: string;  // ARRIVED 通知含此電話讓客人回撥
   etaMinutes?: number;
   pickupAddress?: string;
   reason?: string;
@@ -66,6 +67,7 @@ export class CustomerNotificationService {
       () => this.line.notifyOrderStatusChange(orderId, 'ARRIVED', {
         driverName: ctx.driverName,
         plate: ctx.plate,
+        driverPhone: ctx.driverPhone,
       }),
       this.smsTemplate('DRIVER_ARRIVED', ctx),
     );
@@ -285,8 +287,10 @@ export class CustomerNotificationService {
       case 'DRIVER_ACCEPTED':
         return `【大豐計程車】${ctx.driverName ?? '司機'}車牌${ctx.plate ?? ''}已接單，約${ctx.etaMinutes ?? '?'}分鐘到。客服${cs}`;
 
-      case 'DRIVER_ARRIVED':
-        return `【大豐計程車】${ctx.driverName ?? '司機'}車牌${ctx.plate ?? ''}已抵達上車點，請出來搭車`;
+      case 'DRIVER_ARRIVED': {
+        const phoneNote = ctx.driverPhone ? `，司機電話${ctx.driverPhone}` : '';
+        return `【大豐計程車】${ctx.driverName ?? '司機'}車牌${ctx.plate ?? ''}已抵達上車點，請出來搭車${phoneNote}`;
+      }
 
       case 'DISPATCH_FAILED':
         return `【大豐計程車】抱歉目前無司機可接單，請稍後再試或致電客服${cs}`;
