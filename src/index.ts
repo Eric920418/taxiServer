@@ -68,6 +68,16 @@ const PORT = process.env.PORT || 3000;
 const liffPath = path.join(__dirname, '../public/liff');
 app.use('/liff', express.static(liffPath));
 
+// 上傳檔案靜態 serve — 模組 4 no-show 拍照存證 + 未來模組 5 SOS Flex card 用
+// 路徑：/uploads/no_show/{orderId}-{ts}.jpg
+const uploadsPath = path.join(__dirname, '../public/uploads');
+app.use('/uploads', express.static(uploadsPath, {
+  maxAge: '7d',
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'public, max-age=604800');
+  },
+}));
+
 // 隱私政策頁面（Google Play / App Store 需求）
 app.get('/privacy', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/privacy.html'));

@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import { query, queryOne, queryMany } from '../db/connection';
 import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations, passengerSockets } from '../socket';
 import { getETAService } from '../services/ETAService';
@@ -29,6 +32,34 @@ const VALID_REJECTION_REASONS = [
 ] as const;
 
 const router = Router();
+
+// ============================================
+// 模組 4：no-show 拍照存證 — multer 配置
+// ============================================
+const NO_SHOW_UPLOAD_DIR = path.join(__dirname, '../../public/uploads/no_show');
+if (!fs.existsSync(NO_SHOW_UPLOAD_DIR)) {
+  fs.mkdirSync(NO_SHOW_UPLOAD_DIR, { recursive: true });
+}
+const noShowStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, NO_SHOW_UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const orderId = req.params.orderId || 'unknown';
+    const ts = Date.now();
+    const ext = path.extname(file.originalname) || '.jpg';
+    cb(null, `${orderId}-${ts}${ext}`);
+  },
+});
+const noShowUpload = multer({
+  storage: noShowStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB cap，老人拍照通常用內建相機 1-3MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || file.originalname.match(/\.(jpe?g|png|webp)$/i)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`不支援的圖片格式: ${file.mimetype}`));
+    }
+  },
+});
 
 /**
  * 取得目的地顯示地址：電話訂單優先用乘客原始說法（dropoff_original）
@@ -1225,6 +1256,89 @@ router.post('/:orderId/request-relocation', async (req, res) => {
  */
 const DEFAULT_NO_SHOW_PENALTY = 100;         // 預設罰金（元）
 const MIN_WAIT_MINUTES_TO_COUNT = 1;         // 等候少於此分鐘數不累計 no-show（避免誤觸）
+
+/**
+ * 模組 4：司機「找不到客人」拍照存證
+ * POST /api/orders/:orderId/no-show-evidence
+ *
+ * multipart/form-data:
+ *   photo: File (jpg/png/webp，≤5MB)
+ *   driverId: string
+ *   gpsLat?: number
+ *   gpsLng?: number
+ *   waitedMinutes?: number
+ *   notes?: string (≤200)
+ *
+ * 強制 client 在 cancel-no-show 之前先呼叫此 endpoint。
+ * 必須 order.status === 'ARRIVED'（同 cancel-no-show 限制）。
+ */
+router.post('/:orderId/no-show-evidence', noShowUpload.single('photo'), async (req, res) => {
+  const { orderId } = req.params;
+  const driverId = req.body.driverId as string | undefined;
+
+  if (!req.file) {
+    return res.status(400).json({ error: '缺少 photo 檔案' });
+  }
+  if (!driverId) {
+    // 清理已上傳的孤兒檔
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: '缺少 driverId' });
+  }
+
+  const gpsLat = req.body.gpsLat ? parseFloat(req.body.gpsLat) : null;
+  const gpsLng = req.body.gpsLng ? parseFloat(req.body.gpsLng) : null;
+  const waitedMinutes = req.body.waitedMinutes ? parseInt(req.body.waitedMinutes, 10) : null;
+  const notes = (req.body.notes as string | undefined)?.slice(0, 200) || null;
+
+  try {
+    // 驗 ownership + status
+    const existing = await queryOne(
+      'SELECT status, driver_id FROM orders WHERE order_id = $1',
+      [orderId]
+    );
+    if (!existing) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: '訂單不存在' });
+    }
+    if (existing.driver_id !== driverId) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(403).json({ error: '非此訂單司機' });
+    }
+    if (existing.status !== 'ARRIVED') {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({
+        error: `訂單狀態為 ${existing.status}，只能在 ARRIVED 狀態存證`,
+      });
+    }
+
+    // 算公開 URL：BuildConfig.SERVER_URL 對應 https://api.hualientaxi.taxi
+    // 靜態 serve 在 src/index.ts 設 /uploads → public/uploads
+    const photoUrl = `/uploads/no_show/${req.file.filename}`;
+
+    const result = await query(
+      `INSERT INTO no_show_evidence
+       (order_id, driver_id, photo_url, gps_lat, gps_lng, waited_minutes, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, photo_url, captured_at`,
+      [orderId, driverId, photoUrl, gpsLat, gpsLng, waitedMinutes, notes]
+    );
+    const evidence = result.rows[0];
+
+    console.log(`[NoShowEvidence] 訂單 ${orderId} 司機 ${driverId} 已上傳存證 (id=${evidence.id}, url=${photoUrl})`);
+
+    res.json({
+      success: true,
+      evidenceId: evidence.id,
+      photoUrl: evidence.photo_url,
+      capturedAt: evidence.captured_at,
+    });
+  } catch (error: any) {
+    // DB 失敗 → 清掉檔案避免堆積
+    fs.unlink(req.file.path, () => {});
+    console.error('[NoShowEvidence] 儲存失敗:', error);
+    res.status(500).json({ error: `存證失敗：${error.message}` });
+  }
+});
 
 router.post('/:orderId/cancel-no-show', async (req, res) => {
   const { orderId } = req.params;

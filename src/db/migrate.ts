@@ -29,6 +29,7 @@ const MIGRATIONS = {
   'landmark-categories': '025-add-landmark-categories.sql',    // landmarks.category 加 NIGHTLIFE / FOOD
   'queue-zone-dispatch-mode': '026-queue-zone-dispatch-mode.sql', // queue_zones 加 dispatch_mode (SERIAL/PARALLEL)
   'passenger-saved-addresses': '027-passenger-saved-addresses.sql', // 長輩 LINE 一鍵叫車：passenger 常用地點
+  'no-show-evidence': '028-no-show-evidence.sql',                   // 模組 4：司機找不到客人拍照存證
 };
 
 /**
