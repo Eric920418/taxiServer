@@ -673,4 +673,354 @@ router.patch('/relocate-order/:orderId', verifyLiffToken, async (req: LiffReques
   }
 });
 
+// ===========================================================================
+// 長輩 LINE 一鍵叫車 — 模組 1 of「長輩 LINE 叫車 roadmap」
+// ===========================================================================
+
+const PICKUP_MATCH_RADIUS_M = 200; // GPS 距常用地點 < 200m → 自動 snap
+
+/** Haversine 大圓距離（公尺） */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/** 確保 passenger + line_users 紀錄存在，回 passenger_id（同 create-order 的 convention） */
+async function ensurePassengerForLineUser(userId: string, displayName: string): Promise<string> {
+  const passengerId = `LINE_${userId.substring(0, 10)}`;
+  const phone = `LINE_${userId.substring(0, 15)}`;
+  await pool.query(
+    `INSERT INTO passengers (passenger_id, name, phone)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name, updated_at = CURRENT_TIMESTAMP`,
+    [passengerId, displayName, phone]
+  );
+  await pool.query(
+    `INSERT INTO line_users (line_user_id, passenger_id, display_name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (line_user_id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP`,
+    [userId, passengerId, displayName]
+  );
+  return passengerId;
+}
+
+/**
+ * GET /api/line/liff/my-addresses
+ * 取得長輩自己的常用地點列表（按 use_count DESC）
+ */
+router.get('/my-addresses', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    const rows = await queryMany(
+      `SELECT id, label, display_name, address, lat, lng, use_count, is_home, created_at
+       FROM passenger_saved_addresses
+       WHERE passenger_id = $1
+       ORDER BY is_home DESC, use_count DESC, created_at ASC`,
+      [passengerId]
+    );
+    const addresses = rows.map((r: any) => ({
+      id: r.id,
+      label: r.label,
+      displayName: r.display_name,
+      address: r.address,
+      lat: parseFloat(r.lat),
+      lng: parseFloat(r.lng),
+      useCount: r.use_count,
+      isHome: r.is_home,
+      createdAt: r.created_at,
+    }));
+    res.json({ addresses });
+  } catch (error: any) {
+    console.error('[LIFF] 取常用地點失敗:', error);
+    res.status(500).json({ error: `取常用地點失敗：${error.message}` });
+  }
+});
+
+/**
+ * POST /api/line/liff/my-addresses
+ * 新增 / 更新常用地點（有帶 id → UPDATE、沒帶 → INSERT）
+ * is_home=true 時自動把其他地點的 is_home 設 false（partial unique index 強制 per passenger 只 1 個）
+ *
+ * Body: { id?, label, displayName, address, lat, lng, isHome? }
+ */
+router.post('/my-addresses', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  const { id, label, displayName: addrName, address, lat, lng, isHome } = req.body || {};
+
+  if (!label || !addrName || !address || lat == null || lng == null) {
+    res.status(400).json({ error: '缺少必要欄位（label / displayName / address / lat / lng）' });
+    return;
+  }
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    res.status(400).json({ error: 'lat/lng 必須是數字' });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    await client.query('BEGIN');
+
+    // is_home=true → 先解除其他地點的 is_home（partial unique index 保護）
+    if (isHome) {
+      await client.query(
+        `UPDATE passenger_saved_addresses SET is_home = FALSE
+         WHERE passenger_id = $1 AND ($2::INTEGER IS NULL OR id != $2)`,
+        [passengerId, id ?? null]
+      );
+    }
+
+    let result;
+    if (id) {
+      // UPDATE — 驗 ownership
+      result = await client.query(
+        `UPDATE passenger_saved_addresses
+         SET label = $1, display_name = $2, address = $3, lat = $4, lng = $5, is_home = $6
+         WHERE id = $7 AND passenger_id = $8
+         RETURNING id, label, display_name, address, lat, lng, use_count, is_home`,
+        [label, addrName, address, lat, lng, !!isHome, id, passengerId]
+      );
+      if (result.rows.length === 0) {
+        await client.query('ROLLBACK');
+        res.status(404).json({ error: '找不到此地點或無權限' });
+        return;
+      }
+    } else {
+      result = await client.query(
+        `INSERT INTO passenger_saved_addresses
+         (passenger_id, label, display_name, address, lat, lng, is_home)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, label, display_name, address, lat, lng, use_count, is_home`,
+        [passengerId, label, addrName, address, lat, lng, !!isHome]
+      );
+    }
+    await client.query('COMMIT');
+
+    const r = result.rows[0];
+    res.json({
+      success: true,
+      address: {
+        id: r.id,
+        label: r.label,
+        displayName: r.display_name,
+        address: r.address,
+        lat: parseFloat(r.lat),
+        lng: parseFloat(r.lng),
+        useCount: r.use_count,
+        isHome: r.is_home,
+      },
+    });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[LIFF] 儲存常用地點失敗:', error);
+    res.status(500).json({ error: `儲存失敗：${error.message}` });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * DELETE /api/line/liff/my-addresses/:id
+ */
+router.delete('/my-addresses/:id', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: 'id 必須是數字' });
+    return;
+  }
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    const result = await pool.query(
+      `DELETE FROM passenger_saved_addresses WHERE id = $1 AND passenger_id = $2`,
+      [id, passengerId]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ error: '找不到此地點或無權限' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('[LIFF] 刪除常用地點失敗:', error);
+    res.status(500).json({ error: `刪除失敗：${error.message}` });
+  }
+});
+
+/**
+ * POST /api/line/liff/one-click-suggest
+ * 「長輩 LINE 一鍵叫車」核心：GPS 上車點 → 推 pickup + destination 建議
+ *
+ * 邏輯（依 user 2026-05-26 決策「GPS 最近的『其他』常用點」）：
+ *   1. 0 個 saved address → 'NO_ADDRESSES'，UI 引導去新增
+ *   2. 1 個 saved address：
+ *      - GPS 在它附近（<200m） → 'AT_FAVORITE'，UI 引導去設第二個常用點
+ *      - 不在它附近 → pickup=GPS, destination=該地點
+ *   3. ≥2 個 saved address：
+ *      - 找 GPS 最近的 X：
+ *          X 距離 < 200m → pickup = X（snap 到 favorite 更精確）
+ *          否則 → pickup = GPS
+ *      - destination = 剩下地點裡 use_count 最高者
+ *      - 邊界：若所有地點都靠近 GPS（罕見） → 取「次近」當 destination
+ *
+ * Body: { pickupLat, pickupLng, pickupAddress }
+ */
+router.post('/one-click-suggest', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  const { pickupLat, pickupLng, pickupAddress } = req.body || {};
+
+  if (typeof pickupLat !== 'number' || typeof pickupLng !== 'number') {
+    res.status(400).json({ error: 'pickupLat/pickupLng 必須是數字（GPS 經緯度）' });
+    return;
+  }
+
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    const addresses: any[] = await queryMany(
+      `SELECT id, label, display_name, address, lat, lng, use_count, is_home
+       FROM passenger_saved_addresses
+       WHERE passenger_id = $1
+       ORDER BY use_count DESC, created_at ASC`,
+      [passengerId]
+    );
+
+    if (addresses.length === 0) {
+      res.json({
+        status: 'NO_ADDRESSES',
+        message: '請先到「我的常用地點」新增 1-3 個常去的地方（家、醫院、市場）',
+      });
+      return;
+    }
+
+    // 計算每個地點距 GPS 的距離
+    const withDist = addresses.map((a: any) => ({
+      ...a,
+      lat: parseFloat(a.lat),
+      lng: parseFloat(a.lng),
+      distM: haversineMeters(pickupLat, pickupLng, parseFloat(a.lat), parseFloat(a.lng)),
+    }));
+    withDist.sort((a, b) => a.distM - b.distM);
+    const nearest = withDist[0];
+    const isNearAFavorite = nearest.distM < PICKUP_MATCH_RADIUS_M;
+
+    // pickup：靠近 favorite → snap，否則用 GPS
+    const pickup = isNearAFavorite
+      ? {
+          lat: nearest.lat,
+          lng: nearest.lng,
+          address: nearest.address,
+          fromFavorite: true,
+          favoriteName: nearest.display_name,
+        }
+      : {
+          lat: pickupLat,
+          lng: pickupLng,
+          address: pickupAddress || '目前位置',
+          fromFavorite: false,
+        };
+
+    // 只有 1 個 favorite
+    if (addresses.length === 1) {
+      if (isNearAFavorite) {
+        res.json({
+          status: 'AT_FAVORITE',
+          favoriteName: nearest.display_name,
+          message: `您現在在「${nearest.display_name}」附近，請新增第二個常用地點（例如：醫院、市場），一鍵叫車才能自動帶入目的地`,
+        });
+        return;
+      }
+      // 不在唯一 favorite 附近 → 它當目的地
+      res.json({
+        status: 'OK',
+        pickup,
+        destination: {
+          id: nearest.id,
+          label: nearest.label,
+          displayName: nearest.display_name,
+          address: nearest.address,
+          lat: nearest.lat,
+          lng: nearest.lng,
+        },
+      });
+      return;
+    }
+
+    // ≥2 個 favorite：destination = 排除 pickup 的最常去者
+    // 如果 pickup 是從 favorite snap 的、就排掉它；否則排第 0（最近）避免目的地跟 pickup 相同
+    const excludeId = isNearAFavorite ? nearest.id : null;
+    const candidates = withDist
+      .filter(a => excludeId == null || a.id !== excludeId)
+      .sort((a, b) => b.use_count - a.use_count);
+
+    if (candidates.length === 0) {
+      // 罕見：全部地點都在 200m 內、唯一候選還被排除
+      res.json({
+        status: 'AT_FAVORITE',
+        favoriteName: nearest.display_name,
+        message: '附近的常用地點都太近，請選擇目的地或新增新地點',
+      });
+      return;
+    }
+    const dest = candidates[0];
+    res.json({
+      status: 'OK',
+      pickup,
+      destination: {
+        id: dest.id,
+        label: dest.label,
+        displayName: dest.display_name,
+        address: dest.address,
+        lat: dest.lat,
+        lng: dest.lng,
+      },
+    });
+  } catch (error: any) {
+    console.error('[LIFF] one-click-suggest 失敗:', error);
+    res.status(500).json({ error: `一鍵叫車建議失敗：${error.message}` });
+  }
+});
+
+/**
+ * POST /api/line/liff/saved-address/:id/increment-use
+ * destination 被選用後 client 呼叫此 endpoint +1 use_count（給排序用）
+ * 設計成獨立 endpoint 而非塞進 create-order 內，因為 create-order 收的是 address string、不知道是哪筆 saved address
+ */
+router.post('/saved-address/:id/increment-use', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: 'id 必須是數字' });
+    return;
+  }
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    const result = await pool.query(
+      `UPDATE passenger_saved_addresses
+       SET use_count = use_count + 1
+       WHERE id = $1 AND passenger_id = $2
+       RETURNING use_count`,
+      [id, passengerId]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ error: '找不到此地點' });
+      return;
+    }
+    res.json({ success: true, useCount: result.rows[0].use_count });
+  } catch (error: any) {
+    console.error('[LIFF] increment use_count 失敗:', error);
+    res.status(500).json({ error: `使用次數更新失敗：${error.message}` });
+  }
+});
+
 export default router;

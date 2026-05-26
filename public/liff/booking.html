@@ -134,11 +134,16 @@
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
   <script>
-    // mode=relocate 時 redirect 到 relocate.html（同 origin，LIFF auth 保留）
-    (function checkRelocateRedirect() {
+    // mode=relocate / oneclick / my-addresses 時 redirect（同 origin、LIFF auth 保留）
+    (function checkRedirect() {
       const _params = new URLSearchParams(window.location.search);
-      if (_params.get('mode') === 'relocate') {
+      const _mode = _params.get('mode');
+      if (_mode === 'relocate') {
         window.location.replace('/liff/relocate.html?' + _params.toString());
+      } else if (_mode === 'oneclick') {
+        window.location.replace('/liff/oneclick.html');
+      } else if (_mode === 'my-addresses' || _mode === 'addresses') {
+        window.location.replace('/liff/my-addresses.html');
       }
     })();
 

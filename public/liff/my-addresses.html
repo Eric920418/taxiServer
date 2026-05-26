@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+  <title>花蓮計程車 - 我的常用地點</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background: #F5F5F5;
+      color: #212121;
+      min-height: 100vh;
+      padding-bottom: 80px;
+    }
+    .top-bar {
+      background: #1976D2;
+      color: #fff;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .top-bar .back {
+      background: rgba(255,255,255,0.2);
+      border: none;
+      color: #fff;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      font-size: 22px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .top-bar h1 {
+      flex: 1;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .container { padding: 16px; }
+    .address-card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .address-card .head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .address-card .icon { font-size: 24px; }
+    .address-card .name { font-size: 22px; font-weight: 700; color: #212121; }
+    .address-card .home-badge {
+      background: #FFB300;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 8px;
+    }
+    .address-card .addr { font-size: 14px; color: #757575; margin-bottom: 10px; line-height: 1.4; }
+    .address-card .stat { font-size: 12px; color: #BDBDBD; margin-bottom: 12px; }
+    .address-card .actions { display: flex; gap: 8px; }
+    .btn-action {
+      flex: 1; height: 44px; border: 2px solid #1976D2; background: #fff;
+      color: #1976D2; border-radius: 10px; font-family: inherit;
+      font-size: 16px; font-weight: 700; cursor: pointer;
+    }
+    .btn-action.danger { border-color: #D32F2F; color: #D32F2F; }
+    .btn-add {
+      width: 100%; height: 72px; background: #4CAF50; color: #fff;
+      border: none; border-radius: 14px; font-family: inherit;
+      font-size: 22px; font-weight: 700; margin-top: 16px;
+      cursor: pointer; box-shadow: 0 4px 12px rgba(76,175,80,0.3);
+    }
+    .empty-state { text-align: center; padding: 40px 20px; }
+    .empty-state .icon { font-size: 64px; margin-bottom: 16px; }
+    .empty-state h2 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+    .empty-state p { font-size: 16px; color: #757575; line-height: 1.5; margin-bottom: 20px; }
+    .loading { text-align: center; padding: 60px 20px; font-size: 20px; color: #757575; }
+
+    /* Modal */
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      display: none; align-items: flex-end; justify-content: center;
+      z-index: 9999;
+    }
+    .modal-mask.show { display: flex; }
+    .modal {
+      background: #fff; width: 100%; max-width: 480px;
+      border-radius: 20px 20px 0 0; max-height: 92vh; overflow-y: auto;
+      padding: 20px 20px 30px 20px;
+    }
+    .modal h2 { font-size: 24px; font-weight: 700; margin-bottom: 16px; text-align: center; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label {
+      display: block; font-size: 16px; font-weight: 700;
+      color: #424242; margin-bottom: 6px;
+    }
+    .form-input, .form-select {
+      width: 100%; height: 50px; padding: 0 14px;
+      border: 2px solid #E0E0E0; border-radius: 10px;
+      font-family: inherit; font-size: 18px;
+      background: #FAFAFA;
+    }
+    .form-input:focus, .form-select:focus {
+      border-color: #1976D2; background: #fff; outline: none;
+    }
+    .map-preview {
+      width: 100%; height: 200px; border-radius: 10px;
+      background: #EEE; margin-top: 8px;
+      display: flex; align-items: center; justify-content: center;
+      color: #999; font-size: 14px;
+    }
+    .form-check {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px; background: #FFF8E1; border-radius: 10px;
+      margin-bottom: 14px;
+    }
+    .form-check input { width: 22px; height: 22px; }
+    .form-check label { font-size: 18px; font-weight: 700; color: #FF6F00; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .modal-btn {
+      flex: 1; height: 56px; border: none; border-radius: 12px;
+      font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer;
+    }
+    .modal-btn.save { background: #4CAF50; color: #fff; }
+    .modal-btn.save:disabled { background: #BDBDBD; }
+    .modal-btn.cancel { background: #fff; color: #757575; border: 2px solid #E0E0E0; }
+
+    .toast {
+      position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.85); color: #fff; padding: 14px 22px;
+      border-radius: 24px; font-size: 16px; font-weight: 700;
+      z-index: 10000; opacity: 0; transition: opacity 0.3s;
+      max-width: 90vw; text-align: center;
+    }
+    .toast.show { opacity: 1; }
+    .error-box {
+      background: #FFEBEE; border: 2px solid #D32F2F; border-radius: 10px;
+      padding: 12px; color: #C62828; font-size: 14px; font-weight: 700;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <button class="back" id="backBtn" title="返回">←</button>
+    <h1>我的常用地點</h1>
+  </div>
+
+  <div class="container" id="container"></div>
+
+  <!-- Add/Edit Modal -->
+  <div class="modal-mask" id="modalMask">
+    <div class="modal">
+      <h2 id="modalTitle">新增常用地點</h2>
+      <div id="modalError"></div>
+
+      <div class="form-group">
+        <label>顯示名稱</label>
+        <input type="text" class="form-input" id="inDisplayName" placeholder="例：我家、忠孝醫院" maxlength="50">
+      </div>
+
+      <div class="form-group">
+        <label>類型</label>
+        <select class="form-select" id="inLabel">
+          <option value="HOME">🏠 家</option>
+          <option value="HOSPITAL">🏥 醫院</option>
+          <option value="MARKET">🛒 市場 / 商店</option>
+          <option value="WORK">💼 工作</option>
+          <option value="CUSTOM">📍 其他</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>地址（請搜尋）</label>
+        <input type="text" class="form-input" id="inAddress" placeholder="輸入地址或地點名稱搜尋...">
+      </div>
+
+      <div class="form-group">
+        <label>地圖預覽</label>
+        <div class="map-preview" id="mapPreview">請先搜尋地址</div>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="inIsHome">
+        <label for="inIsHome">設為我的住家（每人只能一個）</label>
+      </div>
+
+      <div class="modal-actions">
+        <button class="modal-btn cancel" id="cancelBtn">取消</button>
+        <button class="modal-btn save" id="saveBtn">儲存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    let accessToken = null;
+    let liffProfile = null;
+    let myAddresses = [];
+    let config = {};
+    let mapsLoaded = false;
+    let modalMap = null, modalMarker = null, modalAutocomplete = null;
+    let editingId = null;
+    let editingLatLng = null;
+
+    const container = document.getElementById('container');
+    const modalMask = document.getElementById('modalMask');
+
+    // ===== DOM helpers =====
+    function el(tag, attrs, text) {
+      const e = document.createElement(tag);
+      if (attrs) for (const k in attrs) {
+        if (k === 'class') e.className = attrs[k];
+        else if (k === 'style') e.style.cssText = attrs[k];
+        else if (k.startsWith('on')) e.addEventListener(k.substring(2), attrs[k]);
+        else e.setAttribute(k, attrs[k]);
+      }
+      if (text != null) e.textContent = String(text);
+      return e;
+    }
+    function clearEl(node) {
+      while (node.firstChild) node.removeChild(node.firstChild);
+    }
+    function showToast(msg, ms) {
+      const t = document.getElementById('toast');
+      t.textContent = String(msg);
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), ms || 3000);
+    }
+    function showError(msg) {
+      clearEl(container);
+      container.appendChild(el('div', { class: 'error-box' }, '⚠️ ' + msg));
+      const btn = el('button', {
+        class: 'btn-add',
+        style: 'background:#1976D2',
+        onclick: () => location.reload()
+      }, '重試');
+      container.appendChild(btn);
+    }
+
+    // ===== Init =====
+    document.getElementById('backBtn').addEventListener('click', () => {
+      // 優先返回 oneclick，沒有 history 就回 LINE
+      if (document.referrer && document.referrer.includes('/liff/')) {
+        history.back();
+      } else {
+        location.href = '/liff/oneclick.html';
+      }
+    });
+
+    async function init() {
+      try {
+        await liff.init({ liffId: '2009663432-cTe2V6kL' });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+        liffProfile = await liff.getProfile();
+        accessToken = liff.getAccessToken();
+      } catch (e) {
+        showError('LIFF 初始化失敗：' + (e.message || e));
+        return;
+      }
+
+      try {
+        const r = await fetch('/api/line/liff/config');
+        config = await r.json();
+      } catch (e) { console.warn('config fetch failed:', e); }
+
+      await loadAddresses();
+    }
+
+    async function loadAddresses() {
+      clearEl(container);
+      container.appendChild(el('div', { class: 'loading' }, '載入中...'));
+      try {
+        const r = await fetch('/api/line/liff/my-addresses', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '取得失敗');
+        myAddresses = data.addresses || [];
+        renderAddresses();
+      } catch (e) {
+        showError('載入常用地點失敗：' + e.message);
+      }
+    }
+
+    function renderAddresses() {
+      clearEl(container);
+
+      if (myAddresses.length === 0) {
+        const empty = el('div', { class: 'empty-state' });
+        empty.appendChild(el('div', { class: 'icon' }, '📍'));
+        empty.appendChild(el('h2', {}, '還沒有常用地點'));
+        empty.appendChild(el('p', {}, '建議先新增「家」與您最常去的 1-2 個地方（例：醫院、市場），就可以一鍵叫車'));
+        container.appendChild(empty);
+      } else {
+        myAddresses.forEach(a => container.appendChild(makeAddressCard(a)));
+      }
+
+      const addBtn = el('button', { class: 'btn-add', onclick: () => openModal(null) }, '➕ 新增常用地點');
+      container.appendChild(addBtn);
+    }
+
+    function labelIcon(label) {
+      switch (label) {
+        case 'HOME': return '🏠';
+        case 'HOSPITAL': return '🏥';
+        case 'MARKET': return '🛒';
+        case 'WORK': return '💼';
+        default: return '📍';
+      }
+    }
+
+    function makeAddressCard(a) {
+      const card = el('div', { class: 'address-card' });
+      const head = el('div', { class: 'head' });
+      head.appendChild(el('span', { class: 'icon' }, labelIcon(a.label)));
+      head.appendChild(el('span', { class: 'name' }, a.displayName));
+      if (a.isHome) head.appendChild(el('span', { class: 'home-badge' }, '住家'));
+      card.appendChild(head);
+      card.appendChild(el('div', { class: 'addr' }, a.address));
+      if (a.useCount > 0) {
+        card.appendChild(el('div', { class: 'stat' }, `已使用 ${a.useCount} 次`));
+      }
+      const actions = el('div', { class: 'actions' });
+      actions.appendChild(el('button', { class: 'btn-action', onclick: () => openModal(a) }, '編輯'));
+      actions.appendChild(el('button', {
+        class: 'btn-action danger',
+        onclick: () => confirmDelete(a)
+      }, '刪除'));
+      card.appendChild(actions);
+      return card;
+    }
+
+    async function confirmDelete(a) {
+      if (!confirm(`確定要刪除「${a.displayName}」嗎？`)) return;
+      try {
+        const r = await fetch(`/api/line/liff/my-addresses/${a.id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '刪除失敗');
+        showToast('已刪除');
+        await loadAddresses();
+      } catch (e) {
+        showToast('刪除失敗：' + e.message, 5000);
+      }
+    }
+
+    // ===== Modal =====
+    function openModal(address) {
+      editingId = address ? address.id : null;
+      editingLatLng = address ? { lat: address.lat, lng: address.lng } : null;
+      document.getElementById('modalTitle').textContent = address ? '編輯常用地點' : '新增常用地點';
+      document.getElementById('inDisplayName').value = address ? address.displayName : '';
+      document.getElementById('inLabel').value = address ? address.label : 'HOME';
+      document.getElementById('inAddress').value = address ? address.address : '';
+      document.getElementById('inIsHome').checked = address ? address.isHome : false;
+      clearEl(document.getElementById('modalError'));
+      modalMask.classList.add('show');
+
+      // 載入 Google Maps（lazy）
+      if (!mapsLoaded && config.googleMapsApiKey) {
+        const script = document.createElement('script');
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${config.googleMapsApiKey}&libraries=places&language=zh-TW&callback=initModalMap`;
+        script.async = true;
+        document.head.appendChild(script);
+        mapsLoaded = true;
+      } else if (mapsLoaded && modalMap && editingLatLng) {
+        // 已載入，直接 reset 地圖到 editing 地點
+        setTimeout(() => updateModalMap(editingLatLng.lat, editingLatLng.lng), 100);
+      }
+    }
+
+    function closeModal() {
+      modalMask.classList.remove('show');
+      editingId = null;
+      editingLatLng = null;
+    }
+
+    document.getElementById('cancelBtn').addEventListener('click', closeModal);
+    modalMask.addEventListener('click', (e) => { if (e.target === modalMask) closeModal(); });
+
+    // Google Maps init (callback from script load)
+    window.initModalMap = function() {
+      const center = editingLatLng || (config.defaultCenter || { lat: 23.9871, lng: 121.6015 });
+      const mapEl = document.getElementById('mapPreview');
+      mapEl.textContent = '';
+      modalMap = new google.maps.Map(mapEl, {
+        center, zoom: 16, disableDefaultUI: true,
+        zoomControl: true, gestureHandling: 'greedy',
+      });
+      modalMarker = new google.maps.Marker({ position: center, map: modalMap, draggable: true });
+      modalMarker.addListener('dragend', () => {
+        const p = modalMarker.getPosition();
+        editingLatLng = { lat: p.lat(), lng: p.lng() };
+      });
+
+      // Places Autocomplete
+      const input = document.getElementById('inAddress');
+      modalAutocomplete = new google.maps.places.Autocomplete(input, {
+        componentRestrictions: { country: 'tw' },
+        fields: ['geometry', 'formatted_address', 'name'],
+      });
+      modalAutocomplete.addListener('place_changed', () => {
+        const place = modalAutocomplete.getPlace();
+        if (!place.geometry) return;
+        const loc = place.geometry.location;
+        modalMap.setCenter(loc);
+        modalMap.setZoom(17);
+        modalMarker.setPosition(loc);
+        editingLatLng = { lat: loc.lat(), lng: loc.lng() };
+        // 把 formatted_address 寫回 input
+        const addr = (place.formatted_address || place.name || '')
+          .replace(/^\s*\d{3,6}\s*[,，]?\s*/, '')
+          .replace(/^\s*(台灣|Taiwan)\s*[,，]?\s*/i, '')
+          .trim();
+        if (addr) input.value = addr;
+        // 若 displayName 是空的，用 place.name 預填
+        const nameInput = document.getElementById('inDisplayName');
+        if (!nameInput.value.trim() && place.name) {
+          nameInput.value = place.name;
+        }
+      });
+    };
+
+    function updateModalMap(lat, lng) {
+      if (!modalMap || !modalMarker) return;
+      const loc = { lat, lng };
+      modalMap.setCenter(loc);
+      modalMarker.setPosition(loc);
+    }
+
+    document.getElementById('saveBtn').addEventListener('click', async () => {
+      const displayName = document.getElementById('inDisplayName').value.trim();
+      const label = document.getElementById('inLabel').value;
+      const address = document.getElementById('inAddress').value.trim();
+      const isHome = document.getElementById('inIsHome').checked;
+
+      const errBox = document.getElementById('modalError');
+      clearEl(errBox);
+
+      if (!displayName) { errBox.appendChild(el('div', { class: 'error-box' }, '⚠️ 請輸入顯示名稱')); return; }
+      if (!address) { errBox.appendChild(el('div', { class: 'error-box' }, '⚠️ 請輸入或搜尋地址')); return; }
+      if (!editingLatLng) { errBox.appendChild(el('div', { class: 'error-box' }, '⚠️ 請從下拉選單選擇地址（取得座標）')); return; }
+
+      const saveBtn = document.getElementById('saveBtn');
+      saveBtn.disabled = true;
+      saveBtn.textContent = '儲存中...';
+
+      try {
+        const body = {
+          id: editingId,
+          label,
+          displayName,
+          address,
+          lat: editingLatLng.lat,
+          lng: editingLatLng.lng,
+          isHome,
+        };
+        const r = await fetch('/api/line/liff/my-addresses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '儲存失敗');
+        showToast('已儲存');
+        closeModal();
+        await loadAddresses();
+      } catch (e) {
+        errBox.appendChild(el('div', { class: 'error-box' }, '⚠️ ' + e.message));
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存';
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

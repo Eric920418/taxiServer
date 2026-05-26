@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+  <title>花蓮計程車 - 一鍵叫車</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background: #F5F5F5;
+      color: #212121;
+      min-height: 100vh;
+      padding: 20px;
+      padding-bottom: 80px;
+    }
+    .header { font-size: 32px; font-weight: 900; text-align: center; padding: 20px 0; color: #1976D2; }
+    .subtitle { font-size: 18px; text-align: center; color: #757575; margin-bottom: 24px; }
+    .card { background: #fff; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .card-label { font-size: 20px; font-weight: 700; color: #757575; margin-bottom: 8px; }
+    .card-main { font-size: 28px; font-weight: 700; color: #212121; line-height: 1.3; margin-bottom: 4px; }
+    .card-sub { font-size: 16px; color: #757575; line-height: 1.4; }
+    .btn-primary {
+      width: 100%; height: 80px; background: #4CAF50; color: #fff; border: none;
+      border-radius: 16px; font-family: inherit; font-size: 28px; font-weight: 900;
+      margin-top: 20px; cursor: pointer; box-shadow: 0 4px 12px rgba(76,175,80,0.3);
+    }
+    .btn-primary:disabled { background: #BDBDBD; box-shadow: none; }
+    .btn-secondary {
+      flex: 1; height: 56px; background: #fff; color: #1976D2;
+      border: 2px solid #1976D2; border-radius: 12px;
+      font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer;
+    }
+    .btn-row { display: flex; gap: 12px; margin-top: 12px; }
+    .link-row { text-align: center; margin-top: 20px; }
+    .link-row a { color: #1976D2; font-size: 16px; font-weight: 700; text-decoration: none; cursor: pointer; }
+    .loading { text-align: center; padding: 60px 20px; font-size: 22px; color: #757575; }
+    .loading::before {
+      content: ''; display: inline-block; width: 40px; height: 40px;
+      border: 4px solid #E0E0E0; border-top-color: #1976D2; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin-right: 12px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-box {
+      background: #FFEBEE; border: 2px solid #D32F2F; border-radius: 12px;
+      padding: 16px; color: #C62828; font-size: 18px; font-weight: 700;
+      line-height: 1.5; margin-bottom: 16px;
+    }
+    .empty-state { text-align: center; padding: 40px 20px; }
+    .empty-state .icon { font-size: 64px; margin-bottom: 16px; }
+    .empty-state h2 { font-size: 24px; font-weight: 700; margin-bottom: 12px; color: #212121; }
+    .empty-state p { font-size: 18px; color: #757575; line-height: 1.5; margin-bottom: 24px; }
+    .dest-option {
+      background: #fff; border: 2px solid #E0E0E0; border-radius: 12px;
+      padding: 16px 20px; margin-bottom: 12px; cursor: pointer;
+      transition: all 0.15s; text-align: left; width: 100%; font-family: inherit;
+    }
+    .dest-option:active { border-color: #1976D2; background: #E3F2FD; }
+    .dest-option .name { font-size: 22px; font-weight: 700; color: #212121; margin-bottom: 4px; }
+    .dest-option .addr { font-size: 14px; color: #757575; }
+    .section-title { font-size: 20px; font-weight: 700; margin: 20px 0 12px 0; color: #212121; }
+    .toast {
+      position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.85); color: #fff; padding: 14px 22px;
+      border-radius: 24px; font-size: 16px; font-weight: 700;
+      z-index: 9999; opacity: 0; transition: opacity 0.3s;
+      max-width: 90vw; text-align: center;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="header">🚗 一鍵叫車</div>
+
+  <div id="content"></div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    let accessToken = null;
+    let liffProfile = null;
+    let suggested = null;
+    let myAddresses = [];
+
+    const content = document.getElementById('content');
+
+    // ===== 通用安全 DOM helpers =====
+    function el(tag, attrs, text) {
+      const e = document.createElement(tag);
+      if (attrs) for (const k in attrs) {
+        if (k === 'class') e.className = attrs[k];
+        else if (k === 'style') e.style.cssText = attrs[k];
+        else if (k.startsWith('on')) e.addEventListener(k.substring(2), attrs[k]);
+        else e.setAttribute(k, attrs[k]);
+      }
+      if (text != null) e.textContent = String(text);
+      return e;
+    }
+    function clearContent() {
+      while (content.firstChild) content.removeChild(content.firstChild);
+    }
+
+    function showToast(msg, ms) {
+      const t = document.getElementById('toast');
+      t.textContent = String(msg);
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), ms || 3000);
+    }
+
+    function renderLoading(msg) {
+      clearContent();
+      content.appendChild(el('div', { class: 'loading' }, msg || '處理中...'));
+    }
+
+    function renderError(msg) {
+      clearContent();
+      content.appendChild(el('div', { class: 'error-box' }, '⚠️ ' + msg));
+      content.appendChild(el('button', {
+        class: 'btn-primary',
+        style: 'background:#1976D2',
+        onclick: () => location.reload()
+      }, '重試'));
+      const link = el('div', { class: 'link-row' });
+      const a = el('a', { href: '/liff/booking.html?mode=call' }, '改用詳細叫車');
+      link.appendChild(a);
+      content.appendChild(link);
+    }
+
+    async function init() {
+      try {
+        await liff.init({ liffId: '2009663432-cTe2V6kL' });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+        liffProfile = await liff.getProfile();
+        accessToken = liff.getAccessToken();
+      } catch (e) {
+        renderError('LIFF 初始化失敗：' + (e.message || e));
+        return;
+      }
+
+      renderLoading('正在取得您的位置...');
+
+      if (!navigator.geolocation) {
+        renderError('您的裝置不支援 GPS 定位，請改用「詳細叫車」');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => { await fetchSuggestion(pos.coords.latitude, pos.coords.longitude); },
+        (err) => { renderError('無法取得 GPS 位置（' + err.message + '）— 請允許定位權限後重新整理'); },
+        { timeout: 10000, enableHighAccuracy: true }
+      );
+    }
+
+    async function reverseGeocode(lat, lng) {
+      try {
+        const cfg = await (await fetch('/api/line/liff/config')).json();
+        if (!cfg.googleMapsApiKey) return '目前位置';
+        const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&language=zh-TW&key=${cfg.googleMapsApiKey}`;
+        const r = await (await fetch(url)).json();
+        if (r.results && r.results[0]) {
+          return r.results[0].formatted_address
+            .replace(/^\s*\d{3,6}\s*[,，]?\s*/, '')
+            .replace(/^\s*(台灣|Taiwan)\s*[,，]?\s*/i, '')
+            .trim();
+        }
+      } catch (e) { console.warn('reverseGeocode failed:', e); }
+      return '目前位置';
+    }
+
+    async function fetchSuggestion(lat, lng) {
+      try {
+        const pickupAddress = await reverseGeocode(lat, lng);
+        const res = await fetch('/api/line/liff/one-click-suggest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+          body: JSON.stringify({ pickupLat: lat, pickupLng: lng, pickupAddress }),
+        });
+        const data = await res.json();
+        if (!res.ok) { renderError(data.error || '無法取得建議'); return; }
+        suggested = data;
+        renderByStatus(data);
+      } catch (e) {
+        renderError('連線失敗：' + e.message);
+      }
+    }
+
+    async function renderByStatus(data) {
+      clearContent();
+
+      if (data.status === 'NO_ADDRESSES') {
+        const wrap = el('div', { class: 'empty-state' });
+        wrap.appendChild(el('div', { class: 'icon' }, '📍'));
+        wrap.appendChild(el('h2', {}, '您還沒有常用地點'));
+        wrap.appendChild(el('p', {}, data.message));
+        wrap.appendChild(el('button', {
+          class: 'btn-primary',
+          style: 'background:#1976D2',
+          onclick: goToAddresses
+        }, '新增常用地點'));
+        const link = el('div', { class: 'link-row' });
+        link.appendChild(el('a', { href: '/liff/booking.html?mode=call' }, '先用詳細叫車'));
+        wrap.appendChild(link);
+        content.appendChild(wrap);
+        return;
+      }
+
+      if (data.status === 'AT_FAVORITE') {
+        try {
+          const r = await fetch('/api/line/liff/my-addresses', {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          const j = await r.json();
+          myAddresses = j.addresses || [];
+        } catch (e) { console.warn('fetch addresses failed:', e); }
+
+        const others = myAddresses.filter(a => a.displayName !== data.favoriteName);
+
+        const card = el('div', { class: 'card' });
+        card.appendChild(el('div', { class: 'card-label' }, '📍 您現在在'));
+        card.appendChild(el('div', { class: 'card-main' }, data.favoriteName + ' 附近'));
+        content.appendChild(card);
+
+        content.appendChild(el('div', { class: 'section-title' }, '請選擇要去的地方：'));
+        if (others.length > 0) {
+          others.forEach(a => content.appendChild(makeDestOption(a)));
+        } else {
+          content.appendChild(el('p', {
+            style: 'text-align:center;color:#757575;font-size:16px;margin:20px 0'
+          }, '沒有其他常用地點，請先新增'));
+        }
+
+        const link = el('div', { class: 'link-row', style: 'margin-top:24px' });
+        link.appendChild(el('a', { onclick: goToAddresses }, '📍 管理我的常用地點'));
+        content.appendChild(link);
+
+        const link2 = el('div', { class: 'link-row', style: 'margin-top:8px' });
+        link2.appendChild(el('a', { href: '/liff/booking.html?mode=call' }, '改用詳細叫車'));
+        content.appendChild(link2);
+        return;
+      }
+
+      // status === 'OK'
+      const p = data.pickup;
+      const d = data.destination;
+
+      content.appendChild(el('div', { class: 'subtitle' }, '確認叫車資訊'));
+
+      const pickCard = el('div', { class: 'card' });
+      pickCard.appendChild(el('div', { class: 'card-label' }, '📍 上車'));
+      pickCard.appendChild(el('div', { class: 'card-main' }, p.fromFavorite ? p.favoriteName : '目前位置'));
+      pickCard.appendChild(el('div', { class: 'card-sub' }, p.address));
+      content.appendChild(pickCard);
+
+      const destCard = el('div', { class: 'card' });
+      destCard.appendChild(el('div', { class: 'card-label' }, '🎯 要去'));
+      destCard.appendChild(el('div', { class: 'card-main' }, d.displayName));
+      destCard.appendChild(el('div', { class: 'card-sub' }, d.address));
+      content.appendChild(destCard);
+
+      const confirmBtn = el('button', {
+        class: 'btn-primary',
+        id: 'confirmBtn',
+        onclick: confirmOrder
+      }, '✓ 確認叫車');
+      content.appendChild(confirmBtn);
+
+      const row = el('div', { class: 'btn-row' });
+      row.appendChild(el('button', { class: 'btn-secondary', onclick: changeDestination }, '換目的地'));
+      row.appendChild(el('button', {
+        class: 'btn-secondary',
+        onclick: () => location.href = '/liff/booking.html?mode=call'
+      }, '詳細叫車'));
+      content.appendChild(row);
+
+      const link = el('div', { class: 'link-row' });
+      link.appendChild(el('a', { onclick: goToAddresses }, '📍 管理我的常用地點'));
+      content.appendChild(link);
+    }
+
+    function makeDestOption(a) {
+      const btn = el('button', {
+        class: 'dest-option',
+        onclick: () => {
+          suggested.destination = a;
+          renderByStatus(suggested);
+        }
+      });
+      btn.appendChild(el('div', { class: 'name' }, '🎯 ' + a.displayName));
+      btn.appendChild(el('div', { class: 'addr' }, a.address));
+      return btn;
+    }
+
+    async function changeDestination() {
+      renderLoading('載入常用地點...');
+      try {
+        const r = await fetch('/api/line/liff/my-addresses', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const j = await r.json();
+        myAddresses = j.addresses || [];
+      } catch (e) {
+        renderError('載入常用地點失敗：' + e.message);
+        return;
+      }
+
+      clearContent();
+      const pickCard = el('div', { class: 'card' });
+      pickCard.appendChild(el('div', { class: 'card-label' }, '📍 上車'));
+      pickCard.appendChild(el('div', { class: 'card-main' }, suggested.pickup.fromFavorite ? suggested.pickup.favoriteName : '目前位置'));
+      content.appendChild(pickCard);
+
+      content.appendChild(el('div', { class: 'section-title' }, '換成去：'));
+      const currentDestId = suggested.destination.id;
+      const others = myAddresses.filter(a => a.id !== currentDestId);
+      if (others.length > 0) {
+        others.forEach(a => content.appendChild(makeDestOption(a)));
+      } else {
+        content.appendChild(el('p', {
+          style: 'text-align:center;color:#757575;font-size:16px;margin:20px 0'
+        }, '沒有其他選擇，請去管理新增'));
+      }
+
+      const row = el('div', { class: 'btn-row', style: 'margin-top:16px' });
+      row.appendChild(el('button', { class: 'btn-secondary', onclick: () => renderByStatus(suggested) }, '取消'));
+      content.appendChild(row);
+    }
+
+    async function confirmOrder() {
+      const btn = document.getElementById('confirmBtn');
+      btn.disabled = true;
+      btn.textContent = '叫車中...';
+      try {
+        const p = suggested.pickup;
+        const d = suggested.destination;
+        const body = {
+          pickupLat: p.lat, pickupLng: p.lng, pickupAddress: p.address,
+          destLat: d.lat, destLng: d.lng, destAddress: d.address,
+          mode: 'call', paymentType: 'CASH', subsidyType: 'NONE', discountAmount: 0,
+        };
+        const res = await fetch('/api/line/liff/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '叫車失敗');
+
+        if (d.id) {
+          fetch(`/api/line/liff/saved-address/${d.id}/increment-use`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }).catch(() => {});
+        }
+
+        if (liff.isInClient()) {
+          try {
+            await liff.sendMessages([{
+              type: 'text',
+              text: `我已叫車！\n上車：${p.fromFavorite ? p.favoriteName : '目前位置'}\n要去：${d.displayName}`
+            }]);
+          } catch (e) { /* user may not have permission */ }
+          liff.closeWindow();
+        } else {
+          clearContent();
+          const wrap = el('div', { class: 'empty-state' });
+          wrap.appendChild(el('div', { class: 'icon' }, '✅'));
+          wrap.appendChild(el('h2', {}, '叫車成功！'));
+          wrap.appendChild(el('p', {}, '司機正在為您安排，請回 LINE 查看訂單狀態'));
+          content.appendChild(wrap);
+        }
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '✓ 確認叫車';
+        showToast(e.message || '叫車失敗，請重試', 5000);
+      }
+    }
+
+    function goToAddresses() { location.href = '/liff/my-addresses.html'; }
+
+    init();
+  </script>
+</body>
+</html>
