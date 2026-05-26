@@ -35,8 +35,28 @@ if (!LIFF_ID_BOOKING || !LIFF_ID_TRACKING) {
   process.exit(1);
 }
 
+/** 清理：刪掉所有現存的 Rich Menu（避免後台堆積 empty/test menu） */
+async function cleanupExistingMenus() {
+  try {
+    const res = await client.getRichMenuList();
+    if (res.richmenus && res.richmenus.length > 0) {
+      console.log(`[Cleanup] 發現 ${res.richmenus.length} 個現有 Rich Menu，全部刪除...`);
+      for (const m of res.richmenus) {
+        await client.deleteRichMenu(m.richMenuId);
+        console.log(`  ✓ 已刪除 ${m.richMenuId} (${m.name})`);
+      }
+    } else {
+      console.log('[Cleanup] 無現有 Rich Menu');
+    }
+  } catch (e: any) {
+    console.warn('[Cleanup] 警告：清理舊 menu 失敗（不影響新建）:', e.message);
+  }
+}
+
 async function setupRichMenu() {
   try {
+    await cleanupExistingMenus();
+
     // 1. 建立 Rich Menu — Large (2500x1686) 4 區「1+3」layout
     const richMenu = await client.createRichMenu({
       size: { width: 2500, height: 1686 },
@@ -85,38 +105,43 @@ async function setupRichMenu() {
 
     console.log('Rich Menu 建立成功:', richMenu.richMenuId);
 
-    // 2. 上傳圖片（如有提供）— 路徑：./richmenu-v2.png（同目錄）
-    const imagePath = path.join(process.cwd(), 'richmenu-v2.png');
-    if (fs.existsSync(imagePath)) {
-      console.log(`\n發現圖片 ${imagePath}，自動上傳...`);
-      const imageBuf = fs.readFileSync(imagePath);
-      const uploadRes = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenu.richMenuId}/content`, {
+    // 2. 上傳圖片（必要：LINE 規定 setDefault 前必須有圖）
+    //    路徑：scripts/richmenu-v2.png（跟 script 同目錄，用 __dirname 才能無視 cwd）
+    const imagePath = path.join(__dirname, 'richmenu-v2.png');
+    if (!fs.existsSync(imagePath)) {
+      console.error(`\n✗ 找不到圖片 ${imagePath}`);
+      console.error('  請先把 richmenu-v2.png (2500x1686 PNG, ≤1MB) 放到 scripts/ 目錄');
+      console.error(`  並手動清掉剛建的 menu: client.deleteRichMenu("${richMenu.richMenuId}")`);
+      process.exit(1);
+    }
+
+    console.log(`\n發現圖片 ${imagePath}，上傳中...`);
+    // line-bot-sdk v10 沒 setRichMenuImage method，要用 data-api endpoint
+    // Node 18+ fetch 對 Buffer 支援不穩，改用 Uint8Array
+    const imageBuf = fs.readFileSync(imagePath);
+    const uploadRes = await fetch(
+      `https://api-data.line.me/v2/bot/richmenu/${richMenu.richMenuId}/content`,
+      {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${channelAccessToken}`,
           'Content-Type': 'image/png',
+          'Content-Length': String(imageBuf.length),
         },
-        body: imageBuf as any,
-      });
-      if (uploadRes.ok) {
-        console.log('✓ 圖片上傳成功');
-      } else {
-        console.error('✗ 圖片上傳失敗:', uploadRes.status, await uploadRes.text());
+        body: new Uint8Array(imageBuf),
       }
-    } else {
-      console.log(`\n⚠️  未發現 ${imagePath}，請手動上傳：`);
-      console.log(`   圖片尺寸：2500 x 1686 px (PNG, ≤ 1MB)`);
-      console.log(`   布局建議：上半（2500x843）「🚗 一鍵叫車」大字 / 下半 3 等分「詳細叫車｜預約叫車｜查詢取消」`);
-      console.log(`\n   手動上傳指令：`);
-      console.log(`   curl -X POST https://api-data.line.me/v2/bot/richmenu/${richMenu.richMenuId}/content \\`);
-      console.log(`     -H "Authorization: Bearer \${LINE_CHANNEL_ACCESS_TOKEN}" \\`);
-      console.log(`     -H "Content-Type: image/png" \\`);
-      console.log(`     -T ./richmenu-v2.png`);
+    );
+    if (!uploadRes.ok) {
+      console.error('✗ 圖片上傳失敗:', uploadRes.status, await uploadRes.text());
+      console.error(`  手動清掉這個 menu: client.deleteRichMenu("${richMenu.richMenuId}")`);
+      process.exit(1);
     }
+    console.log('✓ 圖片上傳成功');
 
     // 3. 設為預設 Rich Menu
     await client.setDefaultRichMenu(richMenu.richMenuId);
     console.log('\n✓ 已設為預設 Rich Menu，所有用戶下次開 LINE 會看到新版');
+    console.log(`   menu id: ${richMenu.richMenuId}`);
 
   } catch (error) {
     console.error('設定失敗:', error);
