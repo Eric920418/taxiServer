@@ -1436,6 +1436,20 @@ router.post('/:orderId/cancel-no-show', async (req, res) => {
     const notificationService = getNotificationService();
     await notificationService.notifyOrderCancelled(orderId);
 
+    // 模組 5：家屬 SOS Push（無家屬就跳過，rate limit 在 service 內）
+    // fire-and-forget — 失敗不擋取消流程
+    try {
+      const { getSOSService } = await import('../services/SOSService');
+      const sos = getSOSService();
+      if (sos) {
+        sos.pushNoShowAlertToFamilies(orderId).catch(err =>
+          console.error('[NoShow] SOS Push 失敗:', err.message)
+        );
+      }
+    } catch (e: any) {
+      console.warn('[NoShow] SOSService load 失敗:', e.message);
+    }
+
     res.json({
       success: true,
       orderId,

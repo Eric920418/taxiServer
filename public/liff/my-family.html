@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+  <title>花蓮計程車 - 我的家屬聯絡人</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { font-family: 'Noto Sans TC', sans-serif; background: #F5F5F5; color: #212121; min-height: 100vh; padding-bottom: 80px; }
+    .top-bar { background: #1976D2; color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); position: sticky; top: 0; z-index: 100; }
+    .top-bar .back { background: rgba(255,255,255,0.2); border: none; color: #fff; width: 44px; height: 44px; border-radius: 50%; font-size: 22px; cursor: pointer; font-family: inherit; }
+    .top-bar h1 { flex: 1; font-size: 22px; font-weight: 700; }
+    .container { padding: 16px; }
+    .info-card { background: #FFF8E1; border: 2px solid #FF9800; border-radius: 12px; padding: 16px; margin-bottom: 16px; font-size: 15px; color: #424242; line-height: 1.5; }
+    .contact-card { background: #fff; border-radius: 14px; padding: 18px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+    .contact-card .head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .contact-card .name { font-size: 20px; font-weight: 700; }
+    .contact-card .badge { background: #FFB300; color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 8px; }
+    .contact-card .relation { font-size: 14px; color: #757575; margin-bottom: 12px; }
+    .btn-action { width: 100%; height: 44px; border: 2px solid #D32F2F; background: #fff; color: #D32F2F; border-radius: 10px; font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer; }
+    .btn-add { width: 100%; height: 72px; background: #4CAF50; color: #fff; border: none; border-radius: 14px; font-family: inherit; font-size: 22px; font-weight: 700; margin-top: 16px; cursor: pointer; box-shadow: 0 4px 12px rgba(76,175,80,0.3); }
+    .empty-state { text-align: center; padding: 40px 20px; }
+    .empty-state .icon { font-size: 64px; margin-bottom: 16px; }
+    .empty-state h2 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+    .empty-state p { font-size: 16px; color: #757575; line-height: 1.5; margin-bottom: 20px; }
+    .loading { text-align: center; padding: 60px 20px; font-size: 20px; color: #757575; }
+    .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: flex-end; justify-content: center; z-index: 9999; }
+    .modal-mask.show { display: flex; }
+    .modal { background: #fff; width: 100%; max-width: 480px; border-radius: 20px 20px 0 0; max-height: 92vh; overflow-y: auto; padding: 20px 20px 30px 20px; }
+    .modal h2 { font-size: 24px; font-weight: 700; margin-bottom: 16px; text-align: center; }
+    .pipa-box { background: #F5F5F5; border-radius: 10px; padding: 14px; font-size: 14px; line-height: 1.6; max-height: 240px; overflow-y: auto; margin-bottom: 14px; color: #424242; }
+    .pipa-box strong { color: #C62828; }
+    .modal-btn { width: 100%; height: 56px; border: none; border-radius: 12px; font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer; margin-top: 10px; }
+    .modal-btn.primary { background: #4CAF50; color: #fff; }
+    .modal-btn.secondary { background: #fff; color: #1976D2; border: 2px solid #1976D2; }
+    .share-card { background: #E3F2FD; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+    .share-card .qr { display: block; margin: 16px auto; max-width: 260px; }
+    .share-card .url { background: #fff; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 12px; word-break: break-all; color: #1976D2; margin: 8px 0; }
+    .share-card .hint { font-size: 14px; color: #757575; line-height: 1.5; }
+    .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: #fff; padding: 14px 22px; border-radius: 24px; font-size: 16px; font-weight: 700; z-index: 10000; opacity: 0; transition: opacity 0.3s; max-width: 90vw; text-align: center; }
+    .toast.show { opacity: 1; }
+    .error-box { background: #FFEBEE; border: 2px solid #D32F2F; border-radius: 10px; padding: 12px; color: #C62828; font-size: 14px; font-weight: 700; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <button class="back" id="backBtn">←</button>
+    <h1>我的家屬聯絡人</h1>
+  </div>
+
+  <div class="container" id="container"></div>
+
+  <!-- PIPA 同意條款 Modal -->
+  <div class="modal-mask" id="pipaModal">
+    <div class="modal">
+      <h2>個人資料使用同意</h2>
+      <div class="pipa-box">
+        本服務「家屬聯絡人」功能將在以下情境，將您的資料分享給您指定的家屬：
+
+        <strong>1. 資料項目</strong>
+        當您叫車後司機等不到人（no-show）時，會主動推送通知給您綁定的家屬，內容包含：
+        • 您的姓名
+        • 上車點地址
+        • 訂單時間
+        • 司機姓名、車牌、電話
+        • 司機在現場拍攝的環境照片（如有）
+
+        <strong>2. 使用目的</strong>
+        讓家屬能即時知悉您的安全狀況，並聯絡您確認。
+
+        <strong>3. 家屬不會看到</strong>
+        • 您的支付資料
+        • 您過去的叫車紀錄
+        • 您即時位置（僅在 no-show 時推送當下上車點）
+
+        <strong>4. 您的權利</strong>
+        您可隨時在本頁解除家屬綁定，解除後該家屬不再收到任何通知。
+
+        按下「同意」即表示您理解並接受上述條款。
+      </div>
+      <button class="modal-btn primary" id="pipaAgreeBtn">我同意</button>
+      <button class="modal-btn secondary" id="pipaCancelBtn">取消</button>
+    </div>
+  </div>
+
+  <!-- 分享綁定連結 Modal -->
+  <div class="modal-mask" id="shareModal">
+    <div class="modal">
+      <h2>邀請家屬綁定</h2>
+      <div id="shareError"></div>
+      <div class="share-card">
+        <div class="hint">📱 請家屬用 LINE 開啟以下連結，會看到「您即將成為 ○○○ 的家屬聯絡人」確認頁面。連結 30 分鐘有效。</div>
+        <img id="shareQr" class="qr" alt="綁定 QR Code">
+        <div class="url" id="shareUrl"></div>
+      </div>
+      <button class="modal-btn primary" id="shareLineBtn">📤 用 LINE 分享給家屬</button>
+      <button class="modal-btn secondary" id="shareCopyBtn">📋 複製連結</button>
+      <button class="modal-btn secondary" id="shareCloseBtn">關閉</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    let accessToken = null;
+    let liffProfile = null;
+    let myContacts = [];
+    let pipaConsentAt = null;
+
+    const container = document.getElementById('container');
+    const pipaModal = document.getElementById('pipaModal');
+    const shareModal = document.getElementById('shareModal');
+
+    function el(tag, attrs, text) {
+      const e = document.createElement(tag);
+      if (attrs) for (const k in attrs) {
+        if (k === 'class') e.className = attrs[k];
+        else if (k === 'style') e.style.cssText = attrs[k];
+        else if (k.startsWith('on')) e.addEventListener(k.substring(2), attrs[k]);
+        else e.setAttribute(k, attrs[k]);
+      }
+      if (text != null) e.textContent = String(text);
+      return e;
+    }
+    function clearEl(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+    function showToast(msg, ms) {
+      const t = document.getElementById('toast');
+      t.textContent = String(msg);
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), ms || 3000);
+    }
+    function showError(msg) {
+      clearEl(container);
+      container.appendChild(el('div', { class: 'error-box' }, '⚠️ ' + msg));
+      container.appendChild(el('button', { class: 'btn-add', style: 'background:#1976D2', onclick: () => location.reload() }, '重試'));
+    }
+
+    document.getElementById('backBtn').addEventListener('click', () => {
+      if (document.referrer && document.referrer.includes('/liff/')) history.back();
+      else location.href = '/liff/oneclick.html';
+    });
+
+    async function init() {
+      try {
+        await liff.init({ liffId: '2009663432-cTe2V6kL' });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+        liffProfile = await liff.getProfile();
+        accessToken = liff.getAccessToken();
+      } catch (e) { showError('LIFF 初始化失敗：' + (e.message || e)); return; }
+      await loadContacts();
+    }
+
+    async function loadContacts() {
+      clearEl(container);
+      container.appendChild(el('div', { class: 'loading' }, '載入中...'));
+      try {
+        const r = await fetch('/api/line/liff/my-family-contacts', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '取得失敗');
+        myContacts = data.contacts || [];
+        pipaConsentAt = data.pipaConsentAt;
+        renderContacts();
+      } catch (e) { showError('載入家屬列表失敗：' + e.message); }
+    }
+
+    function renderContacts() {
+      clearEl(container);
+
+      const infoCard = el('div', { class: 'info-card' });
+      infoCard.appendChild(el('div', { style: 'font-weight:bold;margin-bottom:6px' }, '🆘 失聯通知機制'));
+      const infoText = el('div', {}, '當您叫車後司機等不到人時，系統會自動推送通知給您綁定的家屬。每位家屬 24 小時內最多收到 1 次通知。');
+      infoCard.appendChild(infoText);
+      container.appendChild(infoCard);
+
+      if (myContacts.length === 0) {
+        const empty = el('div', { class: 'empty-state' });
+        empty.appendChild(el('div', { class: 'icon' }, '👨‍👩‍👧'));
+        empty.appendChild(el('h2', {}, '還沒有家屬聯絡人'));
+        empty.appendChild(el('p', {}, '建議綁定 1-2 位家屬（兒女、配偶），意外時系統會自動通知他們'));
+        container.appendChild(empty);
+      } else {
+        myContacts.forEach(c => container.appendChild(makeContactCard(c)));
+      }
+
+      const addBtn = el('button', { class: 'btn-add', onclick: () => onAddClick() }, '➕ 邀請家屬綁定');
+      container.appendChild(addBtn);
+    }
+
+    function makeContactCard(c) {
+      const card = el('div', { class: 'contact-card' });
+      const head = el('div', { class: 'head' });
+      head.appendChild(el('span', {}, '👤'));
+      head.appendChild(el('span', { class: 'name' }, c.displayName || '家屬'));
+      if (c.isPrimary) head.appendChild(el('span', { class: 'badge' }, '主要'));
+      card.appendChild(head);
+      card.appendChild(el('div', { class: 'relation' }, '關係：' + (c.relation || '家屬')));
+      card.appendChild(el('button', { class: 'btn-action', onclick: () => confirmDelete(c) }, '解除綁定'));
+      return card;
+    }
+
+    async function confirmDelete(c) {
+      if (!confirm(`確定要解除「${c.displayName}」的家屬綁定嗎？\n之後將不再收到您的 SOS 通知。`)) return;
+      try {
+        const r = await fetch(`/api/line/liff/my-family-contacts/${c.id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '刪除失敗');
+        showToast('已解除綁定');
+        await loadContacts();
+      } catch (e) { showToast('解除失敗：' + e.message, 5000); }
+    }
+
+    // ===== 新增家屬流程：PIPA 同意 → 產 token → 顯示分享 modal =====
+    function onAddClick() {
+      if (!pipaConsentAt) {
+        pipaModal.classList.add('show');
+      } else {
+        generateBindLink();
+      }
+    }
+
+    document.getElementById('pipaCancelBtn').addEventListener('click', () => pipaModal.classList.remove('show'));
+    document.getElementById('pipaAgreeBtn').addEventListener('click', async () => {
+      try {
+        const r = await fetch('/api/line/liff/pipa-family-consent', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!r.ok) { showToast('記錄失敗，請重試'); return; }
+        pipaConsentAt = new Date().toISOString();
+        pipaModal.classList.remove('show');
+        generateBindLink();
+      } catch (e) { showToast('記錄失敗：' + e.message); }
+    });
+
+    async function generateBindLink() {
+      try {
+        const r = await fetch('/api/line/liff/family-bind-token', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          if (data.error === 'PIPA_CONSENT_REQUIRED') {
+            pipaConsentAt = null;
+            pipaModal.classList.add('show');
+            return;
+          }
+          throw new Error(data.error || '產生連結失敗');
+        }
+        showShareModal(data.bindUrl, data.passengerName);
+      } catch (e) { showToast('產生連結失敗：' + e.message, 5000); }
+    }
+
+    function showShareModal(bindUrl, passengerName) {
+      const errBox = document.getElementById('shareError');
+      clearEl(errBox);
+      document.getElementById('shareUrl').textContent = bindUrl;
+      // QR Code: 用 Google Chart API (no key required, public)
+      const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(bindUrl)}`;
+      document.getElementById('shareQr').src = qrApi;
+      shareModal.classList.add('show');
+
+      document.getElementById('shareLineBtn').onclick = async () => {
+        if (liff.isApiAvailable('shareTargetPicker')) {
+          try {
+            await liff.shareTargetPicker([
+              {
+                type: 'text',
+                text: `${passengerName} 邀請您成為家屬聯絡人 — 請點擊連結確認：\n${bindUrl}\n\n連結 30 分鐘內有效。`,
+              },
+            ]);
+            showToast('已開啟分享', 2000);
+          } catch (e) { showToast('分享失敗：' + (e.message || e), 4000); }
+        } else {
+          showToast('您的 LINE 不支援快速分享，請改用「複製連結」');
+        }
+      };
+      document.getElementById('shareCopyBtn').onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(bindUrl);
+          showToast('已複製連結，請貼到 LINE 給家屬');
+        } catch (e) {
+          showToast('複製失敗，請手動長按上方連結複製');
+        }
+      };
+      document.getElementById('shareCloseBtn').onclick = async () => {
+        shareModal.classList.remove('show');
+        await loadContacts();
+      };
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -134,7 +134,7 @@
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
   <script>
-    // mode=relocate / oneclick / my-addresses 時 redirect（同 origin、LIFF auth 保留）
+    // mode=relocate / oneclick / my-addresses / my-family / family-bind 時 redirect
     (function checkRedirect() {
       const _params = new URLSearchParams(window.location.search);
       const _mode = _params.get('mode');
@@ -144,6 +144,11 @@
         window.location.replace('/liff/oneclick.html');
       } else if (_mode === 'my-addresses' || _mode === 'addresses') {
         window.location.replace('/liff/my-addresses.html');
+      } else if (_mode === 'my-family' || _mode === 'family') {
+        window.location.replace('/liff/my-family.html');
+      } else if (_mode === 'family-bind') {
+        // 保留 token query 參數
+        window.location.replace('/liff/family-bind.html?' + _params.toString());
       }
     })();
 

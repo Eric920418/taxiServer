@@ -1682,3 +1682,158 @@ export function fallbackPromptCarousel(orderId: string, currentDiscount: number,
   };
 }
 
+// ========== 模組 5：家屬 SOS Push Card ==========
+
+/**
+ * 長輩失聯（no-show 取消）通知家屬的 Flex Card
+ *
+ * 設計：
+ *   - 紅色警示頭、含警鈴 emoji
+ *   - 長輩名稱 + 訂單時間 + 上車點
+ *   - 司機名 + 車牌 + 電話
+ *   - 司機現場照片（如有）
+ *   - 兩個按鈕：📞 打電話給長輩 / 📞 打電話給司機
+ */
+export function familyNoShowAlertCard(payload: {
+  passengerName: string;
+  passengerPhone?: string;
+  pickupAddress: string;
+  pickupTime: string; // 已格式化「2026/05/27 14:30」
+  driverName: string;
+  driverPlate: string;
+  driverPhone?: string;
+  photoUrl?: string; // 司機拍的現場照片 (HTTPS)
+}): FlexMessage {
+  const heroBlock: any = payload.photoUrl
+    ? {
+        type: 'image',
+        url: payload.photoUrl,
+        size: 'full',
+        aspectRatio: '4:3',
+        aspectMode: 'cover',
+      }
+    : null;
+
+  const callPassengerBtn: any = payload.passengerPhone
+    ? {
+        type: 'button',
+        style: 'primary',
+        color: '#D32F2F',
+        height: 'sm',
+        action: {
+          type: 'uri',
+          label: '📞 打給長輩',
+          uri: `tel:${payload.passengerPhone.replace(/[^0-9+]/g, '')}`,
+        },
+      }
+    : null;
+
+  const callDriverBtn: any = payload.driverPhone
+    ? {
+        type: 'button',
+        style: 'secondary',
+        height: 'sm',
+        action: {
+          type: 'uri',
+          label: '📞 打給司機',
+          uri: `tel:${payload.driverPhone.replace(/[^0-9+]/g, '')}`,
+        },
+      }
+    : null;
+
+  const footerBtns = [callPassengerBtn, callDriverBtn].filter(Boolean);
+
+  const bubble: FlexBubble = {
+    type: 'bubble',
+    size: 'mega',
+    ...(heroBlock ? { hero: heroBlock } : {}),
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'md',
+      backgroundColor: '#FFEBEE',
+      paddingAll: 'lg',
+      contents: [
+        {
+          type: 'text',
+          text: '⚠️ 長輩失聯通知',
+          weight: 'bold',
+          size: 'xl',
+          color: '#C62828',
+        },
+        {
+          type: 'text',
+          text: `${payload.passengerName} 已叫車但未上車`,
+          size: 'md',
+          color: '#424242',
+          wrap: true,
+        },
+        {
+          type: 'separator',
+          margin: 'md',
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'sm',
+          margin: 'md',
+          contents: [
+            {
+              type: 'box',
+              layout: 'baseline',
+              spacing: 'sm',
+              contents: [
+                { type: 'text', text: '上車點', color: '#757575', size: 'sm', flex: 2 },
+                { type: 'text', text: payload.pickupAddress, color: '#212121', size: 'sm', flex: 5, wrap: true },
+              ],
+            },
+            {
+              type: 'box',
+              layout: 'baseline',
+              spacing: 'sm',
+              contents: [
+                { type: 'text', text: '時間', color: '#757575', size: 'sm', flex: 2 },
+                { type: 'text', text: payload.pickupTime, color: '#212121', size: 'sm', flex: 5 },
+              ],
+            },
+            {
+              type: 'box',
+              layout: 'baseline',
+              spacing: 'sm',
+              contents: [
+                { type: 'text', text: '司機', color: '#757575', size: 'sm', flex: 2 },
+                { type: 'text', text: `${payload.driverName} (${payload.driverPlate})`, color: '#212121', size: 'sm', flex: 5 },
+              ],
+            },
+          ],
+        },
+        {
+          type: 'text',
+          text: '請聯絡長輩確認安全',
+          size: 'sm',
+          color: '#D32F2F',
+          weight: 'bold',
+          margin: 'md',
+          align: 'center',
+        },
+      ],
+    },
+    ...(footerBtns.length > 0
+      ? {
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: footerBtns,
+          },
+        }
+      : {}),
+  };
+
+  return {
+    type: 'flex',
+    altText: `⚠️ ${payload.passengerName} 失聯通知 — 請聯絡長輩確認安全`,
+    contents: bubble,
+  };
+}
+

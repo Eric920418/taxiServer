@@ -990,6 +990,280 @@ router.post('/one-click-suggest', verifyLiffToken, async (req: LiffRequest, res:
   }
 });
 
+// ===========================================================================
+// 長輩家屬聯防 — 模組 5 of「長輩 LINE 叫車 roadmap」
+// 決策 (2026-05-26)：QR/分享綁定 + 兩種 cancel 都推 SOS + 24h rate limit + 不鎖定
+// ===========================================================================
+
+import crypto from 'crypto';
+const BIND_TOKEN_TTL_MIN = 30; // bind token 30 分鐘失效（給長輩慢慢分享給家屬）
+
+/**
+ * GET /api/line/liff/my-family-contacts
+ * 長輩查自己綁的家屬列表
+ */
+router.get('/my-family-contacts', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    const rows: any[] = await queryMany(
+      `SELECT id, line_user_id, display_name, relation, is_primary, last_sos_sent_at, created_at
+       FROM passenger_family_contacts
+       WHERE passenger_id = $1
+       ORDER BY is_primary DESC, created_at ASC`,
+      [passengerId]
+    );
+    const pipa = await queryOne(
+      `SELECT pipa_family_consent_at FROM passengers WHERE passenger_id = $1`,
+      [passengerId]
+    );
+    res.json({
+      contacts: rows.map((r: any) => ({
+        id: r.id,
+        lineUserId: r.line_user_id,
+        displayName: r.display_name,
+        relation: r.relation,
+        isPrimary: r.is_primary,
+        lastSosSentAt: r.last_sos_sent_at,
+        createdAt: r.created_at,
+      })),
+      pipaConsentAt: pipa?.pipa_family_consent_at || null,
+    });
+  } catch (error: any) {
+    console.error('[LIFF] 取家屬列表失敗:', error);
+    res.status(500).json({ error: `取家屬列表失敗：${error.message}` });
+  }
+});
+
+/**
+ * POST /api/line/liff/pipa-family-consent
+ * 長輩同意 PIPA 條款（首次新增家屬前必呼叫）
+ */
+router.post('/pipa-family-consent', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    await pool.query(
+      `UPDATE passengers SET pipa_family_consent_at = CURRENT_TIMESTAMP
+       WHERE passenger_id = $1 AND pipa_family_consent_at IS NULL`,
+      [passengerId]
+    );
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: `同意條款記錄失敗：${error.message}` });
+  }
+});
+
+/**
+ * POST /api/line/liff/family-bind-token
+ * 長輩產生綁定 token（30 分鐘失效），回 LIFF URL 供分享 / 產 QR
+ */
+router.post('/family-bind-token', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    // 必須先同意 PIPA
+    const pipa = await queryOne(
+      `SELECT pipa_family_consent_at FROM passengers WHERE passenger_id = $1`,
+      [passengerId]
+    );
+    if (!pipa?.pipa_family_consent_at) {
+      res.status(403).json({ error: 'PIPA_CONSENT_REQUIRED', message: '請先同意個資使用條款' });
+      return;
+    }
+
+    const token = crypto.randomBytes(20).toString('hex');
+    const expiresAt = new Date(Date.now() + BIND_TOKEN_TTL_MIN * 60 * 1000);
+    await pool.query(
+      `INSERT INTO passenger_family_bind_tokens (token, passenger_id, expires_at)
+       VALUES ($1, $2, $3)`,
+      [token, passengerId, expiresAt]
+    );
+
+    // LIFF URL 讓家屬點開
+    const liffId = process.env.LIFF_ID_BOOKING || '';
+    const bindUrl = `https://liff.line.me/${liffId}?mode=family-bind&token=${token}`;
+    res.json({
+      success: true,
+      token,
+      bindUrl,
+      passengerName: displayName,
+      expiresInMinutes: BIND_TOKEN_TTL_MIN,
+    });
+  } catch (error: any) {
+    console.error('[LIFF] 產 family-bind-token 失敗:', error);
+    res.status(500).json({ error: `產生綁定連結失敗：${error.message}` });
+  }
+});
+
+/**
+ * GET /api/line/liff/family-bind/:token
+ * 家屬掃 QR / 點 link 後 LIFF 載入時呼叫，驗證 token + 顯示要綁定的長輩名
+ * （不需要家屬 LIFF auth，是 read-only 預覽）
+ */
+router.get('/family-bind/:token', async (req: Request, res: Response) => {
+  const { token } = req.params;
+  try {
+    const row = await queryOne(
+      `SELECT pfbt.passenger_id, pfbt.expires_at, pfbt.used_at, p.name AS passenger_name
+       FROM passenger_family_bind_tokens pfbt
+       JOIN passengers p ON pfbt.passenger_id = p.passenger_id
+       WHERE pfbt.token = $1`,
+      [token]
+    );
+    if (!row) {
+      res.status(404).json({ error: 'TOKEN_NOT_FOUND', message: '綁定連結無效或不存在' });
+      return;
+    }
+    if (row.used_at) {
+      res.status(409).json({ error: 'TOKEN_USED', message: '此綁定連結已使用過' });
+      return;
+    }
+    if (new Date(row.expires_at) < new Date()) {
+      res.status(410).json({ error: 'TOKEN_EXPIRED', message: '綁定連結已過期，請請長輩重新產生' });
+      return;
+    }
+    res.json({
+      passengerName: row.passenger_name,
+      expiresAt: row.expires_at,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: `驗證綁定連結失敗：${error.message}` });
+  }
+});
+
+/**
+ * POST /api/line/liff/family-bind/:token
+ * 家屬按確認綁定按鈕 → 用家屬自己的 LIFF token auth → INSERT family_contact
+ *
+ * Body: { relation: string }  -- 兒子 / 女兒 / 配偶 / 朋友 / 其他
+ */
+router.post('/family-bind/:token', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const { token } = req.params;
+  const familyLineUserId = req.lineUserId!;
+  const familyDisplayName = req.lineDisplayName || 'LINE 用戶';
+  const relation = (req.body?.relation as string | undefined)?.trim() || '家屬';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const tokenRow = await client.query(
+      `SELECT passenger_id, expires_at, used_at FROM passenger_family_bind_tokens WHERE token = $1 FOR UPDATE`,
+      [token]
+    );
+    if (tokenRow.rows.length === 0) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ error: '綁定連結無效' });
+      return;
+    }
+    const tr = tokenRow.rows[0];
+    if (tr.used_at) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ error: '此綁定連結已使用過' });
+      return;
+    }
+    if (new Date(tr.expires_at) < new Date()) {
+      await client.query('ROLLBACK');
+      res.status(410).json({ error: '綁定連結已過期' });
+      return;
+    }
+    if (tr.passenger_id === `LINE_${familyLineUserId.substring(0, 10)}`) {
+      await client.query('ROLLBACK');
+      res.status(400).json({ error: '不能綁定自己為家屬' });
+      return;
+    }
+
+    // upsert family_contact
+    const existing = await client.query(
+      `SELECT id FROM passenger_family_contacts WHERE passenger_id = $1 AND line_user_id = $2`,
+      [tr.passenger_id, familyLineUserId]
+    );
+    let contactId: number;
+    if (existing.rows.length > 0) {
+      contactId = existing.rows[0].id;
+      await client.query(
+        `UPDATE passenger_family_contacts
+         SET display_name = $1, relation = $2
+         WHERE id = $3`,
+        [familyDisplayName, relation, contactId]
+      );
+    } else {
+      // 第一位家屬自動 is_primary=true
+      const cntRes = await client.query(
+        `SELECT COUNT(*) AS cnt FROM passenger_family_contacts WHERE passenger_id = $1`,
+        [tr.passenger_id]
+      );
+      const isPrimary = parseInt(cntRes.rows[0].cnt, 10) === 0;
+      const insRes = await client.query(
+        `INSERT INTO passenger_family_contacts (passenger_id, line_user_id, display_name, relation, is_primary)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id`,
+        [tr.passenger_id, familyLineUserId, familyDisplayName, relation, isPrimary]
+      );
+      contactId = insRes.rows[0].id;
+    }
+
+    // mark token as used
+    await client.query(
+      `UPDATE passenger_family_bind_tokens
+       SET used_at = CURRENT_TIMESTAMP, used_by_line_user_id = $1
+       WHERE token = $2`,
+      [familyLineUserId, token]
+    );
+
+    // 拿 passenger name
+    const pName = await client.query(
+      `SELECT name FROM passengers WHERE passenger_id = $1`,
+      [tr.passenger_id]
+    );
+    await client.query('COMMIT');
+
+    console.log(`[FamilyBind] ${familyLineUserId} (${familyDisplayName}) 綁定為 ${tr.passenger_id} 的家屬，relation=${relation}`);
+    res.json({
+      success: true,
+      contactId,
+      passengerName: pName.rows[0]?.name || '長輩',
+    });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[LIFF] family-bind 失敗:', error);
+    res.status(500).json({ error: `綁定失敗：${error.message}` });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * DELETE /api/line/liff/my-family-contacts/:id
+ * 長輩解除某家屬綁定
+ */
+router.delete('/my-family-contacts/:id', verifyLiffToken, async (req: LiffRequest, res: Response) => {
+  const userId = req.lineUserId!;
+  const displayName = req.lineDisplayName || 'LINE 用戶';
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: 'id 必須是數字' });
+    return;
+  }
+  try {
+    const passengerId = await ensurePassengerForLineUser(userId, displayName);
+    const result = await pool.query(
+      `DELETE FROM passenger_family_contacts WHERE id = $1 AND passenger_id = $2`,
+      [id, passengerId]
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ error: '找不到此家屬或無權限' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: `刪除失敗：${error.message}` });
+  }
+});
+
 /**
  * POST /api/line/liff/saved-address/:id/increment-use
  * destination 被選用後 client 呼叫此 endpoint +1 use_count（給排序用）

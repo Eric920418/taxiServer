@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+  <title>家屬綁定 - 花蓮計程車</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { font-family: 'Noto Sans TC', sans-serif; background: #F5F5F5; color: #212121; min-height: 100vh; padding: 20px; }
+    .header { font-size: 28px; font-weight: 900; text-align: center; padding: 30px 0 10px 0; color: #1976D2; }
+    .card { background: #fff; border-radius: 16px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .invite-card { background: #E3F2FD; text-align: center; }
+    .invite-card .icon { font-size: 56px; margin-bottom: 12px; }
+    .invite-card h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+    .invite-card .name { font-size: 28px; font-weight: 900; color: #1976D2; margin: 12px 0; }
+    .invite-card .desc { font-size: 16px; color: #424242; line-height: 1.5; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 16px; font-weight: 700; color: #424242; margin-bottom: 8px; }
+    .form-select { width: 100%; height: 56px; padding: 0 14px; border: 2px solid #E0E0E0; border-radius: 10px; font-family: inherit; font-size: 18px; background: #FAFAFA; }
+    .btn-primary { width: 100%; height: 72px; background: #4CAF50; color: #fff; border: none; border-radius: 14px; font-family: inherit; font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(76,175,80,0.3); }
+    .btn-primary:disabled { background: #BDBDBD; box-shadow: none; }
+    .btn-secondary { width: 100%; height: 56px; background: #fff; color: #757575; border: 2px solid #E0E0E0; border-radius: 12px; font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer; margin-top: 10px; }
+    .loading { text-align: center; padding: 60px 20px; font-size: 22px; color: #757575; }
+    .error-box { background: #FFEBEE; border: 2px solid #D32F2F; border-radius: 12px; padding: 16px; color: #C62828; font-size: 18px; font-weight: 700; line-height: 1.5; margin-bottom: 16px; }
+    .success-card { background: #E8F5E9; border: 2px solid #4CAF50; text-align: center; padding: 30px; }
+    .success-card .icon { font-size: 72px; margin-bottom: 12px; }
+    .success-card h2 { font-size: 24px; font-weight: 700; margin-bottom: 8px; color: #2E7D32; }
+    .success-card p { font-size: 16px; color: #424242; line-height: 1.5; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="header">👨‍👩‍👧 家屬綁定</div>
+  <div id="content"></div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    let accessToken = null;
+    let liffProfile = null;
+    let token = null;
+    let passengerName = '';
+
+    const content = document.getElementById('content');
+
+    function el(tag, attrs, text) {
+      const e = document.createElement(tag);
+      if (attrs) for (const k in attrs) {
+        if (k === 'class') e.className = attrs[k];
+        else if (k === 'style') e.style.cssText = attrs[k];
+        else if (k.startsWith('on')) e.addEventListener(k.substring(2), attrs[k]);
+        else e.setAttribute(k, attrs[k]);
+      }
+      if (text != null) e.textContent = String(text);
+      return e;
+    }
+    function clearContent() { while (content.firstChild) content.removeChild(content.firstChild); }
+
+    function renderError(msg) {
+      clearContent();
+      content.appendChild(el('div', { class: 'error-box' }, '⚠️ ' + msg));
+      content.appendChild(el('button', { class: 'btn-secondary', onclick: () => liff.closeWindow() }, '關閉'));
+    }
+
+    async function init() {
+      // 從 URL 拿 token
+      const params = new URLSearchParams(location.search);
+      token = params.get('token');
+      if (!token) { renderError('連結缺少 token，請請長輩重新分享'); return; }
+
+      clearContent();
+      content.appendChild(el('div', { class: 'loading' }, '載入中...'));
+
+      try {
+        await liff.init({ liffId: '2009663432-cTe2V6kL' });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+        liffProfile = await liff.getProfile();
+        accessToken = liff.getAccessToken();
+      } catch (e) { renderError('LIFF 初始化失敗：' + (e.message || e)); return; }
+
+      // 驗證 token（GET 預覽）
+      try {
+        const r = await fetch(`/api/line/liff/family-bind/${encodeURIComponent(token)}`);
+        const data = await r.json();
+        if (!r.ok) { renderError(data.message || data.error || '連結無效'); return; }
+        passengerName = data.passengerName || '長輩';
+        renderConfirm();
+      } catch (e) { renderError('連線失敗：' + e.message); }
+    }
+
+    function renderConfirm() {
+      clearContent();
+
+      const invite = el('div', { class: 'card invite-card' });
+      invite.appendChild(el('div', { class: 'icon' }, '🤝'));
+      invite.appendChild(el('h2', {}, '您即將成為家屬聯絡人'));
+      invite.appendChild(el('div', { class: 'name' }, passengerName));
+      invite.appendChild(el('div', { class: 'desc' }, '同意後，當這位長輩叫車失聯時，您會立即收到通知（含上車點、司機資訊、現場照片），24 小時內最多 1 次'));
+      content.appendChild(invite);
+
+      const form = el('div', { class: 'card' });
+      const fg = el('div', { class: 'form-group' });
+      fg.appendChild(el('label', {}, '您和這位長輩的關係'));
+      const select = el('select', { class: 'form-select', id: 'relationSelect' });
+      [
+        ['兒子', '兒子'],
+        ['女兒', '女兒'],
+        ['配偶', '配偶'],
+        ['朋友', '朋友'],
+        ['看護', '看護'],
+        ['其他', '其他'],
+      ].forEach(([v, label]) => {
+        const opt = el('option', { value: v }, label);
+        select.appendChild(opt);
+      });
+      fg.appendChild(select);
+      form.appendChild(fg);
+
+      const btn = el('button', { class: 'btn-primary', id: 'confirmBtn', onclick: confirmBind }, '✓ 確認綁定');
+      form.appendChild(btn);
+
+      const cancel = el('button', { class: 'btn-secondary', onclick: () => liff.closeWindow() }, '取消');
+      form.appendChild(cancel);
+
+      content.appendChild(form);
+    }
+
+    async function confirmBind() {
+      const btn = document.getElementById('confirmBtn');
+      btn.disabled = true;
+      btn.textContent = '綁定中...';
+      const relation = document.getElementById('relationSelect').value;
+      try {
+        const r = await fetch(`/api/line/liff/family-bind/${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ relation }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '綁定失敗');
+        renderSuccess(data.passengerName || passengerName);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '✓ 確認綁定';
+        // 顯示錯誤
+        let err = document.querySelector('.error-box');
+        if (!err) {
+          err = el('div', { class: 'error-box' });
+          content.insertBefore(err, content.firstChild);
+        }
+        err.textContent = '⚠️ ' + e.message;
+      }
+    }
+
+    function renderSuccess(name) {
+      clearContent();
+      const card = el('div', { class: 'card success-card' });
+      card.appendChild(el('div', { class: 'icon' }, '✅'));
+      card.appendChild(el('h2', {}, '綁定成功！'));
+      card.appendChild(el('p', {}, `您已成為 ${name} 的家屬聯絡人`));
+      card.appendChild(el('p', {}, '當長輩有意外狀況，您會自動收到通知'));
+      content.appendChild(card);
+      const closeBtn = el('button', { class: 'btn-primary', style: 'background:#1976D2;margin-top:16px', onclick: () => liff.closeWindow() }, '完成');
+      content.appendChild(closeBtn);
+    }
+
+    init();
+  </script>
+</body>
+</html>
