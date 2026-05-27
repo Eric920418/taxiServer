@@ -267,6 +267,16 @@ if (process.env.LINE_CHANNEL_ACCESS_TOKEN && process.env.LINE_CHANNEL_SECRET) {
       }, 60 * 1000);
       console.log('[系統] Queue 防作弊 cron 已啟動（每 60s）');
     }).catch((e: Error) => console.warn('[系統] Queue 模組初始化失敗:', e.message));
+
+    // 模組 2：TTS audio 檔每日清理（>7 天刪掉，避免堆積）
+    import('./services/TTSService').then(({ cleanupOldAudio }) => {
+      setInterval(() => {
+        try { cleanupOldAudio(7); } catch (e: any) { console.warn('[TTSCleanup] 失敗:', e.message); }
+      }, 24 * 3600 * 1000);
+      // 啟動時跑一次
+      cleanupOldAudio(7);
+      console.log('[系統] TTS audio cleanup cron 已啟動（每 24h）');
+    }).catch(() => { /* TTSService 不可用就跳過 */ });
   } catch (error) {
     console.warn('[系統] LINE 叫車處理引擎初始化失敗:', (error as Error).message);
   }

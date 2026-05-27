@@ -66,6 +66,13 @@ export class LineNotifier {
           }
 
           message = templates.driverAcceptedCard(orderId, driverName, plate, etaMinutes);
+
+          // 模組 2：TTS 語音通知 — 老人友善附加聲音訊息
+          // 失敗（無 API key / 額度爆）graceful skip、不擋 Flex card 推播
+          if (process.env.GOOGLE_TTS_API_KEY) {
+            this.pushTtsAcceptedAudio(line_user_id, orderId, driverName, plate, etaMinutes)
+              .catch(err => console.error(`[TTS] ACCEPTED 語音推播失敗 (${orderId}):`, err.message));
+          }
           break;
         }
 
@@ -264,6 +271,32 @@ export class LineNotifier {
     } catch (error: any) {
       console.error(`[LineNotifier] 預約提醒推播失敗 (${orderId}):`, error.message || error);
     }
+  }
+
+  /**
+   * 模組 2：推送 TTS 語音 mp3 給乘客（派車成功時搭配 Flex card）
+   * 失敗 silent log + skip — 不擋主流程
+   */
+  private async pushTtsAcceptedAudio(
+    lineUserId: string,
+    orderId: string,
+    driverName: string,
+    plate: string,
+    etaMinutes: number | null,
+  ): Promise<void> {
+    // 動態 import 避免 cold start 載 TTSService
+    const { synthesizeChineseMp3, buildDriverAcceptedTtsText } = await import('./TTSService');
+    const text = buildDriverAcceptedTtsText({ driverName, plate, etaMinutes });
+    const tts = await synthesizeChineseMp3(text, orderId);
+    await this.lineClient.pushMessage({
+      to: lineUserId,
+      messages: [{
+        type: 'audio',
+        originalContentUrl: tts.audioUrl,
+        duration: tts.durationMs,
+      } as messagingApi.AudioMessage],
+    });
+    console.log(`[TTS] ✓ 推 ACCEPTED 語音給 ${lineUserId} (orderId=${orderId}, ${tts.durationMs}ms)`);
   }
 
   /**
