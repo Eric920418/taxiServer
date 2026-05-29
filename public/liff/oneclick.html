@@ -168,176 +168,109 @@
       return '目前位置';
     }
 
+    // 原始 GPS 上車點（零設定的人靠這個送單）
+    let rawPickup = null;
+
     async function fetchSuggestion(lat, lng) {
       try {
         const pickupAddress = await reverseGeocode(lat, lng);
-        const res = await fetch('/api/line/liff/one-click-suggest', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-          body: JSON.stringify({ pickupLat: lat, pickupLng: lng, pickupAddress }),
-        });
-        const data = await res.json();
-        if (!res.ok) { renderError(data.error || '無法取得建議'); return; }
-        suggested = data;
-        renderByStatus(data);
+        rawPickup = { lat, lng, address: pickupAddress };
+
+        // 並行拿「上車點 snap 建議」+「常用地點清單」，皆失敗也不擋（rawPickup 一定能送單）
+        const [suggestRes, addrRes] = await Promise.allSettled([
+          fetch('/api/line/liff/one-click-suggest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+            body: JSON.stringify({ pickupLat: lat, pickupLng: lng, pickupAddress }),
+          }).then(r => r.json()),
+          fetch('/api/line/liff/my-addresses', {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }).then(r => r.json()),
+        ]);
+
+        suggested = suggestRes.status === 'fulfilled' ? suggestRes.value : { status: 'NO_ADDRESSES' };
+        myAddresses = (addrRes.status === 'fulfilled' && addrRes.value.addresses) ? addrRes.value.addresses : [];
+
+        renderMain();
       } catch (e) {
         renderError('連線失敗：' + e.message);
       }
     }
 
-    async function renderByStatus(data) {
+    /**
+     * 統一主畫面（真·一鍵）：上車點卡 + 大鈕「立刻叫車」+（有常用點才顯示）目的地捷徑
+     */
+    function renderMain() {
       clearContent();
 
-      if (data.status === 'NO_ADDRESSES') {
-        const wrap = el('div', { class: 'empty-state' });
-        wrap.appendChild(el('div', { class: 'icon' }, '📍'));
-        wrap.appendChild(el('h2', {}, '您還沒有常用地點'));
-        wrap.appendChild(el('p', {}, data.message));
-        wrap.appendChild(el('button', {
-          class: 'btn-primary',
-          style: 'background:#1976D2',
-          onclick: goToAddresses
-        }, '新增常用地點'));
-        const link = el('div', { class: 'link-row' });
-        link.appendChild(el('a', { href: '/liff/booking.html?mode=call' }, '先用詳細叫車'));
-        wrap.appendChild(link);
-        content.appendChild(wrap);
-        return;
-      }
-
-      if (data.status === 'AT_FAVORITE') {
-        try {
-          const r = await fetch('/api/line/liff/my-addresses', {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          });
-          const j = await r.json();
-          myAddresses = j.addresses || [];
-        } catch (e) { console.warn('fetch addresses failed:', e); }
-
-        const others = myAddresses.filter(a => a.displayName !== data.favoriteName);
-
-        const card = el('div', { class: 'card' });
-        card.appendChild(el('div', { class: 'card-label' }, '📍 您現在在'));
-        card.appendChild(el('div', { class: 'card-main' }, data.favoriteName + ' 附近'));
-        content.appendChild(card);
-
-        content.appendChild(el('div', { class: 'section-title' }, '請選擇要去的地方：'));
-        if (others.length > 0) {
-          others.forEach(a => content.appendChild(makeDestOption(a)));
-        } else {
-          content.appendChild(el('p', {
-            style: 'text-align:center;color:#757575;font-size:16px;margin:20px 0'
-          }, '沒有其他常用地點，請先新增'));
-        }
-
-        const link = el('div', { class: 'link-row', style: 'margin-top:24px' });
-        link.appendChild(el('a', { onclick: goToAddresses }, '📍 管理我的常用地點'));
-        content.appendChild(link);
-
-        const link2 = el('div', { class: 'link-row', style: 'margin-top:8px' });
-        link2.appendChild(el('a', { href: '/liff/booking.html?mode=call' }, '改用詳細叫車'));
-        content.appendChild(link2);
-        return;
-      }
-
-      // status === 'OK'
-      const p = data.pickup;
-      const d = data.destination;
-
-      content.appendChild(el('div', { class: 'subtitle' }, '確認叫車資訊'));
+      const pickup = (suggested && suggested.pickup) ? suggested.pickup : rawPickup;
+      const pickupLabel = (pickup && pickup.fromFavorite) ? pickup.favoriteName : '目前位置';
+      const pickupAddr = (pickup && pickup.address) ? pickup.address : '定位中...';
 
       const pickCard = el('div', { class: 'card' });
-      pickCard.appendChild(el('div', { class: 'card-label' }, '📍 上車'));
-      pickCard.appendChild(el('div', { class: 'card-main' }, p.fromFavorite ? p.favoriteName : '目前位置'));
-      pickCard.appendChild(el('div', { class: 'card-sub' }, p.address));
+      pickCard.appendChild(el('div', { class: 'card-label' }, '📍 上車點'));
+      pickCard.appendChild(el('div', { class: 'card-main' }, pickupLabel));
+      pickCard.appendChild(el('div', { class: 'card-sub' }, pickupAddr));
       content.appendChild(pickCard);
 
-      const destCard = el('div', { class: 'card' });
-      destCard.appendChild(el('div', { class: 'card-label' }, '🎯 要去'));
-      destCard.appendChild(el('div', { class: 'card-main' }, d.displayName));
-      destCard.appendChild(el('div', { class: 'card-sub' }, d.address));
-      content.appendChild(destCard);
-
-      const confirmBtn = el('button', {
+      const fireBtn = el('button', {
         class: 'btn-primary',
-        id: 'confirmBtn',
-        onclick: confirmOrder
-      }, '✓ 確認叫車');
-      content.appendChild(confirmBtn);
+        style: 'height:96px;font-size:32px',
+        onclick: () => fireDispatch(pickup, null),
+      }, '🚖 立刻叫車');
+      content.appendChild(fireBtn);
+      content.appendChild(el('div', {
+        style: 'text-align:center;color:#757575;font-size:15px;margin-top:8px'
+      }, '不用設定，按一下司機馬上來'));
 
-      const row = el('div', { class: 'btn-row' });
-      row.appendChild(el('button', { class: 'btn-secondary', onclick: changeDestination }, '換目的地'));
-      row.appendChild(el('button', {
-        class: 'btn-secondary',
-        onclick: () => location.href = '/liff/booking.html?mode=call'
-      }, '詳細叫車'));
-      content.appendChild(row);
-
-      const link = el('div', { class: 'link-row' });
-      link.appendChild(el('a', { onclick: goToAddresses }, '📍 管理我的常用地點'));
-      content.appendChild(link);
-    }
-
-    function makeDestOption(a) {
-      const btn = el('button', {
-        class: 'dest-option',
-        onclick: () => {
-          suggested.destination = a;
-          renderByStatus(suggested);
-        }
-      });
-      btn.appendChild(el('div', { class: 'name' }, '🎯 ' + a.displayName));
-      btn.appendChild(el('div', { class: 'addr' }, a.address));
-      return btn;
-    }
-
-    async function changeDestination() {
-      renderLoading('載入常用地點...');
-      try {
-        const r = await fetch('/api/line/liff/my-addresses', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
+      if (myAddresses.length > 0) {
+        content.appendChild(el('div', { class: 'section-title', style: 'margin-top:28px' }, '想指定目的地？（選填）'));
+        myAddresses.forEach(a => {
+          const btn = el('div', {
+            class: 'dest-option',
+            onclick: () => fireDispatch(pickup, a),
+          });
+          btn.appendChild(el('div', { class: 'name' }, '🎯 ' + a.displayName));
+          btn.appendChild(el('div', { class: 'addr' }, a.address));
+          content.appendChild(btn);
         });
-        const j = await r.json();
-        myAddresses = j.addresses || [];
-      } catch (e) {
-        renderError('載入常用地點失敗：' + e.message);
+      }
+
+      const link1 = el('div', { class: 'link-row', style: 'margin-top:24px' });
+      link1.appendChild(el('a', { onclick: goToAddresses }, '📍 管理我的常用地點'));
+      content.appendChild(link1);
+      const link2 = el('div', { class: 'link-row', style: 'margin-top:8px' });
+      link2.appendChild(el('a', { href: '/liff/booking.html?mode=call' }, '改用詳細叫車（自己選位置）'));
+      content.appendChild(link2);
+    }
+
+    /**
+     * 真·一鍵送單 — 立刻 POST create-order（不確認、不倒數）
+     * 送出後顯示成功頁 + 大「取消叫車」鈕（誤觸防護：發車後可取消）
+     *
+     * @param pickup {lat, lng, address, fromFavorite?, favoriteName?}
+     * @param destination null（不指定）or 常用地點 {id, displayName, address, lat, lng}
+     */
+    async function fireDispatch(pickup, destination) {
+      if (!pickup || pickup.lat == null) {
+        showToast('還在定位中，請稍候再按', 3000);
         return;
       }
-
       clearContent();
-      const pickCard = el('div', { class: 'card' });
-      pickCard.appendChild(el('div', { class: 'card-label' }, '📍 上車'));
-      pickCard.appendChild(el('div', { class: 'card-main' }, suggested.pickup.fromFavorite ? suggested.pickup.favoriteName : '目前位置'));
-      content.appendChild(pickCard);
+      content.appendChild(el('div', { class: 'loading' }, '正在為您叫車...'));
 
-      content.appendChild(el('div', { class: 'section-title' }, '換成去：'));
-      const currentDestId = suggested.destination.id;
-      const others = myAddresses.filter(a => a.id !== currentDestId);
-      if (others.length > 0) {
-        others.forEach(a => content.appendChild(makeDestOption(a)));
-      } else {
-        content.appendChild(el('p', {
-          style: 'text-align:center;color:#757575;font-size:16px;margin:20px 0'
-        }, '沒有其他選擇，請去管理新增'));
-      }
-
-      const row = el('div', { class: 'btn-row', style: 'margin-top:16px' });
-      row.appendChild(el('button', { class: 'btn-secondary', onclick: () => renderByStatus(suggested) }, '取消'));
-      content.appendChild(row);
-    }
-
-    async function confirmOrder() {
-      const btn = document.getElementById('confirmBtn');
-      btn.disabled = true;
-      btn.textContent = '叫車中...';
       try {
-        const p = suggested.pickup;
-        const d = suggested.destination;
         const body = {
-          pickupLat: p.lat, pickupLng: p.lng, pickupAddress: p.address,
-          destLat: d.lat, destLng: d.lng, destAddress: d.address,
+          pickupLat: pickup.lat,
+          pickupLng: pickup.lng,
+          pickupAddress: pickup.address,
           mode: 'call', paymentType: 'CASH', subsidyType: 'NONE', discountAmount: 0,
         };
+        if (destination) {
+          body.destLat = destination.lat;
+          body.destLng = destination.lng;
+          body.destAddress = destination.address;
+        }
         const res = await fetch('/api/line/liff/create-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
@@ -346,33 +279,86 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || '叫車失敗');
 
-        if (d.id) {
-          fetch(`/api/line/liff/saved-address/${d.id}/increment-use`, {
+        if (destination && destination.id) {
+          fetch(`/api/line/liff/saved-address/${destination.id}/increment-use`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }).catch(() => {});
         }
 
         if (liff.isInClient()) {
+          const destText = destination ? `\n要去：${destination.displayName}` : '';
           try {
             await liff.sendMessages([{
               type: 'text',
-              text: `我已叫車！\n上車：${p.fromFavorite ? p.favoriteName : '目前位置'}\n要去：${d.displayName}`
+              text: `我已叫車！\n上車：${pickup.fromFavorite ? pickup.favoriteName : '目前位置'}${destText}`,
             }]);
-          } catch (e) { /* user may not have permission */ }
-          liff.closeWindow();
-        } else {
-          clearContent();
-          const wrap = el('div', { class: 'empty-state' });
-          wrap.appendChild(el('div', { class: 'icon' }, '✅'));
-          wrap.appendChild(el('h2', {}, '叫車成功！'));
-          wrap.appendChild(el('p', {}, '司機正在為您安排，請回 LINE 查看訂單狀態'));
-          content.appendChild(wrap);
+          } catch (e) { /* 無權限就略過 */ }
         }
+
+        renderSuccess(data.orderId, pickup, destination);
       } catch (e) {
-        btn.disabled = false;
-        btn.textContent = '✓ 確認叫車';
-        showToast(e.message || '叫車失敗，請重試', 5000);
+        renderError('叫車失敗：' + e.message);
+      }
+    }
+
+    /** 成功頁 — 含大「取消叫車」鈕（誤觸/反悔用）*/
+    function renderSuccess(orderId, pickup, destination) {
+      clearContent();
+
+      const wrap = el('div', { class: 'card', style: 'text-align:center;background:#E8F5E9;border:2px solid #4CAF50' });
+      wrap.appendChild(el('div', { style: 'font-size:64px;margin-bottom:8px' }, '✅'));
+      wrap.appendChild(el('div', { style: 'font-size:28px;font-weight:900;color:#2E7D32;margin-bottom:8px' }, '叫車成功！'));
+      wrap.appendChild(el('div', { style: 'font-size:18px;color:#424242;line-height:1.5' }, '司機正在為您安排，請稍候'));
+      content.appendChild(wrap);
+
+      const info = el('div', { class: 'card' });
+      info.appendChild(el('div', { class: 'card-label' }, '📍 上車'));
+      info.appendChild(el('div', { class: 'card-sub', style: 'margin-bottom:8px' }, pickup.fromFavorite ? pickup.favoriteName : (pickup.address || '目前位置')));
+      if (destination) {
+        info.appendChild(el('div', { class: 'card-label' }, '🎯 要去'));
+        info.appendChild(el('div', { class: 'card-sub' }, destination.displayName));
+      } else {
+        info.appendChild(el('div', { class: 'card-sub', style: 'color:#999' }, '（未指定目的地，上車後告訴司機即可）'));
+      }
+      content.appendChild(info);
+
+      const cancelBtn = el('button', {
+        class: 'btn-primary',
+        id: 'cancelBtn',
+        style: 'background:#D32F2F;box-shadow:0 4px 12px rgba(211,47,47,0.3)',
+        onclick: () => cancelOrder(orderId),
+      }, '✕ 取消叫車');
+      content.appendChild(cancelBtn);
+
+      const link = el('div', { class: 'link-row' });
+      link.appendChild(el('a', { onclick: () => { if (liff.isInClient()) liff.closeWindow(); else location.reload(); } }, '關閉，回 LINE 查看'));
+      content.appendChild(link);
+    }
+
+    async function cancelOrder(orderId) {
+      const btn = document.getElementById('cancelBtn');
+      if (btn) { btn.disabled = true; btn.textContent = '取消中...'; }
+      try {
+        const res = await fetch(`/api/line/liff/cancel-order/${orderId}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '取消失敗');
+
+        clearContent();
+        const wrap = el('div', { class: 'card', style: 'text-align:center' });
+        wrap.appendChild(el('div', { style: 'font-size:56px;margin-bottom:8px' }, '🚫'));
+        wrap.appendChild(el('div', { style: 'font-size:24px;font-weight:700;margin-bottom:8px' }, '已取消叫車'));
+        content.appendChild(wrap);
+        content.appendChild(el('button', { class: 'btn-primary', onclick: () => location.reload() }, '重新叫車'));
+        const link = el('div', { class: 'link-row' });
+        link.appendChild(el('a', { onclick: () => { if (liff.isInClient()) liff.closeWindow(); } }, '關閉'));
+        content.appendChild(link);
+      } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = '✕ 取消叫車'; }
+        showToast(e.message || '已無法取消（司機可能已出發）', 5000);
       }
     }
 
