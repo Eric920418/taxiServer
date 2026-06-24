@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query, queryOne, queryMany } from '../db/connection';
+import { maskCounterpartPhone } from './relay';
 import { broadcastOrderToDrivers, broadcastOrderStatusToDrivers, notifyDriverOrderStatus } from '../socket';
 import { registerOrder, cancelOrderTracking } from '../services/OrderDispatcher';
 import { getSmartDispatcherV2, OrderData } from '../services/SmartDispatcherV2';
@@ -551,7 +552,7 @@ router.get('/:passengerId/orders', async (req, res) => {
       passengerId: o.passenger_id,
       driverId: o.driver_id,
       driverName: o.driver_name,
-      driverPhone: o.driver_phone,
+      driverPhone: maskCounterpartPhone(o.driver_phone),
       driverPlate: o.driver_plate,
       pickup: {
         lat: parseFloat(o.pickup_lat),

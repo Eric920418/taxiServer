@@ -8,6 +8,7 @@ import path from 'path';
 import driversRouter from './api/drivers';
 import ordersRouter from './api/orders';
 import passengersRouter from './api/passengers';
+import relayRouter from './api/relay';
 import earningsRouter from './api/earnings';
 import dispatchRouter from './api/dispatch';
 import dispatchV2Router from './api/dispatch-v2';
@@ -337,6 +338,7 @@ app.use('/api/ratings', ratingsRouter);
 app.use('/api/whisper', whisperRouter);
 app.use('/api/config', configRouter);
 app.use('/api/phone-calls', phoneCallsRouter);
+app.use('/api/relay', relayRouter);
 app.use('/api/line', lineWebhookRouter);
 app.use('/api/line/liff', lineLiffRouter);
 

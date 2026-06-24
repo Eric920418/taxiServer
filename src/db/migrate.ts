@@ -31,6 +31,7 @@ const MIGRATIONS = {
   'passenger-saved-addresses': '027-passenger-saved-addresses.sql', // 長輩 LINE 一鍵叫車：passenger 常用地點
   'no-show-evidence': '028-no-show-evidence.sql',                   // 模組 4：司機找不到客人拍照存證
   'family-contacts-and-sos': '029-family-contacts-and-sos.sql',     // 模組 5：家屬聯防 + SOS
+  'ai-dispatch-v2': '030-ai-dispatch-v2.sql',                       // 電話叫車 v2：刷卡/無障礙/預約 status/特殊需求
 };
 
 /**

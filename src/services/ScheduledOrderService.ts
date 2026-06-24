@@ -176,7 +176,12 @@ export class ScheduledOrderService {
       } : null,
       paymentType: order.payment_type || 'CASH',
       createdAt: Date.now(),
-      source: 'LINE',
+      source: order.source || 'LINE',
+      subsidyType: order.subsidy_type || 'NONE',
+      petPresent: order.pet_present || 'UNKNOWN',
+      needsWheelchair: !!order.needs_wheelchair,
+      specialNotes: order.special_notes || undefined,
+      customerPhone: order.customer_phone || undefined,
     };
 
     await dispatcher.startDispatch(orderData);
@@ -203,7 +208,7 @@ export class ScheduledOrderService {
     const result = await this.pool.query(`
       SELECT order_id, scheduled_at FROM orders
       WHERE scheduled_at IS NOT NULL
-        AND status IN ('WAITING', 'OFFERED')
+        AND status IN ('WAITING', 'OFFERED', 'SCHEDULED')
         AND scheduled_at > NOW()
       ORDER BY scheduled_at ASC
     `);

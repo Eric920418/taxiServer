@@ -19,6 +19,7 @@ import {
   getSocketIO,
 } from '../socket';
 import { ETAService, getETAService, Location } from './ETAService';
+import { maskCounterpartPhone } from '../api/relay';
 import {
   RejectionPredictor,
   getRejectionPredictor,
@@ -58,6 +59,8 @@ export interface OrderData {
   subsidyType?: string;      // SENIOR_CARD/LOVE_CARD/PENDING/NONE
   petPresent?: string;       // YES/NO/UNKNOWN
   petCarrier?: string;       // YES/NO/UNKNOWN
+  needsWheelchair?: boolean;  // 需要無障礙/輪椅車 → 篩 drivers.can_wheelchair
+  specialNotes?: string;      // 特殊需求備註（給司機看）
   customerPhone?: string;    // 來電號碼
   // GoGoCha 媒合擴展
   discountAmount?: number;             // 客人答應給的折扣 NT$ 元 (0/10/20/30/40)
@@ -595,7 +598,7 @@ export class SmartDispatcherV2 {
           orderId: state.order.orderId,
           passengerId: state.order.passengerId,
           passengerName: state.order.passengerName,
-          passengerPhone: state.order.passengerPhone,
+          passengerPhone: maskCounterpartPhone(state.order.passengerPhone),
           pickup: state.order.pickup,
           destination: state.order.destination,
           paymentType: state.order.paymentType,
@@ -633,7 +636,7 @@ export class SmartDispatcherV2 {
           subsidyType: state.order.subsidyType || 'NONE',
           petPresent: state.order.petPresent || 'UNKNOWN',
           petCarrier: state.order.petCarrier || 'UNKNOWN',
-          customerPhone: state.order.customerPhone || null,
+          customerPhone: maskCounterpartPhone(state.order.customerPhone),
           destinationConfirmed: false,
         };
 
@@ -648,7 +651,7 @@ export class SmartDispatcherV2 {
         fcm?.sendNewOrderToDriver(driver.driverId, {
           orderId: orderOffer.orderId,
           passengerName: orderOffer.passengerName || '乘客',
-          passengerPhone: orderOffer.passengerPhone,
+          passengerPhone: orderOffer.passengerPhone ?? undefined,
           pickup: typeof orderOffer.pickup === 'string' ? orderOffer.pickup : (orderOffer.pickup?.address || '未知地點'),
         }).catch((e: Error) => console.error('[FCM] dispatch 推播失敗:', e.message));
 
@@ -1267,6 +1270,14 @@ export class SmartDispatcherV2 {
     if (order?.petPresent === 'YES') {
       capabilityFilter += ' AND d.can_pet = TRUE';
     }
+    // 刷卡：客人選刷卡 → 只派有刷卡機的車
+    if (order?.paymentType === 'CREDIT_CARD') {
+      capabilityFilter += ' AND d.can_credit_card = TRUE';
+    }
+    // 無障礙：本單需輪椅車 → 只派無障礙車
+    if (order?.needsWheelchair) {
+      capabilityFilter += ' AND d.can_wheelchair = TRUE';
+    }
 
     // [Layer 0.5] Preferred Fleet 過濾：訂單綁定特定車隊（LINE 官方/電話來源）
     //   只派此 fleet 的 PRIMARY_FLEET 司機；30 秒 timeout 後客人可選擇解除
@@ -1431,6 +1442,57 @@ export class SmartDispatcherV2 {
 
   private toRadians(degrees: number): number {
     return degrees * (Math.PI / 180);
+  }
+
+  /**
+   * 派單前同步查「附近有沒有可用車 + 最近一台 ETA」。
+   * 給即時 AI 在建單前判斷：有車→報「大約 X 分鐘」；沒車→請客人稍後再撥（不建單）。
+   * 用 heartbeat（5 分鐘內 AVAILABLE）+ 同一套能力篩選 + Haversine 取最近，ETAService 估分鐘。
+   */
+  public async checkAvailability(
+    pickup: { lat: number; lng: number },
+    filters?: { subsidyType?: string; paymentType?: string; needsWheelchair?: boolean; petPresent?: string }
+  ): Promise<{ count: number; nearestEtaMinutes: number | null }> {
+    let capabilityFilter = '';
+    if (filters?.subsidyType === 'SENIOR_CARD') capabilityFilter += ' AND can_senior_card = TRUE';
+    else if (filters?.subsidyType === 'LOVE_CARD') capabilityFilter += ' AND can_love_card = TRUE';
+    if (filters?.petPresent === 'YES') capabilityFilter += ' AND can_pet = TRUE';
+    if (filters?.paymentType === 'CREDIT_CARD') capabilityFilter += ' AND can_credit_card = TRUE';
+    if (filters?.needsWheelchair) capabilityFilter += ' AND can_wheelchair = TRUE';
+
+    const result = await this.pool.query(`
+      SELECT driver_id, current_lat, current_lng
+      FROM drivers
+      WHERE availability = 'AVAILABLE'
+        AND current_lat IS NOT NULL AND current_lng IS NOT NULL
+        AND last_heartbeat > NOW() - INTERVAL '5 minutes'
+        ${capabilityFilter}
+    `);
+
+    const RADIUS_KM = 10;
+    let nearest: { lat: number; lng: number; distKm: number } | null = null;
+    let count = 0;
+    for (const r of result.rows) {
+      const dLat = parseFloat(r.current_lat);
+      const dLng = parseFloat(r.current_lng);
+      if (Number.isNaN(dLat) || Number.isNaN(dLng)) continue;
+      const distKm = this.calculateDistance(pickup, { lat: dLat, lng: dLng });
+      if (distKm > RADIUS_KM) continue;
+      count++;
+      if (!nearest || distKm < nearest.distKm) nearest = { lat: dLat, lng: dLng, distKm };
+    }
+
+    let nearestEtaMinutes: number | null = null;
+    if (nearest) {
+      try {
+        const eta = await getETAService().getETA({ lat: nearest.lat, lng: nearest.lng }, pickup);
+        nearestEtaMinutes = Math.max(1, Math.round(eta.seconds / 60));
+      } catch {
+        // ETA 服務失敗 → 用 Haversine 估（路網係數 1.3、30km/h）
+        nearestEtaMinutes = Math.max(1, Math.round((nearest.distKm * 1.3 / 30) * 60));
+      }
+    }
+    return { count, nearestEtaMinutes };
   }
 
   /**

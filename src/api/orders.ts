@@ -3,6 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { query, queryOne, queryMany } from '../db/connection';
+import { maskCounterpartPhone } from './relay';
 import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations, passengerSockets } from '../socket';
 import { getETAService } from '../services/ETAService';
 import {
@@ -244,7 +245,7 @@ router.get('/', async (req, res) => {
         subsidyAmount: o.subsidy_amount || 0,
         petPresent: o.pet_present || 'UNKNOWN',
         petCarrier: o.pet_carrier || 'UNKNOWN',
-        customerPhone: o.customer_phone,
+        customerPhone: maskCounterpartPhone(o.customer_phone),
         destinationConfirmed: o.destination_confirmed || false
       })),
       total: orders.length
@@ -363,7 +364,7 @@ router.get('/:orderId', async (req, res) => {
       petPresent: order.pet_present || 'UNKNOWN',
       petCarrier: order.pet_carrier || 'UNKNOWN',
       petNote: order.pet_note,
-      customerPhone: order.customer_phone,
+      customerPhone: maskCounterpartPhone(order.customer_phone),
       destinationConfirmed: order.destination_confirmed || false,
       callId: order.call_id
     });
@@ -491,7 +492,7 @@ router.patch('/:orderId/accept', async (req, res) => {
       passengerPhone: fullOrder.passenger_phone,
       driverId: fullOrder.driver_id,
       driverName: fullOrder.driver_name || driverName,
-      driverPhone: fullOrder.driver_phone,
+      driverPhone: maskCounterpartPhone(fullOrder.driver_phone),
       status: fullOrder.status,
       pickup: {
         lat: parseFloat(fullOrder.pickup_lat),
@@ -1139,7 +1140,7 @@ router.post('/:orderId/contact-passenger', async (req, res) => {
       return res.json({
         success: true,
         channel: 'TEL',
-        passengerPhone: order.passenger_phone,
+        passengerPhone: maskCounterpartPhone(order.passenger_phone),
         message: `請撥打客人電話 ${order.passenger_phone}`,
       });
     }

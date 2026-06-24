@@ -1985,7 +1985,21 @@ from-fet → taxi-route：
 ### 後端端點
 
 - `POST /api/phone-calls/webhook`（`src/api/phone-calls.ts`）— MVP 掛斷分析進入點。
-- `POST /api/phone-calls/realtime-order`（同檔）— 即時 AI 建單進入點，`X-Bridge-Secret` 驗證；呼叫 `PhoneCallProcessor.dispatchRealtimeOrder()`，回 `{ok, orderId?, forbiddenPickup?, error?}`。
+- `POST /api/phone-calls/realtime-order`（同檔）— 即時 AI 建單進入點，`X-Bridge-Secret` 驗證；呼叫 `PhoneCallProcessor.dispatchRealtimeOrder()`，回 `{ok, orderId?, scheduled?, noDrivers?, etaMinutes?, forbiddenPickup?, error?}`。
+- `GET /api/relay/lookup?from=&did=&key=`（`src/api/relay.ts`）— 號碼遮蔽中繼查表，box dialplan `relay-in` 用，回純文字撥號（見下）。
+
+### v2 強化（AI 對話 + 派車邏輯，migration `030-ai-dispatch-v2.sql`）
+
+電話叫車 v2 在「即時 AI」這條路加上：
+
+- **付款（現金/刷卡）**：AI 問「現金還是刷卡」→ `payment_type=cash/credit_card`。刷卡 → `SmartDispatcherV2.getAvailableDrivers()` 只派 `drivers.can_credit_card=TRUE` 的車（`orders.payment_type` 加 `CREDIT_CARD`）。`can_credit_card` 預設 TRUE，ops 把純收現的車設 FALSE。
+- **醫院/無障礙**：AI 視情況問「需要輪椅車嗎」→ `needs_wheelchair` → 只派 `drivers.can_wheelchair=TRUE`；其他需求進 `orders.special_notes`。`can_wheelchair` 預設 FALSE，ops 標出無障礙車。
+- **派單前查車 + ETA / 沒車**：建單前先 `SmartDispatcherV2.checkAvailability(pickup, filters)`（heartbeat 5 分內 AVAILABLE + 能力篩選 + Haversine 最近 + `ETAService`）。有車→回 `etaMinutes`，AI 報「大約 X 分鐘」；沒車→回 `noDrivers`，AI 請客人稍後再撥、**不建單**。
+- **預約/火車接送**：AI 提醒「火車接送至少提前 1 小時」、問時間→ `scheduled_at`(ISO)。建 `status='SCHEDULED'` 單，交給既有 `ScheduledOrderService`（BullMQ：提前 5 分派單、15 分提醒）。`dispatchScheduledOrder` 已補帶 `needs_wheelchair/subsidy/source`。
+- **號碼遮蔽中繼**：司機↔客人互打經系統遮蔽。設計＝單一中繼號 `038907329` + caller-ID 查表橋接：
+  - box `[relay-in]`：中繼號進線 → `${CURL(/api/relay/lookup?from=${CALLERID(num)}&key=...)}` → 後端依來電真號找 active order 的對方真號 → `Goto(fet-outbound,${TARGET},1)` 橋接（代表號 `038907320` 當主叫，雙方看不到對方真號）。`relay.key` 放 box `/etc/asterisk/relay.key`（不進 repo）。
+  - **遮蔽放 API DTO 邊界**（`maskCounterpartPhone()`）：開 `RELAY_MASK_ENABLED=true` 後，面向 App 的 `customerPhone`/`driverPhone`/`passengerPhone` 欄位回中繼號，**現有 App 不改也會撥中繼號**（免發版）。真號只遮 client、server 內部（簡訊/派單）仍用真號。
+  - **`RELAY_MASK_ENABLED` 預設關**：程式碼先上線無影響；活測驗證中繼能橋接後再翻開，避免「遮蔽開了但中繼沒驗證→互打不通」。
 
 ### 部署步驟（Asterisk / nginx / 歡迎語）
 

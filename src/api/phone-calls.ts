@@ -106,11 +106,12 @@ router.post('/realtime-order', async (req, res) => {
     if (secret && req.headers['x-bridge-secret'] !== secret) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
-    const { call_id, customer_phone, pickup_address, destination_address, special_notes } = req.body || {};
+    const { call_id, customer_phone, pickup_address, destination_address, special_notes,
+            payment_type, needs_wheelchair, scheduled_at } = req.body || {};
     if (!pickup_address) {
       return res.status(400).json({ ok: false, error: 'pickup_address required' });
     }
-    console.log(`[Realtime-Order] caller=${customer_phone} pickup=${pickup_address} dest=${destination_address}`);
+    console.log(`[Realtime-Order] caller=${customer_phone} pickup=${pickup_address} dest=${destination_address} pay=${payment_type} wheelchair=${needs_wheelchair} sched=${scheduled_at}`);
     const processor = getPhoneCallProcessor();
     const result = await processor.dispatchRealtimeOrder({
       callId: call_id || `RT_${Date.now()}`,
@@ -118,6 +119,9 @@ router.post('/realtime-order', async (req, res) => {
       pickup_address,
       destination_address: destination_address || null,
       special_notes: special_notes || null,
+      payment_type: payment_type || null,
+      needs_wheelchair: !!needs_wheelchair,
+      scheduled_at: scheduled_at || null,
     });
     res.json(result);
   } catch (error: any) {

@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { CallFieldExtractor, ParsedFields, CallEventType } from './CallFieldExtractor';
 import { getSmartDispatcherV2, OrderData } from './SmartDispatcherV2';
+import { getScheduledOrderService } from './ScheduledOrderService';
 import { getSocketIO, driverSockets, notifyAdmins } from '../socket';
 import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } from './HualienAddressDB';
 import { recordFailedQuery, attachGoogleResult, shouldLogFailure } from './AddressFailureLogger';
@@ -309,12 +310,23 @@ export class PhoneCallProcessor {
     pickup_address: string;
     destination_address?: string | null;
     special_notes?: string | null;
+    payment_type?: string | null;       // 'cash' | 'credit_card'
+    needs_wheelchair?: boolean | null;
+    scheduled_at?: string | null;        // ISO；有值＝預約單
   }): Promise<{
     ok: boolean;
     orderId?: string;
+    scheduled?: boolean;                 // 預約單已建立
+    noDrivers?: boolean;                 // 附近無車（未建單）
+    etaMinutes?: number | null;          // 最近可用車估到達分鐘
+    nearbyCount?: number;
     forbiddenPickup?: { matchedLandmark: string; alternatives: string[] };
     error?: string;
   }> {
+    const paymentType = params.payment_type === 'credit_card' ? 'CREDIT_CARD' : 'CASH';
+    const needsWheelchair = !!params.needs_wheelchair;
+    const isScheduled = !!params.scheduled_at;
+
     const call = {
       callId: params.callId,
       callerNumber: params.customerPhone || 'unknown',
@@ -347,7 +359,31 @@ export class PhoneCallProcessor {
       pickupGeo = { lat: 23.9871, lng: 121.6015, formattedAddress: `${params.pickup_address || '花蓮市'}（待確認）` };
     }
 
-    const orderId = await this.createPhoneOrder(call, fields, pickupGeo, destGeo, params.special_notes || '即時AI語音叫車');
+    const extra = { paymentType, needsWheelchair, specialNotes: params.special_notes ?? null };
+
+    // ===== 預約單：建 SCHEDULED 單，不立即派（排程器到時自動派）=====
+    if (isScheduled) {
+      const orderId = await this.createPhoneOrder(call, fields, pickupGeo, destGeo, params.special_notes || '即時AI語音預約', {
+        ...extra, scheduledAt: params.scheduled_at, status: 'SCHEDULED',
+      });
+      // 交給既有 ScheduledOrderService（BullMQ）：提前 5 分派單、15 分提醒
+      getScheduledOrderService()?.scheduleOrder(orderId, new Date(params.scheduled_at!))
+        .catch((e) => console.error('[Realtime] 預約排程失敗:', e?.message));
+      console.log(`[Realtime] 預約單 ${orderId} 預約時間=${params.scheduled_at}`);
+      return { ok: true, orderId, scheduled: true };
+    }
+
+    // ===== 即時單：派單前先查附近有沒有車（沒車就不建單、請客人稍後再撥）=====
+    const avail = await getSmartDispatcherV2().checkAvailability(
+      { lat: pickupGeo.lat, lng: pickupGeo.lng },
+      { paymentType, needsWheelchair }
+    );
+    if (avail.count === 0) {
+      console.log(`[Realtime] 附近無可用車（pay=${paymentType} wheelchair=${needsWheelchair}）→ 請客人稍後再撥`);
+      return { ok: false, noDrivers: true };
+    }
+
+    const orderId = await this.createPhoneOrder(call, fields, pickupGeo, destGeo, params.special_notes || '即時AI語音叫車', extra);
 
     // 派單 fire-and-forget（不讓 AI 等司機接單；找到司機後自動推播）
     const orderData: OrderData = {
@@ -357,20 +393,22 @@ export class PhoneCallProcessor {
       passengerPhone: call.callerNumber,
       pickup: { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress },
       destination: destGeo ? { lat: destGeo.lat, lng: destGeo.lng, address: params.destination_address || destGeo.formattedAddress } : null,
-      paymentType: 'CASH',
+      paymentType,
       createdAt: Date.now(),
       source: 'PHONE',
       subsidyType: 'NONE',
       petPresent: 'UNKNOWN',
       petCarrier: 'UNKNOWN',
+      needsWheelchair,
+      specialNotes: params.special_notes ?? undefined,
       customerPhone: call.callerNumber,
     };
     getSmartDispatcherV2().startDispatch(orderData)
       .then((r) => console.log('[Realtime] 派單結果:', JSON.stringify(r)))
       .catch((e) => console.error('[Realtime] 派單失敗:', e?.message));
 
-    console.log(`[Realtime] 即時 AI 建單 ${orderId} pickup=${pickupGeo.formattedAddress} dest=${destGeo?.formattedAddress || '無'}`);
-    return { ok: true, orderId };
+    console.log(`[Realtime] 即時 AI 建單 ${orderId} pay=${paymentType} wheelchair=${needsWheelchair} 附近${avail.count}台 ETA≈${avail.nearestEtaMinutes}分`);
+    return { ok: true, orderId, etaMinutes: avail.nearestEtaMinutes, nearbyCount: avail.count };
   }
 
   /**
@@ -821,11 +859,20 @@ export class PhoneCallProcessor {
     fields: ParsedFields,
     pickup: GeocodingResult,
     dest: GeocodingResult | null,
-    transcript: string
+    transcript: string,
+    extra?: {
+      paymentType?: string;        // 'CASH'|'CREDIT_CARD'… 覆蓋預設
+      needsWheelchair?: boolean;
+      specialNotes?: string | null;
+      scheduledAt?: string | null; // ISO；有值＝預約單
+      status?: string;             // 覆蓋預設 'OFFERED'（預約單用 'SCHEDULED'）
+    }
   ): Promise<string> {
     const orderId = `ORD${Date.now()}`;
     const now = new Date();
     const passengerId = `PHONE_${call.callerNumber}`;
+    const status = extra?.status || 'OFFERED';
+    const paymentType = extra?.paymentType || (fields.subsidy_type !== 'NONE' ? 'SUBSIDY' : 'CASH');
 
     // 確保電話乘客記錄存在（以 phone 為衝突鍵，避免 phone UNIQUE 約束衝突）
     const passengerResult = await this.pool.query(`
@@ -849,31 +896,37 @@ export class PhoneCallProcessor {
         hour_of_day, day_of_week,
         source, subsidy_type, pet_present, pet_carrier, pet_note,
         dropoff_original, destination_confirmed,
-        call_id, audio_url, transcript, customer_phone
+        call_id, audio_url, transcript, customer_phone,
+        special_notes, needs_wheelchair, scheduled_at
       ) VALUES (
-        $1, $2, 'OFFERED',
-        $3, $4, $5,
-        $6, $7, $8,
-        $9,
+        $1, $2, $3,
+        $4, $5, $6,
+        $7, $8, $9,
+        $10,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
-        $10, $11,
-        'PHONE', $12, $13, $14, $15,
-        $16, FALSE,
-        $17, $18, $19, $20
+        $11, $12,
+        'PHONE', $13, $14, $15, $16,
+        $17, FALSE,
+        $18, $19, $20, $21,
+        $22, $23, $24
       )
     `, [
       orderId,
       actualPassengerId,
+      status,
       pickup.lat, pickup.lng, pickup.formattedAddress,
       dest?.lat || null, dest?.lng || null, fields.destination_address || dest?.formattedAddress || null,
-      fields.subsidy_type !== 'NONE' ? 'SUBSIDY' : 'CASH',
+      paymentType,
       now.getHours(), now.getDay(),
       fields.subsidy_type, fields.pet_present, fields.pet_carrier, fields.pet_note,
       fields.destination_address,
-      call.callId, call.recordingUrl, transcript, call.callerNumber
+      call.callId, call.recordingUrl, transcript, call.callerNumber,
+      extra?.specialNotes ?? fields.special_notes ?? null,
+      extra?.needsWheelchair ?? false,
+      extra?.scheduledAt ?? null
     ]);
 
-    console.log(`[PhoneCallProcessor] 電話訂單已建立: ${orderId}`);
+    console.log(`[PhoneCallProcessor] 電話訂單已建立: ${orderId} status=${status} pay=${paymentType}${extra?.scheduledAt ? ` 預約=${extra.scheduledAt}` : ''}`);
     return orderId;
   }
 

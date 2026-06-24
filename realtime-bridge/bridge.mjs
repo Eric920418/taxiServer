@@ -29,15 +29,35 @@ if (!KEY) { console.error('缺 OPENAI_API_KEY'); process.exit(1); }
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-const SYSTEM_PROMPT = `你是台灣「大豐計程車」的電話叫車客服。全程用繁體中文、台灣口語、親切簡短。
-任務：問清楚客人的「上車地點」和「目的地」，兩個都拿到就立刻呼叫 create_taxi_order 建立訂單。
-規則：
-- 開場先說「您好，大豐計程車，請問從哪裡上車？」
-- 地址要具體（路名＋段/巷弄或附近地標）。聽不清楚或太模糊就請對方再說一次或說得更清楚。
-- 拿到地址後簡短覆述確認一次，例如「您是從自強路到遠東百貨，對嗎？」
-- 確認後馬上呼叫 create_taxi_order。建單成功後告訴客人「好的已經幫您叫車，找到司機會再通知您」。
-- 如果系統回覆上車點不可停靠，就把替代點念給客人、請他改。
-- 不要閒聊、不要問無關的事。`;
+// 台灣時間（UTC+8）ISO 字串，注入 prompt 讓 AI 能換算「明天9點」這類預約時間
+function nowTaiwanString() {
+  const tw = new Date(Date.now() + 8 * 3600 * 1000);
+  return tw.toISOString().replace('Z', '+08:00');
+}
+
+// 每通連線時動態建（含當前時間）。AI 收到 create_taxi_order 結果 JSON 後依欄位回話。
+function buildSystemPrompt() {
+  return `你是台灣「大豐計程車」的電話叫車客服。全程用繁體中文、台灣口語、親切簡短。
+現在時間（台灣 UTC+8）：${nowTaiwanString()}
+
+任務：問清楚客人需求後呼叫 create_taxi_order 建立訂單。開場先說「您好，大豐計程車，請問從哪裡上車？」
+
+要問到的資訊（依序、自然地問，不要像在填表）：
+1. 上車地點、目的地：要具體（路名＋段/巷弄或地標）。聽不清或太模糊就請對方再說一次。拿到後簡短覆述確認一次。
+2. 付款方式：問「請問付現金還是刷卡？」。客人說付現/付現金/現金 → payment_type 填 cash；說刷卡/信用卡 → 填 credit_card。
+3. 以下只在客人主動提到時才處理：
+   - 火車接送：提醒「火車接送建議至少提前 1 小時預約喔」，問希望幾點上車，換算成 scheduled_at（ISO 8601、含 +08:00）。若客人說現在就要走，就當即時單、不要填 scheduled_at。
+   - 醫院／行動不便：問「請問需要無障礙（輪椅）車嗎？」，需要就 needs_wheelchair 填 true；要等病人、協助上下車等其他需求寫進 special_notes。
+
+確認後馬上呼叫 create_taxi_order。系統會回 JSON，依結果這樣回覆客人：
+- ok 為 true 且有 etaMinutes：「好的已經幫您叫車，最近的車大約（用 etaMinutes 的數字）分鐘到，找到司機會再通知您」。
+- ok 為 true 且 scheduled 為 true：「好的已經幫您預約好了，到時會派車並通知您」。
+- ok 為 false 且 noDrivers 為 true：「不好意思，目前附近沒有空車，麻煩您稍後再撥，謝謝您」。
+- ok 為 false 且有 forbiddenPickup：把 alternatives 念給客人、請他改上車點，再重新呼叫 create_taxi_order。
+- ok 為 false 且有 error：「不好意思系統忙線，麻煩您稍後再撥」。
+
+不要閒聊、不要問無關的事。`;
+}
 
 // 來電號碼映射：dialplan 先 POST /call-start 存 uuid→caller
 const callerByUuid = new Map();
@@ -159,7 +179,7 @@ class Call {
           type: 'session.update',
           session: {
             type: 'realtime',
-            instructions: SYSTEM_PROMPT,
+            instructions: buildSystemPrompt(),
             audio: {
               input: { format: { type: 'audio/pcmu' }, turn_detection: { type: 'server_vad' } },
               output: { format: { type: 'audio/pcmu' }, voice: VOICE },
@@ -167,13 +187,16 @@ class Call {
             tools: [{
               type: 'function',
               name: 'create_taxi_order',
-              description: '已確認上車地點與目的地後，建立計程車訂單並派車',
+              description: '確認客人需求後，建立計程車訂單並派車（即時或預約）',
               parameters: {
                 type: 'object',
                 properties: {
                   pickup_address: { type: 'string', description: '上車地點，越具體越好' },
                   destination_address: { type: 'string', description: '目的地' },
-                  special_notes: { type: 'string', description: '特殊需求(選填)' },
+                  payment_type: { type: 'string', enum: ['cash', 'credit_card'], description: '付款方式：現金 cash / 刷卡 credit_card' },
+                  needs_wheelchair: { type: 'boolean', description: '是否需要無障礙(輪椅)車' },
+                  scheduled_at: { type: 'string', description: '預約上車時間 ISO 8601(含 +08:00)；即時單留空' },
+                  special_notes: { type: 'string', description: '特殊需求備註(選填)' },
                 },
                 required: ['pickup_address', 'destination_address'],
               },
@@ -221,6 +244,9 @@ class Call {
           pickup_address: args.pickup_address,
           destination_address: args.destination_address,
           special_notes: args.special_notes || null,
+          payment_type: args.payment_type || null,
+          needs_wheelchair: !!args.needs_wheelchair,
+          scheduled_at: args.scheduled_at || null,
         }),
         signal: AbortSignal.timeout(12000),
       });
