@@ -2001,6 +2001,18 @@ from-fet → taxi-route：
   - **遮蔽放 API DTO 邊界**（`maskCounterpartPhone()`）：開 `RELAY_MASK_ENABLED=true` 後，面向 App 的 `customerPhone`/`driverPhone`/`passengerPhone` 欄位回中繼號，**現有 App 不改也會撥中繼號**（免發版）。真號只遮 client、server 內部（簡訊/派單）仍用真號。
   - **`RELAY_MASK_ENABLED` 預設關**：程式碼先上線無影響；活測驗證中繼能橋接後再翻開，避免「遮蔽開了但中繼沒驗證→互打不通」。
 
+### v2.1 司機補行程資料（migration `031-driver-order-edits.sql`）
+
+電話 AI 單**只要有上車點就先建單**（目的地選填，客人「上車後再說」不卡住）；司機載到客人後在 App 補資料，保留 AI 原值 vs 司機補值的修改紀錄。
+
+- **電話端**：`bridge.mjs` 的 `create_taxi_order` 目的地改選填（拿出 `required`），客人不知道目的地就只用上車點建單。`dispatchRealtimeOrder`/`createPhoneOrder` 已能吃 null dest，AI 原文寫進 `dropoff_original`、`destination_confirmed=FALSE`。
+- **司機改單**：`PATCH /api/orders/:orderId/driver-update`（`src/api/orders.ts`）body `{driverId, dest?, special_notes?, waypoints?, reason?}`。驗 `order.driver_id===driverId` + status∈(ACCEPTED,ARRIVED,ON_TRIP)。改目的地→寫 `dest_*`+`dropoff_final`+`destination_confirmed=TRUE`+`destination_modified_at/by`；備註→`special_notes`；停靠→覆寫 `order_waypoints`。每筆改動寫 `order_edits`（append-only，before/after JSONB）。
+- **稽核基礎（沿用既有預留欄位）**：`dropoff_original`(AI 原值) / `dropoff_final`(司機確認值) / `destination_confirmed` 在 `004` 早建好，這次接上。新表 `order_waypoints`(中途停靠，可影響 App 多點導航) + `order_edits`(修改稽核，參考 `landmark_audit` pattern)。
+- **後台稽核**：`GET /api/orders/:orderId/edits` 回 AI 原值 vs 司機補值 + 逐筆修改 log + 停靠。
+- **DTO**：`GET /api/orders`、`/:orderId` 加 `dropoffOriginal`/`dropoffFinal`/`waypoints`（列表用 `WHERE order_id = ANY($1)` 批次查避免 N+1）。
+- **車資不受影響**：車資是司機跳表金額（`POST /:orderId/fare`），與目的地無關，補目的地不重算。
+- App 端（司機補資料 UI + 多點導航）需發 Play 版；與 bridge 目的地選填**一起上線**（避免「AI 建了無目的地單、但司機還不能補」的空窗）。
+
 ### 部署步驟（Asterisk / nginx / 歡迎語）
 
 ```bash

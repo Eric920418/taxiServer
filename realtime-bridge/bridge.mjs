@@ -43,7 +43,8 @@ function buildSystemPrompt() {
 任務：問清楚客人需求後呼叫 create_taxi_order 建立訂單。開場先說「您好，大豐計程車，請問從哪裡上車？」
 
 要問到的資訊（依序、自然地問，不要像在填表）：
-1. 上車地點、目的地：要具體（路名＋段/巷弄或地標）。聽不清或太模糊就請對方再說一次。拿到後簡短覆述確認一次。
+1. 上車地點（必問）：要具體（路名＋段/巷弄或地標）。聽不清或太模糊就請對方再說一次。覆述確認一次。
+   目的地：問一次即可。客人若說「上車後再說／還不知道／到時跟司機講」，就**只用上車點建單、destination_address 留空**，不要硬逼——司機載到客人後會在系統補目的地。
 2. 付款方式：問「請問付現金還是刷卡？」。客人說付現/付現金/現金 → payment_type 填 cash；說刷卡/信用卡 → 填 credit_card。
 3. 以下只在客人主動提到時才處理：
    - 火車接送：提醒「火車接送建議至少提前 1 小時預約喔」，問希望幾點上車，換算成 scheduled_at（ISO 8601、含 +08:00）。若客人說現在就要走，就當即時單、不要填 scheduled_at。
@@ -192,13 +193,13 @@ class Call {
                 type: 'object',
                 properties: {
                   pickup_address: { type: 'string', description: '上車地點，越具體越好' },
-                  destination_address: { type: 'string', description: '目的地' },
+                  destination_address: { type: 'string', description: '目的地(選填)；客人不知道/上車後再說就留空' },
                   payment_type: { type: 'string', enum: ['cash', 'credit_card'], description: '付款方式：現金 cash / 刷卡 credit_card' },
                   needs_wheelchair: { type: 'boolean', description: '是否需要無障礙(輪椅)車' },
                   scheduled_at: { type: 'string', description: '預約上車時間 ISO 8601(含 +08:00)；即時單留空' },
                   special_notes: { type: 'string', description: '特殊需求備註(選填)' },
                 },
-                required: ['pickup_address', 'destination_address'],
+                required: ['pickup_address'],
               },
             }],
           },

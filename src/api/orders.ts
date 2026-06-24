@@ -217,6 +217,17 @@ router.get('/', async (req, res) => {
 
     const orders = await queryMany(sql, params);
 
+    // 批次取各單的中途停靠（避免 N+1）
+    const orderIds = orders.map(o => o.order_id);
+    const wpRows = orderIds.length
+      ? await queryMany('SELECT order_id, sequence, address, lat, lng, note FROM order_waypoints WHERE order_id = ANY($1) ORDER BY sequence', [orderIds])
+      : [];
+    const wpByOrder: Record<string, any[]> = {};
+    for (const w of wpRows) {
+      if (!wpByOrder[w.order_id]) wpByOrder[w.order_id] = [];
+      wpByOrder[w.order_id].push({ sequence: w.sequence, address: w.address, lat: w.lat != null ? parseFloat(w.lat) : null, lng: w.lng != null ? parseFloat(w.lng) : null, note: w.note });
+    }
+
     res.json({
       orders: orders.map(o => ({
         orderId: o.order_id,
@@ -246,7 +257,10 @@ router.get('/', async (req, res) => {
         petPresent: o.pet_present || 'UNKNOWN',
         petCarrier: o.pet_carrier || 'UNKNOWN',
         customerPhone: maskCounterpartPhone(o.customer_phone),
-        destinationConfirmed: o.destination_confirmed || false
+        destinationConfirmed: o.destination_confirmed || false,
+        dropoffOriginal: o.dropoff_original,
+        dropoffFinal: o.dropoff_final,
+        waypoints: wpByOrder[o.order_id] || []
       })),
       total: orders.length
     });
@@ -333,6 +347,8 @@ router.get('/:orderId', async (req, res) => {
       return res.status(404).json({ error: '訂單不存在' });
     }
 
+    const waypoints = await queryMany('SELECT sequence, address, lat, lng, note FROM order_waypoints WHERE order_id = $1 ORDER BY sequence', [orderId]);
+
     res.json({
       orderId: order.order_id,
       passengerId: order.passenger_id,
@@ -366,11 +382,55 @@ router.get('/:orderId', async (req, res) => {
       petNote: order.pet_note,
       customerPhone: maskCounterpartPhone(order.customer_phone),
       destinationConfirmed: order.destination_confirmed || false,
+      dropoffOriginal: order.dropoff_original,
+      dropoffFinal: order.dropoff_final,
+      waypoints: waypoints.map((w: any) => ({ sequence: w.sequence, address: w.address, lat: w.lat != null ? parseFloat(w.lat) : null, lng: w.lng != null ? parseFloat(w.lng) : null, note: w.note })),
       callId: order.call_id
     });
   } catch (error) {
     console.error('[Get Order] 錯誤:', error);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 後台看訂單修改紀錄：AI 原值(dropoff_original) vs 司機補值(dropoff_final) + 逐筆稽核 + 停靠。
+ * GET /api/orders/:orderId/edits
+ */
+router.get('/:orderId/edits', async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    const order = await queryOne(
+      `SELECT order_id, dropoff_original, dropoff_final, destination_confirmed,
+              destination_modified_at, destination_modified_by, special_notes
+       FROM orders WHERE order_id = $1`,
+      [orderId]
+    );
+    if (!order) return res.status(404).json({ error: '訂單不存在' });
+    const edits = await queryMany(
+      `SELECT edit_id, edited_by, edit_type, original_value, new_value, reason, created_at
+       FROM order_edits WHERE order_id = $1 ORDER BY created_at DESC`,
+      [orderId]
+    );
+    const waypoints = await queryMany(
+      `SELECT sequence, address, lat, lng, note, added_by, added_at
+       FROM order_waypoints WHERE order_id = $1 ORDER BY sequence`,
+      [orderId]
+    );
+    return res.json({
+      orderId: order.order_id,
+      dropoffOriginal: order.dropoff_original,   // AI 語音原值
+      dropoffFinal: order.dropoff_final,         // 司機補/確認值
+      destinationConfirmed: order.destination_confirmed || false,
+      destinationModifiedAt: order.destination_modified_at,
+      destinationModifiedBy: order.destination_modified_by,
+      specialNotes: order.special_notes,
+      waypoints,
+      edits,
+    });
+  } catch (error: any) {
+    console.error('[Order edits] 錯誤:', error);
+    return res.status(500).json({ error: error?.message || 'INTERNAL_ERROR' });
   }
 });
 
@@ -1469,6 +1529,97 @@ router.post('/:orderId/cancel-no-show', async (req, res) => {
  * 愛心卡/敬老卡確認或取消
  * PATCH /api/orders/:orderId/subsidy
  */
+/**
+ * 司機補/改行程資料：補目的地、改目的地、加中途停靠、補備註。
+ * 電話單常只有上車點（客人上車後才講目的地），司機載到客人後在此補回系統。
+ * 每筆改動寫 order_edits 稽核（before/after），後台可比對 AI 原值(dropoff_original) vs 司機補值(dropoff_final)。
+ * PATCH /api/orders/:orderId/driver-update
+ * body: { driverId, dest?:{address,lat,lng}, special_notes?, waypoints?:[{address,lat,lng,note}], reason? }
+ */
+router.patch('/:orderId/driver-update', async (req, res) => {
+  const { orderId } = req.params;
+  const { driverId, dest, special_notes, waypoints, reason } = req.body || {};
+  try {
+    if (!driverId) return res.status(400).json({ error: '缺少 driverId' });
+
+    const order = await queryOne('SELECT * FROM orders WHERE order_id = $1', [orderId]);
+    if (!order) return res.status(404).json({ error: '訂單不存在' });
+    if (order.driver_id !== driverId) return res.status(403).json({ error: '只有指派的司機可以補資料' });
+    if (!['ACCEPTED', 'ARRIVED', 'ON_TRIP'].includes(order.status)) {
+      return res.status(400).json({ error: '只能在接單後、結算前補行程資料' });
+    }
+
+    const by = `driver:${driverId}`;
+    const edits: Array<{ type: string; original: any; next: any }> = [];
+
+    // 1) 目的地（補或改）→ 同時寫 dropoff_final + 標記已確認 + 改動人/時間
+    if (dest && (dest.address || (dest.lat != null && dest.lng != null))) {
+      const original = { dest_address: order.dest_address, dest_lat: order.dest_lat, dest_lng: order.dest_lng };
+      await query(
+        `UPDATE orders SET dest_address = $1, dest_lat = $2, dest_lng = $3,
+           dropoff_final = $1, destination_confirmed = TRUE,
+           destination_modified_at = CURRENT_TIMESTAMP, destination_modified_by = $4
+         WHERE order_id = $5`,
+        [dest.address ?? null, dest.lat ?? null, dest.lng ?? null, by, orderId]
+      );
+      edits.push({ type: 'DESTINATION', original, next: { dest_address: dest.address ?? null, dest_lat: dest.lat ?? null, dest_lng: dest.lng ?? null } });
+    }
+
+    // 2) 備註
+    if (typeof special_notes === 'string') {
+      edits.push({ type: 'NOTES', original: { special_notes: order.special_notes }, next: { special_notes } });
+      await query('UPDATE orders SET special_notes = $1 WHERE order_id = $2', [special_notes, orderId]);
+    }
+
+    // 3) 中途停靠（整批覆寫）
+    if (Array.isArray(waypoints)) {
+      const prev = await queryMany('SELECT sequence, address, lat, lng, note FROM order_waypoints WHERE order_id = $1 ORDER BY sequence', [orderId]);
+      await query('DELETE FROM order_waypoints WHERE order_id = $1', [orderId]);
+      for (let i = 0; i < waypoints.length; i++) {
+        const w = waypoints[i] || {};
+        await query(
+          `INSERT INTO order_waypoints (order_id, sequence, address, lat, lng, note, added_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [orderId, i, w.address ?? null, w.lat ?? null, w.lng ?? null, w.note ?? null, by]
+        );
+      }
+      edits.push({ type: 'WAYPOINT', original: { waypoints: prev }, next: { waypoints } });
+    }
+
+    if (edits.length === 0) {
+      return res.status(400).json({ error: '沒有可更新的欄位（dest / special_notes / waypoints 至少一項）' });
+    }
+
+    // 寫稽核（append-only）
+    for (const e of edits) {
+      await query(
+        `INSERT INTO order_edits (order_id, edited_by, edit_type, original_value, new_value, reason)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [orderId, by, e.type, JSON.stringify(e.original), JSON.stringify(e.next), reason ?? null]
+      );
+    }
+
+    const updated = await queryOne('SELECT * FROM orders WHERE order_id = $1', [orderId]);
+    const wps = await queryMany('SELECT sequence, address, lat, lng, note FROM order_waypoints WHERE order_id = $1 ORDER BY sequence', [orderId]);
+    console.log(`[Order] 司機補資料 ${orderId} by ${by}: ${edits.map(e => e.type).join(',')}`);
+    return res.json({
+      success: true,
+      order: {
+        orderId: updated.order_id,
+        destination: updated.dest_lat != null ? { lat: parseFloat(updated.dest_lat), lng: parseFloat(updated.dest_lng), address: updated.dest_address } : null,
+        destinationConfirmed: updated.destination_confirmed || false,
+        dropoffOriginal: updated.dropoff_original,
+        dropoffFinal: updated.dropoff_final,
+        specialNotes: updated.special_notes,
+        waypoints: wps.map((w: any) => ({ sequence: w.sequence, address: w.address, lat: w.lat != null ? parseFloat(w.lat) : null, lng: w.lng != null ? parseFloat(w.lng) : null, note: w.note })),
+      },
+    });
+  } catch (error: any) {
+    console.error('[Order] driver-update 錯誤:', error);
+    return res.status(500).json({ error: error?.message || 'INTERNAL_ERROR' });
+  }
+});
+
 router.patch('/:orderId/subsidy', async (req, res) => {
   const { orderId } = req.params;
   const { driverId, action } = req.body;
