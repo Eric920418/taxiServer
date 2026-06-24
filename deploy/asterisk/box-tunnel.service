@@ -1,0 +1,16 @@
+# box:/etc/systemd/system/box-tunnel.service 的版控快照
+# 反向 SSH 隧道：把 box 的 SSH(22) 轉到首爾 Lightsail:2222，供遠端維運進 box。
+# tunnel_key 在 box:/home/pbxdaihon/.ssh/tunnel_key（勿進版控）。
+[Unit]
+Description=Reverse SSH tunnel to Lightsail
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pbxdaihon
+ExecStart=/usr/bin/autossh -M 0 -N -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -i /home/pbxdaihon/.ssh/tunnel_key -R 2222:localhost:22 ubuntu@15.164.245.47
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -299,6 +299,81 @@ export class PhoneCallProcessor {
   }
 
   /**
+   * 即時 AI 語音客服專用：AI 對話已取得結構化欄位 → 直接 geocode→建單→派單並「同步回傳結果」。
+   * 不經錄音/Whisper/信心度閘門。複用 geocodeAddress / createPhoneOrder / SmartDispatcherV2。
+   * 回傳給 bridge（再餵回 OpenAI）讓 AI 口頭回覆客人。
+   */
+  public async dispatchRealtimeOrder(params: {
+    callId: string;
+    customerPhone: string;
+    pickup_address: string;
+    destination_address?: string | null;
+    special_notes?: string | null;
+  }): Promise<{
+    ok: boolean;
+    orderId?: string;
+    forbiddenPickup?: { matchedLandmark: string; alternatives: string[] };
+    error?: string;
+  }> {
+    const call = {
+      callId: params.callId,
+      callerNumber: params.customerPhone || 'unknown',
+      recordingUrl: '',
+    } as PhoneCallRecord;
+
+    const fields: ParsedFields = {
+      pickup_address: params.pickup_address || null,
+      destination_address: params.destination_address || null,
+      customer_name: null,
+      passenger_count: 1,
+      subsidy_type: 'NONE',
+      pet_present: 'UNKNOWN',
+      pet_carrier: 'UNKNOWN',
+      pet_note: null,
+      special_notes: params.special_notes || null,
+      confidence: 1,
+    } as ParsedFields;
+
+    // 上車地 geocoding + 禁止上車區檢查
+    let pickupGeo: GeocodingResult | null = params.pickup_address
+      ? await this.geocodeAddress(params.pickup_address) : null;
+    if (pickupGeo?.forbiddenPickup) {
+      const fp = pickupGeo.forbiddenPickup;
+      return { ok: false, forbiddenPickup: { matchedLandmark: fp.matchedLandmark, alternatives: fp.alternatives.map(a => a.name) } };
+    }
+    const destGeo: GeocodingResult | null = params.destination_address
+      ? await this.geocodeAddress(params.destination_address) : null;
+    if (!pickupGeo) {
+      pickupGeo = { lat: 23.9871, lng: 121.6015, formattedAddress: `${params.pickup_address || '花蓮市'}（待確認）` };
+    }
+
+    const orderId = await this.createPhoneOrder(call, fields, pickupGeo, destGeo, params.special_notes || '即時AI語音叫車');
+
+    // 派單 fire-and-forget（不讓 AI 等司機接單；找到司機後自動推播）
+    const orderData: OrderData = {
+      orderId,
+      passengerId: `PHONE_${call.callerNumber}`,
+      passengerName: `來電 ${call.callerNumber}`,
+      passengerPhone: call.callerNumber,
+      pickup: { lat: pickupGeo.lat, lng: pickupGeo.lng, address: pickupGeo.formattedAddress },
+      destination: destGeo ? { lat: destGeo.lat, lng: destGeo.lng, address: params.destination_address || destGeo.formattedAddress } : null,
+      paymentType: 'CASH',
+      createdAt: Date.now(),
+      source: 'PHONE',
+      subsidyType: 'NONE',
+      petPresent: 'UNKNOWN',
+      petCarrier: 'UNKNOWN',
+      customerPhone: call.callerNumber,
+    };
+    getSmartDispatcherV2().startDispatch(orderData)
+      .then((r) => console.log('[Realtime] 派單結果:', JSON.stringify(r)))
+      .catch((e) => console.error('[Realtime] 派單失敗:', e?.message));
+
+    console.log(`[Realtime] 即時 AI 建單 ${orderId} pickup=${pickupGeo.formattedAddress} dest=${destGeo?.formattedAddress || '無'}`);
+    return { ok: true, orderId };
+  }
+
+  /**
    * 處理催單
    */
   private async handleUrge(

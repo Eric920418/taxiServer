@@ -1,0 +1,15 @@
+# box:/etc/systemd/system/taxi-ai-bridge.service 的版控快照
+# 安裝：sudo cp + sudo systemctl daemon-reload + sudo systemctl enable --now taxi-ai-bridge
+[Unit]
+Description=Taxi AI Realtime Bridge (AudioSocket <-> OpenAI Realtime)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=pbxdaihon
+WorkingDirectory=/opt/taxi-ai-bridge
+EnvironmentFile=/opt/taxi-ai-bridge/.env
+ExecStart=/usr/bin/node /opt/taxi-ai-bridge/bridge.mjs
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

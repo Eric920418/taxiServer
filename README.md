@@ -1931,6 +1931,109 @@ pm2 startup  # 開機自啟
 
 ---
 
+## ☎️ 電話叫車 / FET SIP Trunk + Asterisk（含即時 AI 語音客服）
+
+電話進線叫車與 App / LINE 叫車**共用同一條派單管線**（`source='PHONE'`）。辦公室自架 Asterisk（box `asterisk-pbx`）接遠傳 FET SIP Trunk，**兩條路徑、同一個後端派單核心**：
+
+- **即時 AI 語音客服（主）**：來電 → `taxi-ai` → `AudioSocket` → `bridge.mjs`(box) ↔ OpenAI Realtime → AI 對話問上車/目的地、聽不清反問、覆述確認 → function call → 後端 `POST /api/phone-calls/realtime-order` → `dispatchRealtimeOrder()` 複用 geocode+建單+派單 → AI 口頭「已幫您叫車，找到司機會再通知您」。
+- **MVP 掛斷分析建單（fallback）**：來電 → `taxi-intake` → 播歡迎語 + 錄客人音軌 → 掛斷觸發 `fire-webhook.sh` → 後端 `PhoneCallProcessor`（Whisper → GPT → 花蓮地址 geocoding → `SmartDispatcherV2` 派單）。
+
+### 進線路由與並發 fallback（`extensions_fet.conf`）
+
+```
+from-fet → taxi-route：
+  GROUP_COUNT(aicall) < 3 ? → taxi-ai（即時 AI，佔一個 aicall 名額）
+                          : → taxi-intake（MVP 錄音分析）
+```
+
+- 並發閘門在 **dialplan**（`GROUP_COUNT(aicall) < 3`），`bridge.mjs` 另有 `MAX_CALLS=3` 第二層保險（兩者一致）。AI 滿 3 通時第 4 通乾淨退回 MVP 錄音。
+- ⚠️ **已知邊際**：閘門擋「AI 滿載」，擋不了「bridge 程序整個掛掉」。bridge down 時被路由到 `taxi-ai` 的來電會走到 `AudioSocket` 連不上而 `Hangup`（客人聽到靜音被掛斷），目前靠 systemd `Restart=always`（5s）緩解。後續可加：用 `/call-start` HTTP 狀態 gate，bridge 無回應就改走 `taxi-intake`（須實撥驗證，失敗模式是 AI 電話誤降級成 MVP，故跟端到端活測一起上）。
+- ⚠️ **AI 不報車號**：`dispatchRealtimeOrder()` 是 fire-and-forget，當下還沒司機接單，AI 只說「已幫您叫車」。車號/ETA 在司機接單後由 `CustomerNotificationService` 走 LINE/SMS 通知（市話客人收不到簡訊，是 Phase 3 語音回撥的潛在需求，目前暫緩）。
+
+### 接線真相表（實測值，非規劃書文件值）
+
+| 項目 | 值 |
+|------|-----|
+| 本端 SIP IP / transport | **`210.243.167.38`**、port **5060/UDP**（非文件的 .33/TCP）|
+| FET SBC 訊令 / 語音(RTP) | `123.51.252.5` / `123.51.252.4` |
+| 認證 | **IP 認證**（無帳密，來源 IP `123.51.252.5` 比對）|
+| 10 門 DID | `038907320 ~ 038907329`（9 碼無連字號；對外宣傳 `03-8907320`）|
+| 上行頻寬 | **3M**（即時 AI 並發上限關鍵，`MAX_CALLS=3`）|
+
+**出局送碼**（`fet-outbound`）：主叫一律 `038907320`；手機 `9004`+`09xxxxxxxx`（有加購 MVNO）；市話/長途原樣 `0+AC+SN`；國際 `007+...`。
+
+### box(asterisk-pbx) 部署拓樸
+
+- box：Ubuntu、Asterisk 22.5.2、使用者 `pbxdaihon`。無公網 SSH，靠**反向 SSH 隧道**進維運：
+  `ssh -i <Lightsail.pem> ubuntu@15.164.245.47 'ssh -p 2222 -i ~/.ssh/box_key pbxdaihon@localhost ...'`
+- systemd（皆 `enabled`，開機自起）：`taxi-ai-bridge`、`box-tunnel`(SSH 反隧道 :2222)、`box-tunnel-http`(錄音 8090 反隧道)、`nginx`、`asterisk`。
+- 即時 AI 對話用 **G.711 μ-law 8kHz**（AudioSocket slin↔ulaw 查表、免重採樣、3M 上行可撐多通）。
+
+### 版控的設定檔（box 為真相來源，repo 存逐字快照）
+
+| repo 檔 | 部署到 box | 作用 |
+|------|--------|------|
+| `deploy/asterisk/pjsip_fet.conf` | `/etc/asterisk/`（`#include`）| FET trunk（.38/UDP、IP 認證）|
+| `deploy/asterisk/extensions_fet.conf` | `/etc/asterisk/`（`#include`）| `from-fet`→`taxi-route` 並發閘門→`taxi-ai`/`taxi-intake` + `fet-outbound` |
+| `deploy/asterisk/fire-webhook.sh` | `/etc/asterisk/scripts/`（`chmod +x`）| 掛斷後 POST webhook（JSON）|
+| `deploy/asterisk/recordings-http.conf` | `/etc/nginx/sites-available/recordings` | 錄音唯讀 HTTP（`127.0.0.1:8090`，經反隧道供後端 fetch）|
+| `deploy/asterisk/box-tunnel*.service` | `/etc/systemd/system/` | 兩條反向 SSH 隧道 |
+| `realtime-bridge/bridge.mjs` | `/opt/taxi-ai-bridge/` | AudioSocket ↔ OpenAI Realtime bridge |
+| `realtime-bridge/taxi-ai-bridge.service` | `/etc/systemd/system/` | bridge systemd（`Restart=always`）|
+| `realtime-bridge/.env.example` | → box `/opt/taxi-ai-bridge/.env`（去敏，勿進版控）| `OPENAI_API_KEY`、`BRIDGE_SECRET`、`MAX_CALLS` |
+
+### 後端端點
+
+- `POST /api/phone-calls/webhook`（`src/api/phone-calls.ts`）— MVP 掛斷分析進入點。
+- `POST /api/phone-calls/realtime-order`（同檔）— 即時 AI 建單進入點，`X-Bridge-Secret` 驗證；呼叫 `PhoneCallProcessor.dispatchRealtimeOrder()`，回 `{ok, orderId?, forbiddenPickup?, error?}`。
+
+### 部署步驟（Asterisk / nginx / 歡迎語）
+
+```bash
+# 1) Asterisk 設定
+sudo cp deploy/asterisk/pjsip_fet.conf      /etc/asterisk/
+sudo cp deploy/asterisk/extensions_fet.conf /etc/asterisk/
+echo '#include pjsip_fet.conf'      | sudo tee -a /etc/asterisk/pjsip.conf
+echo '#include extensions_fet.conf' | sudo tee -a /etc/asterisk/extensions.conf
+sudo mkdir -p /etc/asterisk/scripts /var/spool/asterisk/recording
+sudo cp deploy/asterisk/fire-webhook.sh /etc/asterisk/scripts/ && sudo chmod +x /etc/asterisk/scripts/fire-webhook.sh
+sudo asterisk -rx "pjsip reload"; sudo asterisk -rx "dialplan reload"
+
+# 2) 錄音 HTTP（nginx）。註：root 父層需 chmod o+x /var/spool/asterisk
+sudo cp deploy/asterisk/recordings-http.conf /etc/nginx/sites-available/recordings
+sudo ln -s /etc/nginx/sites-available/recordings /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# 3) 歡迎語音檔（greeting-taxi + got-it，8kHz mono WAV）
+node deploy/asterisk/gen-greeting.mjs
+sudo cp deploy/asterisk/sounds/*.wav /var/lib/asterisk/sounds/custom/
+
+# 4) 即時 AI bridge（box 上）
+sudo cp realtime-bridge/bridge.mjs realtime-bridge/package.json /opt/taxi-ai-bridge/
+sudo cp realtime-bridge/taxi-ai-bridge.service /etc/systemd/system/
+# 依 .env.example 在 box 建 /opt/taxi-ai-bridge/.env（填真實 key，chmod 600）
+sudo systemctl daemon-reload && sudo systemctl enable --now taxi-ai-bridge
+```
+
+### 驗證
+
+1. **線路**：`asterisk -rx "pjsip show endpoint fet-endpoint"` Contact `Avail`；`sngrep` 看 RTP 來自 `123.51.252.4`。
+2. **dialplan**：`asterisk -rx "dialplan show taxi-route"` 顯示 `GROUP_COUNT` 閘門。
+3. **即時 AI**：撥 `03-8907320` → AI 對話 → 報禁區上車點(如火車站) → AI 念替代點 → 改口 → 建單 → 司機 App 收 `order:offer`；驗 DB `orders`(source=PHONE)、`customer_notifications`。
+4. **fallback**：臨時 `MAX_CALLS=1` 並 restart bridge → 同撥 2 通 → 第 2 通走 MVP 錄音建單 → 測完調回 3。
+5. **MVP/容錯**：模糊地址 → `/api/phone-calls/needs-review` Operator 審核 → APPROVED 續派；admin `GET /api/phone-calls/:callId/audio` 可聽錄音。
+6. **服務常駐**：`systemctl is-enabled taxi-ai-bridge box-tunnel box-tunnel-http nginx asterisk` 全 `enabled`。
+
+### 注意事項
+
+- **數據機 SIP ALG 必須關**（斷話/單向通話最常見根因）。
+- **REC_BASE**：`fire-webhook.sh` 用 `http://127.0.0.1:8090`（經反向隧道），非公網 IP。
+- **3M 上行**：即時 AI 用 G.711 μ-law，`MAX_CALLS=3` 起步；超出退 MVP 錄音（本地不串流）。
+- **代表號**：遠傳端無 hunt group；對外只宣傳 `03-8907320`，並發由 Asterisk + `MAX_CALLS` 閘門消化。
+- 現有 FXO 市話線**先保留**當網路全斷時的緊急備援。
+
+---
+
 ## 📊 成本估算 (每月)
 
 | 項目 | 用量 | 單價 | 成本 (USD) |

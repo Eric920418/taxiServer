@@ -1,0 +1,13 @@
+# box:/etc/systemd/system/box-tunnel-http.service 的版控快照
+# 反向隧道：把 box nginx 錄音站(127.0.0.1:8090) 轉到首爾後端，供 fetch 錄音。
+[Unit]
+Description=Reverse tunnel for recording HTTP 8090
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=pbxdaihon
+ExecStart=/usr/bin/autossh -M 0 -N -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -i /home/pbxdaihon/.ssh/tunnel_key -R 127.0.0.1:8090:127.0.0.1:8090 ubuntu@15.164.245.47
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target

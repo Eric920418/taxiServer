@@ -94,6 +94,38 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+/**
+ * 即時 AI 語音客服建單 — bridge 在 OpenAI function call 時呼叫
+ * POST /api/phone-calls/realtime-order
+ * body: { call_id, customer_phone, pickup_address, destination_address?, special_notes? }
+ * 回: { ok, orderId? } 或 { ok:false, forbiddenPickup? }（讓 AI 即時回覆客人）
+ */
+router.post('/realtime-order', async (req, res) => {
+  try {
+    const secret = process.env.BRIDGE_SECRET || '';
+    if (secret && req.headers['x-bridge-secret'] !== secret) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const { call_id, customer_phone, pickup_address, destination_address, special_notes } = req.body || {};
+    if (!pickup_address) {
+      return res.status(400).json({ ok: false, error: 'pickup_address required' });
+    }
+    console.log(`[Realtime-Order] caller=${customer_phone} pickup=${pickup_address} dest=${destination_address}`);
+    const processor = getPhoneCallProcessor();
+    const result = await processor.dispatchRealtimeOrder({
+      callId: call_id || `RT_${Date.now()}`,
+      customerPhone: customer_phone || 'unknown',
+      pickup_address,
+      destination_address: destination_address || null,
+      special_notes: special_notes || null,
+    });
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Realtime-Order] 錯誤:', error);
+    res.status(500).json({ ok: false, error: error?.message || 'INTERNAL_ERROR' });
+  }
+});
+
 // ========== Operator 審核 API（需驗證，放在 /:callId 之前）==========
 
 /**
