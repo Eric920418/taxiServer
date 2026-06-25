@@ -38,6 +38,12 @@ interface GeocodingResult {
   lng: number;
   formattedAddress: string;
   /**
+   * 解析到的地址落在花蓮服務區外（外縣市）。
+   * 上車點呼叫端應偵測此欄位、不建單，提醒客人服務範圍是花蓮、請重講；
+   * 目的地（允許長途）則忽略此旗標、照常使用座標。
+   */
+  outOfServiceArea?: { county?: string };
+  /**
    * 命中禁止上車區（例花蓮火車站）時設定。
    * 此情況下 lat/lng/formattedAddress 仍會填入命中地標座標供顯示用，
    * 但呼叫端應該偵測此欄位、不直接用座標建單，改走人工審核。
@@ -225,7 +231,7 @@ export class PhoneCallProcessor {
       console.log('[PhoneCall] 上車Geocoding:', JSON.stringify(pickupGeo));
     }
     if (parsedFields.destination_address) {
-      destGeo = await this.geocodeAddress(parsedFields.destination_address);
+      destGeo = await this.geocodeAddress(parsedFields.destination_address, false); // 目的地允許外縣市長途
       console.log('[PhoneCall] 目的地Geocoding:', JSON.stringify(destGeo));
     }
 
@@ -236,6 +242,12 @@ export class PhoneCallProcessor {
       console.warn(`[PhoneCallProcessor] ⚠️ 上車點為禁止載客區 (${fp.matchedLandmark})，轉人工審核`);
       await this.handleForbiddenPickupCall(callId, call, transcript, parsedFields, fp, altsList);
       return;
+    }
+
+    // 上車點解析到花蓮服務區外（外縣市）→ 不採用外縣市座標，退回待確認（低信心 → 人工審核接手）
+    if (pickupGeo?.outOfServiceArea) {
+      console.warn(`[PhoneCallProcessor] ⚠️ 上車點落外縣市 (${pickupGeo.outOfServiceArea.county || '?'})，不採用、退回待確認`);
+      pickupGeo = null;
     }
 
     // 如果上車點無法 geocoding，使用花蓮市中心作為預設
@@ -321,6 +333,7 @@ export class PhoneCallProcessor {
     etaMinutes?: number | null;          // 最近可用車估到達分鐘
     nearbyCount?: number;
     forbiddenPickup?: { matchedLandmark: string; alternatives: string[] };
+    outOfServiceArea?: { county?: string }; // 上車點超出花蓮服務區（未建單）
     error?: string;
   }> {
     const paymentType = params.payment_type === 'credit_card' ? 'CREDIT_CARD' : 'CASH';
@@ -346,16 +359,22 @@ export class PhoneCallProcessor {
       confidence: 1,
     } as ParsedFields;
 
-    // 上車地 geocoding + 禁止上車區檢查
+    // 上車地 geocoding（上車點強制花蓮）+ 禁止上車區 / 超出服務區檢查
     let pickupGeo: GeocodingResult | null = params.pickup_address
-      ? await this.geocodeAddress(params.pickup_address) : null;
+      ? await this.geocodeAddress(params.pickup_address, true) : null;
     if (pickupGeo?.forbiddenPickup) {
       const fp = pickupGeo.forbiddenPickup;
       return { ok: false, forbiddenPickup: { matchedLandmark: fp.matchedLandmark, alternatives: fp.alternatives.map(a => a.name) } };
     }
+    if (pickupGeo?.outOfServiceArea) {
+      console.log(`[Realtime] 上車點超出花蓮服務區 county=${pickupGeo.outOfServiceArea.county || '?'} → 請客人重講`);
+      return { ok: false, outOfServiceArea: pickupGeo.outOfServiceArea };
+    }
+    // 目的地允許外縣市（長途）
     const destGeo: GeocodingResult | null = params.destination_address
-      ? await this.geocodeAddress(params.destination_address) : null;
+      ? await this.geocodeAddress(params.destination_address, false) : null;
     if (!pickupGeo) {
+      // 上車點 vague/找不到（非外縣市）→ 退花蓮市中心待確認
       pickupGeo = { lat: 23.9871, lng: 121.6015, formattedAddress: `${params.pickup_address || '花蓮市'}（待確認）` };
     }
 
@@ -635,7 +654,8 @@ export class PhoneCallProcessor {
    * Redis 快取：DB 命中 24h、Google API 結果 1h
    * forbiddenPickup 結果不快取（每次都要攔截）
    */
-  private async geocodeAddress(address: string): Promise<GeocodingResult | null> {
+  private async geocodeAddress(address: string, isPickup = true): Promise<GeocodingResult | null> {
+    const allowOutOfBounds = !isPickup; // 目的地允許外縣市（長途）；上車點強制花蓮
     if (!this.googleMapsApiKey) {
       console.warn('[PhoneCallProcessor] 未設定 GOOGLE_MAPS_API_KEY，跳過 Geocoding');
       return null;
@@ -684,7 +704,7 @@ export class PhoneCallProcessor {
     // ② 街道地址 → Geocoding API
     if (!result) {
       if (isStreetAddress) {
-        const geocoded = await this.geocodeWithGeocodingAPI(addr);
+        const geocoded = await this.geocodeWithGeocodingAPI(addr, allowOutOfBounds);
         if (geocoded && !this.isDefaultCoords(geocoded.lat, geocoded.lng)) {
           result = {
             ...geocoded,
@@ -698,7 +718,7 @@ export class PhoneCallProcessor {
 
     // ③ 地標/景點 → Places Search
     if (!result) {
-      const placesResult = await this.geocodeWithPlacesSearch(addr);
+      const placesResult = await this.geocodeWithPlacesSearch(addr, allowOutOfBounds);
       if (placesResult) {
         result = {
           ...placesResult,
@@ -707,9 +727,9 @@ export class PhoneCallProcessor {
       }
     }
 
-    // 寫入 Redis 快取（forbiddenPickup 結果不快取，每次都要攔截）
+    // 寫入 Redis 快取（forbiddenPickup / outOfServiceArea 不快取，每次都要攔截）
     if (result) {
-      if (!result.forbiddenPickup) {
+      if (!result.forbiddenPickup && !result.outOfServiceArea) {
         try {
           await cacheApiResponse(cacheKey, result, cacheTtl);
         } catch { /* Redis 失敗不阻斷 */ }
@@ -735,10 +755,20 @@ export class PhoneCallProcessor {
     return dist < 0.002; // ~200 公尺
   }
 
+  /** 從 Google 結果抽縣市名（address_components 優先，否則從 formatted_address 取「XX縣/市」）。 */
+  private extractCounty(addressComponents: any[] | undefined, formattedAddress?: string): string | undefined {
+    if (Array.isArray(addressComponents)) {
+      const c = addressComponents.find((a: any) => (a.types || []).includes('administrative_area_level_1'));
+      if (c?.long_name) return c.long_name;
+    }
+    const m = (formattedAddress || '').match(/([一-龥]{2,3}[縣市])/);
+    return m ? m[1] : undefined;
+  }
+
   /**
    * Geocoding API - 專門處理街道門牌地址
    */
-  private async geocodeWithGeocodingAPI(address: string): Promise<GeocodingResult | null> {
+  private async geocodeWithGeocodingAPI(address: string, allowOutOfBounds = false): Promise<GeocodingResult | null> {
     const HUALIEN_TOWNSHIPS = ['吉安', '新城', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
     const hasTownship = HUALIEN_TOWNSHIPS.some(t => address.includes(t));
     const alreadyHasPrefix = address.startsWith('花蓮');
@@ -758,25 +788,34 @@ export class PhoneCallProcessor {
       const data = await response.json() as any;
 
       if (data.results && data.results.length > 0) {
-        const result = data.results[0];
-        const lat = result.geometry.location.lat;
-        const lng = result.geometry.location.lng;
-
-        // 驗證 1：範圍檢查
-        if (!hualienAddressDB.isWithinBounds(lat, lng)) {
-          console.warn(`[PhoneCallProcessor] Geocoding 結果超出花蓮範圍，丟棄: ${fullAddress} → lat=${lat}, lng=${lng}`);
+        // 迭代候選：優先取花蓮界內（同名消歧）；目的地長途(allowOutOfBounds)才接受界外。拒絕行政區級別粗糙結果。
+        let inBounds: any = null, outBounds: any = null;
+        for (const r of data.results) {
+          if (isAdministrativeAreaResult(r.types)) continue;
+          const la = r.geometry.location.lat, ln = r.geometry.location.lng;
+          if (hualienAddressDB.isWithinBounds(la, ln)) { inBounds = r; break; }
+          if (!outBounds) outBounds = r;
+        }
+        const chosen = inBounds || (allowOutOfBounds ? outBounds : null);
+        if (!chosen) {
+          if (outBounds && !allowOutOfBounds) {
+            // 上車點解析到外縣市 → 回 outOfServiceArea 標記（呼叫端拒絕建單、提醒花蓮）
+            const c = outBounds.geometry.location;
+            console.warn(`[PhoneCallProcessor] Geocoding 上車點落外縣市，標記 outOfServiceArea: ${fullAddress} → (${c.lat},${c.lng})`);
+            return {
+              lat: c.lat, lng: c.lng,
+              formattedAddress: hualienAddressDB.cleanupDisplay(outBounds.formatted_address || fullAddress),
+              outOfServiceArea: { county: this.extractCounty(outBounds.address_components, outBounds.formatted_address) },
+            };
+          }
+          console.warn(`[PhoneCallProcessor] Geocoding 無有效花蓮結果(或僅行政區): ${fullAddress}`);
           return null;
         }
-
-        // 驗證 2：拒絕行政區級別粗糙結果（讓 caller fallback 到 Places Search）
-        if (isAdministrativeAreaResult(result.types)) {
-          console.warn(`[PhoneCallProcessor] Geocoding 僅回傳行政區級別，fallback: ${fullAddress} → types=${JSON.stringify(result.types)}`);
-          return null;
-        }
-
-        const googleAddr = result.formatted_address || fullAddress;
+        const lat = chosen.geometry.location.lat;
+        const lng = chosen.geometry.location.lng;
+        const googleAddr = chosen.formatted_address || fullAddress;
         const hasDetail = /[路街道巷弄號]/.test(googleAddr) ||
-          (result.types || []).some((t: string) =>
+          (chosen.types || []).some((t: string) =>
             ['street_address','premise','establishment','point_of_interest'].includes(t)
           );
         const forbiddenInfo = this.buildForbiddenPickupByCoords(lat, lng);
@@ -798,7 +837,7 @@ export class PhoneCallProcessor {
   /**
    * Places Text Search - 處理地標/景點，附帶花蓮縣 location bias
    */
-  private async geocodeWithPlacesSearch(address: string): Promise<GeocodingResult | null> {
+  private async geocodeWithPlacesSearch(address: string, allowOutOfBounds = false): Promise<GeocodingResult | null> {
     try {
       const url = `https://maps.googleapis.com/maps/api/place/textsearch/json`
         + `?query=${encodeURIComponent(`${address} 花蓮`)}`
@@ -811,22 +850,30 @@ export class PhoneCallProcessor {
       const data = await response.json() as any;
 
       if (data.results && data.results.length > 0) {
-        // 智慧挑選：過濾 ATM、優先選分行（對台新銀行/中國信託等 POI 尤其重要）
-        const result = pickBestPlaceResult(data.results, address);
+        // 先挑「花蓮界內」候選（同名消歧、過濾 ATM、優先分行）
+        let result = pickBestPlaceResult(data.results, address, true);
         if (!result) {
-          console.warn(`[PhoneCallProcessor] Places Search 挑選後無結果: ${address}`);
-          return null;
+          // 無花蓮候選 → 看是上車點(拒)還是目的地(允許長途)
+          const anyResult = pickBestPlaceResult(data.results, address, false);
+          if (!anyResult) {
+            console.warn(`[PhoneCallProcessor] Places Search 挑選後無結果: ${address}`);
+            return null;
+          }
+          if (allowOutOfBounds) {
+            result = anyResult; // 目的地長途，接受外縣市
+          } else {
+            const loc = anyResult.geometry.location;
+            console.warn(`[PhoneCallProcessor] Places 上車點落外縣市，標記 outOfServiceArea: ${address}`);
+            return {
+              lat: loc.lat, lng: loc.lng,
+              formattedAddress: hualienAddressDB.cleanupDisplay(anyResult.formatted_address || address),
+              outOfServiceArea: { county: this.extractCounty(anyResult.address_components, anyResult.formatted_address) },
+            };
+          }
         }
 
         const lat = result.geometry.location.lat;
         const lng = result.geometry.location.lng;
-
-        // 驗證結果在花蓮縣範圍內
-        if (!hualienAddressDB.isWithinBounds(lat, lng)) {
-          console.warn(`[PhoneCallProcessor] Places Search 結果超出花蓮範圍，丟棄: ${address} → lat=${lat}, lng=${lng}`);
-          return null;
-        }
-
         const googleAddr = result.formatted_address || address;
         const hasDetail = /[路街道巷弄號]/.test(googleAddr) ||
           (result.types || []).some((t: string) =>

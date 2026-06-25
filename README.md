@@ -2013,6 +2013,22 @@ from-fet → taxi-route：
 - **車資不受影響**：車資是司機跳表金額（`POST /:orderId/fare`），與目的地無關，補目的地不重算。
 - App 端（司機補資料 UI + 多點導航）需發 Play 版；與 bridge 目的地選填**一起上線**（避免「AI 建了無目的地單、但司機還不能補」的空窗）。
 
+### v2.2 鎖定花蓮服務區 + 在地詞庫優先
+
+AI 是「花蓮在地」叫車，地址理解先以花蓮為中心，不跳外縣市同名地點。
+
+- **bridge prompt 鎖花蓮**（`bridge.mjs` buildSystemPrompt）：宣告「只服務花蓮、所有地點當花蓮理解、不准猜外縣市」。**上車點必須花蓮**；**目的地可花蓮以外（長途也接）**。這條是「AI 問是不是高雄」的主因修正——AI 覆述確認在 geocode 之前，是 LLM 自己猜的。
+- **候選先濾花蓮**（`HualienAddressDB.pickBestPlaceResult(results, query, hualienOnly)` + `geocodeWithGeocodingAPI/PlacesSearch(addr, allowOutOfBounds)`）：Geocoding 迭代候選取第一個 `isWithinHualienBounds`、Places 先 filter 花蓮界內 → 多候選時花蓮優先、外縣市永不被選（同名消歧）。
+- **上車點 vs 目的地分開鎖**：`geocodeAddress(addr, isPickup)`。上車點解析到外縣市 → 回 `outOfServiceArea:{county}`（複用 forbiddenPickup 同條 plumbing）→ bridge 餵回 AI → AI 說「只服務花蓮、請重講」、不建單（**不再靜默退花蓮市中心硬建**）。目的地允許外縣市（不擋長途好單）。vague/找不到（非外縣市）的上車點仍退花蓮市中心待確認。
+- **outOfServiceArea / forbiddenPickup 不快取**（每次都要攔截）。
+
+### 在地地標詞庫 ↔ 後台同源、即時同步（重要維護性）
+
+**AI 語音用的詞庫和後台地標編輯是「同一份資料」**：
+- `HualienAddressDB.rebuildIndex()` 從 DB 的 `landmarks`+`landmark_aliases` 表載入記憶體索引（exact/alias/taigi）。
+- 後台 `admin-landmarks` 新增/改/刪地標後**自動呼叫 `rebuildIndex()` 原子替換索引** → 電話/LINE 下一筆查詢**即時生效、零延遲、免重啟**。
+- **要新增花蓮在地地標/店名/路口/站點（如阿美麻糬、太昌、慶豐、仁里、國聯…），直接在後台地圖選點新增即可**（座標準、含別名/台語），AI 語音馬上吃到。前台語音與後台地名**不會分家**。
+
 ### 部署步驟（Asterisk / nginx / 歡迎語）
 
 ```bash

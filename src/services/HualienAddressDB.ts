@@ -83,17 +83,28 @@ export function isAdministrativeAreaResult(types: string[] | undefined): boolean
  * 2. 優先：name 完整包含 query 關鍵詞 + types 含 establishment/bank/post_office
  * 3. Fallback：保留順序的第一筆
  */
-export function pickBestPlaceResult(results: any[], query: string): any | null {
+export function pickBestPlaceResult(results: any[], query: string, hualienOnly: boolean = true): any | null {
   if (!results || results.length === 0) return null;
+
+  // 先濾「花蓮界內」候選（同名消歧：花蓮優先、外縣市不選）。
+  // 目的地長途時 hualienOnly=false 不濾；上車點 hualienOnly=true 無花蓮候選則回 null。
+  let pool = results;
+  if (hualienOnly) {
+    pool = results.filter(r => {
+      const loc = r.geometry?.location;
+      return loc && isWithinHualienBounds(loc.lat, loc.lng);
+    });
+    if (pool.length === 0) return null;
+  }
 
   const queryHasBank = /銀行|分行|郵局/.test(query);
   const queryHasAtm = /ATM|atm/i.test(query);
 
   const filtered = (queryHasBank && !queryHasAtm)
-    ? results.filter(r => !(r.types || []).includes('atm'))
-    : results;
+    ? pool.filter(r => !(r.types || []).includes('atm'))
+    : pool;
 
-  if (filtered.length === 0) return results[0];
+  if (filtered.length === 0) return pool[0];
 
   const preferredTypes = ['bank', 'post_office', 'establishment', 'point_of_interest'];
   const preferred = filtered.find(r => {
