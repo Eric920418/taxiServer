@@ -686,15 +686,22 @@ export class PhoneCallProcessor {
       recordFailedQuery(address, 'PHONE', dbResult).catch(() => {});
     }
     if (dbResult && dbResult.entry.lat !== null && dbResult.entry.lng !== null) {
-      if (isStreetAddress && dbResult.matchType === 'SUBSTRING') {
-        console.log(`[HualienAddressDB] 街道地址跳過 SUBSTRING 命中: ${addr} → ${dbResult.entry.name}，改用 Geocoding API`);
+      // 街道地址只跳過「粗略行政區(TOWNSHIP)」的 SUBSTRING（避免「吉安路一段16號→吉安鄉」）；
+      // 具體 POI（百貨/醫院/車站…）即使在街道字串裡也採用，比裸路名精準。
+      if (isStreetAddress && dbResult.matchType === 'SUBSTRING' && dbResult.entry.category === 'TOWNSHIP') {
+        console.log(`[HualienAddressDB] 街道地址跳過行政區 SUBSTRING: ${addr} → ${dbResult.entry.name}，改用 Geocoding API`);
       } else {
-        console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType})`);
+        console.log(`[HualienAddressDB] 命中: ${dbResult.matchedAlias} → ${dbResult.entry.name} (${dbResult.matchType}, ${dbResult.entry.category})`);
         const forbiddenInfo = this.buildForbiddenPickup(dbResult.entry.name);
+        // 顯示帶出地標名（司機看得到完整地點，不只裸路名）；address 已含名稱時不重複
+        const lmName = dbResult.entry.name;
+        const lmAddr = dbResult.entry.address || '';
+        const display = (lmAddr && !lmAddr.includes(lmName) && !lmName.includes(lmAddr))
+          ? `${lmName} ${lmAddr}` : (lmAddr || lmName);
         result = {
           lat: dbResult.entry.lat,
           lng: dbResult.entry.lng,
-          formattedAddress: dbResult.entry.address,
+          formattedAddress: display,
           ...(forbiddenInfo ? { forbiddenPickup: forbiddenInfo } : {}),
         };
         cacheTtl = 86400; // DB 命中快取 24 小時
