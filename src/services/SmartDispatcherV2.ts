@@ -613,6 +613,8 @@ export class SmartDispatcherV2 {
           googleEtaSeconds: driver.etaSeconds,
           etaSource: driver.etaSource,
           dispatchReason: driver.reason,
+          // 排班(queue)派來的單：司機在排班時 App 自動接、不跳確認
+          queueDispatch: driver.reason === 'QUEUE_PRIORITY',
           responseDeadline,
           tripDistance: state.order.destination
             ? this.calculateDistance(
