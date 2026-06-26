@@ -2,7 +2,20 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.1-MVP
-> 更新日期：2026-05-16
+> 更新日期：2026-06-26
+
+## 📝 最新修改（2026-06-26）- 司機「完成訂單後自動排班」開關 + 休息/離線退出排班守門
+
+### Context
+司機完成訂單後原本要手動再排班。新增 `drivers.auto_queue_after_trip` 開關：ON 時每趟完成依當下 GPS（`QueueZoneResolver.resolveZone`）自動排入所在排班區；OFF 維持自由。排班區只在「完成訂單／手動排班」判斷一次，不隨 GPS 換區。
+
+### 改動範圍（server）
+- **Migration `032-driver-auto-queue.sql`**：`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS auto_queue_after_trip BOOLEAN NOT NULL DEFAULT false`（冪等、metadata-only）。
+- **`src/api/orders.ts`**：抽 `maybeAutoRequeueAfterTrip(driverId)`（開關 OFF→no-op、不動既有 entry；ON→同區保留／跨區 LEFT+INSERT／不在任何區 LEFT）。掛到 `handleSubmitFare`（App 正常完成路徑，原本沒跑 auto-requeue）與 `PATCH /:orderId/status` DONE，取代原本無開關的 inline 區塊。
+- **`src/api/drivers.ts`**：`PATCH /:id/status` 切 OFFLINE/REST → `LEFT` 掉 ACTIVE 排班（`left_reason=DRIVER_<state>`）；`GET /:id` 回 `autoQueueAfterTrip`；新增 `PATCH /:id/auto-queue { enabled }`。
+
+### 不改的東西
+`QueueFraudChecker`（每 60s 漂移踢出）維持「只退出、不換區」；後端無任何定期依 GPS 重評/更換排班區的邏輯，符合「排班區穩定」需求。
 
 ## 📝 最新修改（2026-05-16）- LINE 叫車三項：訊息正名 + 預估金額 + 接單 ETA
 

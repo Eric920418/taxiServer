@@ -33,6 +33,7 @@ const MIGRATIONS = {
   'family-contacts-and-sos': '029-family-contacts-and-sos.sql',     // 模組 5：家屬聯防 + SOS
   'ai-dispatch-v2': '030-ai-dispatch-v2.sql',                       // 電話叫車 v2：刷卡/無障礙/預約 status/特殊需求
   'driver-order-edits': '031-driver-order-edits.sql',               // 司機補行程資料：停靠表 + 修改稽核 + 目的地改動欄位
+  'driver-auto-queue': '032-driver-auto-queue.sql',                 // 完成訂單後自動排班開關（drivers.auto_queue_after_trip）
 };
 
 /**

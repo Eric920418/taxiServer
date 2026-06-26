@@ -59,6 +59,21 @@ router.patch('/:driverId/status', async (req: Request, res: Response) => {
 
     const driver = result.rows[0];
 
+    // 守門：司機切「休息/離線」→ 一併退出排班（否則「休息/離線不排班」無法成立）。
+    // 含「完成訂單後自動排班」加入後又按休息的情境。
+    if (availability === 'OFFLINE' || availability === 'REST') {
+      const left = await query(
+        `UPDATE queue_entries
+         SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
+         WHERE driver_id = $2 AND status = 'ACTIVE'
+         RETURNING entry_id`,
+        [`DRIVER_${availability}`, driverId]
+      );
+      if (left.rowCount && left.rowCount > 0) {
+        console.log(`[Status] 司機 ${driverId} 切 ${availability}，已退出 ${left.rowCount} 筆排班`);
+      }
+    }
+
     res.json({
       driverId: driver.driver_id,
       name: driver.name,
@@ -113,6 +128,7 @@ router.get('/:driverId', async (req: Request, res: Response) => {
       maxAcceptableDiscountAmount: driver.fleet_default_discount_amount != null
         ? Number(driver.fleet_default_discount_amount)
         : (driver.max_acceptable_discount_amount ?? 0),
+      autoQueueAfterTrip: driver.auto_queue_after_trip ?? false,
       fleetPartnerId: driver.fleet_partner_id ?? null,
       fleetPartnerName: driver.fleet_partner_name ?? null,
       fleetDefaultDiscountAmount: driver.fleet_default_discount_amount != null
@@ -191,6 +207,45 @@ router.patch('/:driverId/discount', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('[Driver Commission] 錯誤:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * 更新「完成訂單後自動排班」開關
+ * PATCH /api/drivers/:driverId/auto-queue
+ * body: { enabled: boolean }
+ *
+ * 開啟後，司機每趟訂單完成時依當下 GPS 自動排入所在排班區
+ * （實際邏輯見 orders.ts maybeAutoRequeueAfterTrip）。
+ */
+router.patch('/:driverId/auto-queue', async (req: Request, res: Response) => {
+  const { driverId } = req.params;
+  const { enabled } = req.body || {};
+
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled 必須是 boolean（true/false）' });
+  }
+
+  try {
+    const result = await query(
+      `UPDATE drivers
+       SET auto_queue_after_trip = $1
+       WHERE driver_id = $2
+       RETURNING driver_id, auto_queue_after_trip`,
+      [enabled, driverId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: '司機不存在' });
+    }
+
+    res.json({
+      success: true,
+      driver_id: result.rows[0].driver_id,
+      autoQueueAfterTrip: result.rows[0].auto_queue_after_trip,
+    });
+  } catch (error: any) {
+    console.error('[Driver AutoQueue] 錯誤:', error);
     res.status(500).json({ error: error.message });
   }
 });

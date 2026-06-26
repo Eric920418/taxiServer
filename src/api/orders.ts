@@ -34,6 +34,94 @@ const VALID_REJECTION_REASONS = [
 
 const router = Router();
 
+/**
+ * 完成訂單後自動排班（司機自控開關 drivers.auto_queue_after_trip）
+ *
+ * 開關 OFF → no-op：不 insert、也不動既有 entry（尊重「手動排班=最高意圖」；
+ *            佇列單接單時 entry 本已 LEFT，故自然回自由狀態）。
+ * 開關 ON  → 依司機「當下 GPS」重新評估排班區（只在此刻判斷一次，之後不隨 GPS 換區）：
+ *   1. 仍在原 ACTIVE zone → 不動（保留順位）
+ *   2. 跨到新 zone → LEFT 舊 entry + INSERT 新 ACTIVE
+ *   3. 不在任何 zone → LEFT 殘留 ACTIVE（回自由）
+ *   4. 無 GPS → 跳過（定位異常不自動排班）
+ *
+ * 守門：司機切「休息/離線」由 PATCH /drivers/:id/status 一併退出排班（見 drivers.ts），
+ *       故本函式以「開關 + GPS + 落在某 zone」為條件即可。
+ * 自身 try/catch 吞錯，不影響訂單完成流程。
+ */
+async function maybeAutoRequeueAfterTrip(driverId: string): Promise<void> {
+  try {
+    const driverDb = await queryOne(
+      `SELECT current_lat, current_lng, max_acceptable_discount_amount, auto_queue_after_trip
+       FROM drivers WHERE driver_id = $1`,
+      [driverId]
+    );
+
+    // 開關關閉 → 不自動排班（維持自由 / 不動手動排班 entry）
+    if (!driverDb?.auto_queue_after_trip) return;
+
+    const realtime = driverLocations.get(driverId);
+    const lat = realtime?.lat ?? (driverDb?.current_lat ? parseFloat(driverDb.current_lat) : null);
+    const lng = realtime?.lng ?? (driverDb?.current_lng ? parseFloat(driverDb.current_lng) : null);
+
+    if (lat == null || lng == null) {
+      console.log(`[Order] 司機 ${driverId} 無 GPS，跳過 auto-requeue`);
+      return;
+    }
+
+    const currentZone = await queueZoneResolver.resolveZone(lat, lng);
+    const existing = await queryOne(
+      `SELECT entry_id, zone_id FROM queue_entries
+       WHERE driver_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+      [driverId]
+    );
+    const discountAmt = driverDb?.max_acceptable_discount_amount ?? 0;
+
+    if (currentZone) {
+      if (existing && existing.zone_id === currentZone.zone_id) {
+        // case 1: 仍在原 ACTIVE zone → 不動
+        console.log(`[Order] 司機 ${driverId} 完成訂單後仍在 ${currentZone.zone_id} 排班，維持`);
+      } else {
+        if (existing) {
+          // case 2 part 1: 跨 zone → LEFT 舊 entry
+          await query(
+            `UPDATE queue_entries
+             SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
+             WHERE entry_id = $2`,
+            ['AUTO_TRIP_DONE_ZONE_CHANGED', existing.entry_id]
+          );
+        }
+        // case 2 part 2 / 新加入：INSERT ACTIVE at currentZone
+        const requeue = await query(
+          `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount, status)
+           VALUES ($1, $2, $3, 'ACTIVE')
+           ON CONFLICT DO NOTHING RETURNING entry_id`,
+          [driverId, currentZone.zone_id, discountAmt]
+        );
+        if (requeue.rows.length > 0) {
+          const note = existing
+            ? `跨 zone 從 ${existing.zone_id} → ${currentZone.zone_id}`
+            : `自動加入 ${currentZone.zone_id}`;
+          console.log(`[Order] 司機 ${driverId} ${note}（entry_id=${requeue.rows[0].entry_id}）`);
+        }
+      }
+    } else {
+      // case 3: 不在任何 zone → 退出殘留 ACTIVE
+      if (existing) {
+        await query(
+          `UPDATE queue_entries
+           SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
+           WHERE entry_id = $2`,
+          ['AUTO_OUT_OF_ZONE_AFTER_TRIP', existing.entry_id]
+        );
+        console.log(`[Order] 司機 ${driverId} 完成訂單後不在任何 zone，已退出 ${existing.zone_id}`);
+      }
+    }
+  } catch (e: any) {
+    console.error(`[Order] auto-requeue 失敗（不影響訂單完成）:`, e.message);
+  }
+}
+
 // ============================================
 // 模組 4：no-show 拍照存證 — multer 配置
 // ============================================
@@ -833,78 +921,10 @@ router.patch('/:orderId/status', async (req, res) => {
       );
     }
 
-    // [Cap 3 v2] 訂單完成 → 依司機當前 GPS 重新評估 queue zone（方案 B）
-    //   1. 仍在原 ACTIVE zone → 不動（保留順位）
-    //   2. 跨到新 zone Y → LEFT 舊 entry + INSERT 新 ACTIVE at Y
-    //   3. 不在任何 zone → LEFT 舊 entry（如殘留 ACTIVE）
-    //   4. 沒 GPS → 跳過 log
-    // 取代舊 Cap 3「只 re-queue 同 zone」邏輯，補強跨 zone 場景。
+    // [Cap 3 v2] 訂單完成 → 依司機開關 auto_queue_after_trip + 當前 GPS 重新評估排班區
+    //   （邏輯抽到 maybeAutoRequeueAfterTrip：開關 OFF→no-op；ON→同區保留/跨區換/離區退出）
     if (status === 'DONE' && updatedOrder.driver_id) {
-      try {
-        const realtime = driverLocations.get(updatedOrder.driver_id);
-        const driverDb = await queryOne(
-          `SELECT current_lat, current_lng, max_acceptable_discount_amount
-           FROM drivers WHERE driver_id = $1`,
-          [updatedOrder.driver_id]
-        );
-        const lat = realtime?.lat ?? (driverDb?.current_lat ? parseFloat(driverDb.current_lat) : null);
-        const lng = realtime?.lng ?? (driverDb?.current_lng ? parseFloat(driverDb.current_lng) : null);
-
-        if (lat == null || lng == null) {
-          console.log(`[Order] 司機 ${updatedOrder.driver_id} 無 GPS，跳過 auto-requeue`);
-        } else {
-          const currentZone = await queueZoneResolver.resolveZone(lat, lng);
-          const existing = await queryOne(
-            `SELECT entry_id, zone_id FROM queue_entries
-             WHERE driver_id = $1 AND status = 'ACTIVE' LIMIT 1`,
-            [updatedOrder.driver_id]
-          );
-          const discountAmt = driverDb?.max_acceptable_discount_amount ?? 0;
-
-          if (currentZone) {
-            if (existing && existing.zone_id === currentZone.zone_id) {
-              // case 1: 仍在原 ACTIVE zone → 不動
-              console.log(`[Order] 司機 ${updatedOrder.driver_id} 完成訂單後仍在 ${currentZone.zone_id} 排班，維持`);
-            } else {
-              if (existing) {
-                // case 2 part 1: 跨 zone → LEFT 舊 entry
-                await query(
-                  `UPDATE queue_entries
-                   SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
-                   WHERE entry_id = $2`,
-                  ['AUTO_TRIP_DONE_ZONE_CHANGED', existing.entry_id]
-                );
-              }
-              // case 2 part 2 / 新加入：INSERT ACTIVE at currentZone
-              const requeue = await query(
-                `INSERT INTO queue_entries (driver_id, zone_id, max_acceptable_discount_amount, status)
-                 VALUES ($1, $2, $3, 'ACTIVE')
-                 ON CONFLICT DO NOTHING RETURNING entry_id`,
-                [updatedOrder.driver_id, currentZone.zone_id, discountAmt]
-              );
-              if (requeue.rows.length > 0) {
-                const note = existing
-                  ? `跨 zone 從 ${existing.zone_id} → ${currentZone.zone_id}`
-                  : `自動加入 ${currentZone.zone_id}`;
-                console.log(`[Order] 司機 ${updatedOrder.driver_id} ${note}（entry_id=${requeue.rows[0].entry_id}）`);
-              }
-            }
-          } else {
-            // case 3: 不在任何 zone → 退出殘留 ACTIVE
-            if (existing) {
-              await query(
-                `UPDATE queue_entries
-                 SET status = 'LEFT', left_at = CURRENT_TIMESTAMP, left_reason = $1
-                 WHERE entry_id = $2`,
-                ['AUTO_OUT_OF_ZONE_AFTER_TRIP', existing.entry_id]
-              );
-              console.log(`[Order] 司機 ${updatedOrder.driver_id} 完成訂單後不在任何 zone，已退出 ${existing.zone_id}`);
-            }
-          }
-        }
-      } catch (e: any) {
-        console.error(`[Order] auto-requeue 失敗（不影響訂單完成）:`, e.message);
-      }
+      await maybeAutoRequeueAfterTrip(updatedOrder.driver_id);
     }
 
     // 1+1 疊單自動晉升：前單 DONE 時，找排在它之後的疊單訂單，狀態改 ACCEPTED 給司機接手
@@ -1778,6 +1798,11 @@ async function handleSubmitFare(req: any, res: any) {
     getBillingService().writeSnapshotForOrder(orderId).catch((e: Error) =>
       console.error('[Order/submitFare] BillingSnapshot 寫入失敗（不影響訂單）:', e.message)
     );
+
+    // 完成訂單後自動排班（依司機開關 auto_queue_after_trip；await 確保 App 隨後 refreshQueue 拿到最新隊列狀態）
+    if (updatedOrder.driver_id) {
+      await maybeAutoRequeueAfterTrip(updatedOrder.driver_id);
+    }
 
     // 查詢完整訂單資訊（包含乘客和司機資訊）
     const fullOrder = await queryOne(`
