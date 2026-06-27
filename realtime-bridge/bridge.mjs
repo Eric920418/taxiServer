@@ -120,7 +120,7 @@ class Call {
     this.uuid = null;
     this.caller = 'unknown';
     this.rx = Buffer.alloc(0);          // AudioSocket 進來的位元組緩衝
-    this.outQ = [];                     // 要送回 Asterisk 的 slin16 chunk 佇列
+    this.outBuf = Buffer.alloc(0);      // 要送回 Asterisk 的 slin16 連續緩衝（pacer 每 20ms 取剛好 320B）
     this.ws = null;
     this.closed = false;
     this.ordered = false;
@@ -161,16 +161,24 @@ class Call {
 
   flushOut() {
     if (this.closed || this.sock.destroyed) return;
-    // 每 20ms 送一幀 320 bytes(160 sample slin)
-    if (this.outQ.length === 0) return;
-    let chunk = this.outQ.shift();
+    // 每 20ms 送「剛好」一幀 320 bytes(160 sample slin)；frame 邊界永遠對齊 → 不抖動、無沙沙底噪
+    if (this.outBuf.length === 0) return;
+    let chunk;
+    if (this.outBuf.length >= 320) {
+      chunk = this.outBuf.subarray(0, 320);
+      this.outBuf = this.outBuf.subarray(320);
+    } else {
+      // 音訊真正尾段不足一幀 → 補靜音(slin 0)湊滿 20ms 再送，避免短幀造成 Asterisk 時脈抖動
+      chunk = Buffer.concat([this.outBuf, Buffer.alloc(320 - this.outBuf.length)]);
+      this.outBuf = Buffer.alloc(0);
+    }
     this.sock.write(frame(0x10, chunk));
   }
 
-  // OpenAI 來的 μ-law base64 → slin16 → 切 320B 幀塞 outQ
+  // OpenAI 來的 μ-law base64 → slin16 → 累加到連續緩衝（不再 per-delta 切塊，避免每個 delta 留短尾幀）
   enqueueAudio(b64) {
     const slin = muToSlin(Buffer.from(b64, 'base64'));
-    for (let i = 0; i < slin.length; i += 320) this.outQ.push(slin.subarray(i, i + 320));
+    this.outBuf = Buffer.concat([this.outBuf, slin]);
   }
 
   openAI() {
@@ -230,7 +238,7 @@ class Call {
         if (ev.transcript) log(`🗣️  客人: ${ev.transcript}`);
         break;
       case 'input_audio_buffer.speech_started':
-        this.outQ = [];                 // 客人插話 → 清掉 AI 還沒播完的音
+        this.outBuf = Buffer.alloc(0);  // 客人插話 → 清掉 AI 還沒播完的音
         break;
       case 'response.function_call_arguments.done':
         this.onFunctionCall(ev);

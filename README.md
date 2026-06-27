@@ -4,6 +4,12 @@
 > 版本：v1.7.1-MVP
 > 更新日期：2026-06-26
 
+## 📝 最新修改（2026-06-28）- 電話 AI 語音「沙沙底噪」修復（bridge 輸出 pacing）
+
+電話 AI 客服 AI 聲音持續沙沙底噪。根因＝`realtime-bridge/bridge.mjs` 輸出 frame 切割：`enqueueAudio` 把**每個** OpenAI `response.output_audio.delta` 各自切 320B → 每個 delta 尾端留 <320B 短幀；`flushOut` 每 20ms 送一個「可變長度」chunk → 送出的 frame 時長忽長忽短 → Asterisk 播放時脈抖動 → **近乎連續的沙沙底噪**。（**非取樣率問題**：input/output 都 `audio/pcmu`＝μ-law **8kHz**、端到端一致、無 resample；`muDecode`/`linToMu` 也是標準正確的 G.711。）
+
+修法：`outQ`（per-delta chunk 陣列）→ 單一連續 `outBuf` Buffer；`enqueueAudio` 直接累加、`flushOut` 每 tick 取**剛好 320B**（尾段不足補 slin 靜音湊滿 20ms），frame 邊界永遠對齊。barge-in 改 reset `outBuf`。已部署 box `/opt/taxi-ai-bridge/bridge.mjs`、restart `taxi-ai-bridge`（重啟乾淨、:9092/:9091 正常）。Phase 2（若仍有電話級底噪）：輸出改 `audio/pcm` 24kHz + 乾淨 24k→8k 降取樣消除 μ-law companding，待實聽結果再評估。
+
 ## 📝 最新修改（2026-06-27）- FCM 新訂單改 data-only（配合 App v1.6.5 全螢幕接單）
 
 `FcmService.sendNewOrderToDriver` 去掉 `notification` field（含 `android.notification`）→ **data-only**（保留 `android.priority='high'`）。讓 App `onMessageReceived` 在**背景/被殺都會跑**，由 App 自己 post 高優先「全螢幕接單」通知（v1.6.5 `IncomingOrderActivity`）。含 notification field 時，背景由系統渲染、`onMessageReceived` 不跑 → 全螢幕碼觸發不到、且會「全螢幕＋系統 heads-up」雙通知。舊版 App（≤1.6.4）的 `onMessageReceived` 仍會把 data 渲染成 heads-up，**向下相容不漏單**。注意：force-stop / 兇 ROM 不喚醒進程時 data-only 可能收不到 → 請司機關閉省電限制。
