@@ -1697,7 +1697,13 @@ export class SmartDispatcherV2 {
    * 過濾條件：
    *   - state.status === 'DISPATCHING' （訂單仍在派發中沒人接）
    *   - 該司機在 perDriverOffers 內（曾被 offer 過）
-   *   - 司機沒 rejected / timeout / acceptedBy（offer 仍對他有效）
+   *   - 司機沒 rejected / acceptedBy（offer 仍對他有效）
+   *
+   * 註：刻意「不」排除 allTimedOutDriverIds —— App 切背景被 Doze 殺 socket 的司機，
+   *     正是因為看不到卡片、在 15-20s 批次 timeout 被標記 timed-out；若排除他們，
+   *     等於把最該救的人擋掉（這就是「背景有通知卻沒卡片」的根因）。只要訂單仍
+   *     DISPATCHING、他沒明確拒絕，重連時就 replay，讓他 first-come 搶這張未被接走的單
+   *     （handleDriverAccept 只看 status==DISPATCHING，不擋 timed-out 司機）。
    */
   public replayActiveOffersForDriver(driverId: string): number {
     const socketId = driverSockets.get(driverId);
@@ -1708,7 +1714,7 @@ export class SmartDispatcherV2 {
       if (state.status !== 'DISPATCHING') continue;
       if (state.acceptedBy) continue;
       if (state.allRejectedDriverIds.has(driverId)) continue;
-      if (state.allTimedOutDriverIds.has(driverId)) continue;
+      // 不排除 allTimedOutDriverIds：背景被 Doze 殺 socket 而 timeout 的司機正是要救的對象（見上方註解）
       const offer = state.perDriverOffers?.get(driverId);
       if (!offer) continue;
       io.to(socketId).emit('order:offer', offer);
