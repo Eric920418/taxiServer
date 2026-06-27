@@ -4,6 +4,19 @@
 > 版本：v1.7.1-MVP
 > 更新日期：2026-06-26
 
+## 📝 最新修改（2026-06-28）- 電話 AI：不亂猜地址（先驗證花蓮）+ 查不到/台語不清/問兩次轉真人
+
+### 解決的問題
+電話 AI 會**硬把地址猜成花蓮**：prompt 寫死「所有地點當花蓮、不准反問別縣市」→ 客人講「鳳山區」被改口成「花蓮鳳山區」確認 → Google 硬湊一個花蓮座標（通過邊界檢查）→ **建出座標錯誤的單**（`outOfServiceArea` 只擋解析到界外、擋不了被 AI 改寫後湊進界內）。
+
+### 改動
+- **`bridge.mjs` prompt**：花蓮行政區只有市/鄉/鎮、**沒有「區」**→ 任何「○○區」（鳳山區/三民區…）一定非花蓮、**不准改口硬確認**；上車點**確認前一定先呼叫 `check_address` 驗證**，只用回傳的 `normalizedAddress` 跟客人確認；驗不過/問兩次/台語聽不懂 → `transfer_to_human`。
+- **新工具 `check_address`**（bridge）→ 後端 **`POST /api/phone-calls/verify-address`**（複用 `PhoneCallProcessor.verifyPickupAddress`→`geocodeAddress`，**只驗證不建單**，回 `found/inHualien/normalizedAddress/outOfServiceArea/forbiddenPickup`）。
+- **新工具 `transfer_to_human` + 轉接（零 AMI）**：bridge 記 `transferByUuid=SERVICE_PHONE`、等 AI 講完轉接語（`response.done`）才關 socket；bridge `/transfer-target?uuid=` HTTP；dialplan `taxi-ai` 在 `AudioSocket()` 後 `CURL` → 有號 `Goto(fet-outbound,${XFER},1)`（複用 relay-in pattern）否則 Hangup。`SERVICE_PHONE` env = 客服市話/手機（**留空→AI 改說「請稍後再撥」不會卡死**）。
+
+### 新時尚→太昌（查證）
+叫「建國路新時尚」命中地標 290（別名「新時尚」）= `吉安鄉太昌村建國路二段289號`、座標 23.99322/121.57374，**派車定位正確**（太昌寫在 address+別名；地標表無獨立「里」欄位，對派車無影響）。
+
 ## 📝 最新修改（2026-06-28）- 電話 AI 語音「沙沙底噪」修復（bridge 輸出 pacing）
 
 電話 AI 客服 AI 聲音持續沙沙底噪。根因＝`realtime-bridge/bridge.mjs` 輸出 frame 切割：`enqueueAudio` 把**每個** OpenAI `response.output_audio.delta` 各自切 320B → 每個 delta 尾端留 <320B 短幀；`flushOut` 每 20ms 送一個「可變長度」chunk → 送出的 frame 時長忽長忽短 → Asterisk 播放時脈抖動 → **近乎連續的沙沙底噪**。（**非取樣率問題**：input/output 都 `audio/pcmu`＝μ-law **8kHz**、端到端一致、無 resample；`muDecode`/`linToMu` 也是標準正確的 G.711。）

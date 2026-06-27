@@ -130,6 +130,30 @@ router.post('/realtime-order', async (req, res) => {
   }
 });
 
+/**
+ * 即時 AI 驗證上車地址（只驗證、不建單）— bridge check_address 工具呼叫
+ * POST /api/phone-calls/verify-address  body: { address }
+ * 回: { found, inHualien, normalizedAddress?, outOfServiceArea?, forbiddenPickup? }
+ *   讓 AI 在「確認上車點前」先驗證：不在花蓮/查不到就別硬確認、別建錯單。
+ */
+router.post('/verify-address', async (req, res) => {
+  try {
+    const secret = process.env.BRIDGE_SECRET || '';
+    if (secret && req.headers['x-bridge-secret'] !== secret) {
+      return res.status(401).json({ found: false, error: 'unauthorized' });
+    }
+    const { address } = req.body || {};
+    if (!address) return res.status(400).json({ found: false, error: 'address required' });
+    const processor = getPhoneCallProcessor();
+    const result = await processor.verifyPickupAddress(String(address));
+    console.log(`[Verify-Address] "${address}" → found=${result.found} inHualien=${result.inHualien} norm=${result.normalizedAddress ?? ''}`);
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Verify-Address] 錯誤:', error);
+    res.status(500).json({ found: false, error: error?.message || 'INTERNAL_ERROR' });
+  }
+});
+
 // ========== Operator 審核 API（需驗證，放在 /:callId 之前）==========
 
 /**

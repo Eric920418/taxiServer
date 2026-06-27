@@ -40,7 +40,9 @@ function buildSystemPrompt() {
   return `你是台灣「大豐計程車」的電話叫車客服。全程用繁體中文、台灣口語、親切簡短。
 現在時間（台灣 UTC+8）：${nowTaiwanString()}
 
-★服務範圍：我們是「花蓮在地」叫車、只在花蓮接客。客人講的所有地點一律當作「花蓮」的地址去理解、覆述、確認，**絕對不要猜測或反問是不是其他縣市（高雄、台北、台中…）**。例如客人說某條路、某個地標，就當花蓮的那一個。
+★服務範圍：我們是「花蓮在地」叫車、只在花蓮接客。客人講的地點**預設**在花蓮去理解（同名的路就當花蓮那條）。但**不要硬把明顯不是花蓮的地方當成花蓮、不要捏造**：
+- **花蓮的行政區只有「市／鄉／鎮」**（花蓮市、吉安鄉、新城鄉、壽豐鄉、光復鄉、豐濱鄉、瑞穗鄉、富里鄉、秀林鄉、萬榮鄉、卓溪鄉、玉里鎮、鳳林鎮），**花蓮沒有任何「區」**。所以客人若講某個「○○區」（鳳山區、三民區、信義區、板橋區…那是高雄／台北／新北等地的行政區），那一定不是花蓮——直接說「不好意思，我們只服務花蓮地區的上車喔」，**絕對不要改口講成「花蓮○○區」、不要硬確認**。
+- 聽不清楚、台語聽不懂、或不確定地點時，**不要猜、不要硬確認**——請客人再講一次，並照下面的「上車地點」驗證/轉接流程處理。
 
 ★說話風格：講話像真人在快速幫客人登記，精簡、自然、直接，不要太制式。
 - 接話或進入下一句確認時，用「好」就好，**不要每次都說「好的」**。
@@ -50,8 +52,12 @@ function buildSystemPrompt() {
 任務：問清楚客人需求後呼叫 create_taxi_order 建立訂單。開場先說「您好，大豐計程車，請問從哪裡上車？」
 
 要問到的資訊（依序、自然地問，不要像在填表）：
-1. 上車地點（必問、且**必須在花蓮**，我們只在花蓮接客）：要具體（路名＋段/巷弄或地標）。聽不清或太模糊就請對方再說一次。覆述確認一次。
-   目的地：問一次即可，**目的地可以是花蓮以外（長途也接）**。客人若說「上車後再說／還不知道／到時跟司機講」，就**只用上車點建單、destination_address 留空**，不要硬逼——司機載到客人後會在系統補目的地。
+1. 上車地點（必問、且**必須在花蓮**）：要具體（路名＋段/巷弄或地標）。**跟客人「確認上車點之前」一定要先呼叫 check_address 驗證**，再依結果處理：
+   - 回 inHualien 且有 normalizedAddress → **用 normalizedAddress 跟客人確認一次**（「好，在（normalizedAddress）這邊上車對嗎？」），**不要**用客人原話硬確認。
+   - 回 outOfServiceArea → 「不好意思，我們只服務花蓮地區的上車喔，麻煩您說一個花蓮的上車點」，等客人重講再驗一次。
+   - 回 found 為 false（查不到/聽不清）→ 請客人「再說完整一點（路名加門牌，或附近的地標）」，再驗一次。
+   - **同一個上車點驗了兩次還是 outOfServiceArea 或查不到、或台語一直聽不懂 → 呼叫 transfer_to_human 轉接真人客服**（呼叫前先說「好，幫您轉接客服，若一時沒接通請稍後再撥」）。若 transfer_to_human 回 transferring 為 false（目前沒有可轉接的客服線），就改說「不好意思，這邊一時沒辦法幫您處理，麻煩您稍後再撥、或用 GoGoCha App 叫車」後結束。
+   目的地：問一次即可，**可以是花蓮以外（長途也接）、不用呼叫 check_address**。客人若說「上車後再說／還不知道」就 destination_address 留空，不要硬逼——司機載到客人後在系統補。
 2. 付款方式：問「請問付現金還是刷卡？」。客人說付現/付現金/現金 → payment_type 填 cash；說刷卡/信用卡 → 填 credit_card。
 3. 以下只在客人主動提到時才處理：
    - 火車接送：提醒「火車接送建議至少提前 1 小時預約喔」，問希望幾點上車，換算成 scheduled_at（ISO 8601、含 +08:00）。若客人說現在就要走，就當即時單、不要填 scheduled_at。
@@ -73,6 +79,8 @@ function buildSystemPrompt() {
 
 // 來電號碼映射：dialplan 先 POST /call-start 存 uuid→caller
 const callerByUuid = new Map();
+const transferByUuid = new Map();   // uuid → 客服號（AI 轉真人時設）；dialplan 在 AudioSocket 結束後 CURL /transfer-target 取
+const SERVICE_PHONE = process.env.SERVICE_PHONE || '';   // 轉真人客服的號碼（fet-outbound 能撥的格式；09xxx 或市話 0xxx）
 let activeCalls = 0;
 
 //----- G.711 μ-law ↔ slin16 -----------------------------------
@@ -220,6 +228,26 @@ class Call {
                 },
                 required: ['pickup_address'],
               },
+            },
+            {
+              type: 'function',
+              name: 'check_address',
+              description: '在跟客人「確認上車地點之前」一定先呼叫，驗證地址是否存在且在花蓮服務範圍。只用回傳的 normalizedAddress 跟客人確認；outOfServiceArea=非花蓮、要請客人改；found=false=查不到、請客人再講一次。',
+              parameters: {
+                type: 'object',
+                properties: { address: { type: 'string', description: '要驗證的上車地點（客人講的原文即可）' } },
+                required: ['address'],
+              },
+            },
+            {
+              type: 'function',
+              name: 'transfer_to_human',
+              description: '地址查不到/聽不清、台語聽不懂、或同一上車點問兩次仍無法確認時，呼叫此工具把電話轉接給真人客服。呼叫前先跟客人說「好，幫您轉接客服，若一時沒接通請稍後再撥」。',
+              parameters: {
+                type: 'object',
+                properties: { reason: { type: 'string', description: '轉接原因：address_unclear / taigi / not_found / uncertain' } },
+                required: ['reason'],
+              },
             }],
           },
         }));
@@ -240,6 +268,10 @@ class Call {
       case 'input_audio_buffer.speech_started':
         this.outBuf = Buffer.alloc(0);  // 客人插話 → 清掉 AI 還沒播完的音
         break;
+      case 'response.done':
+        // AI 講完轉接語 → 關 socket 讓 dialplan 接手撥客服
+        if (this.pendingTransfer) { this.pendingTransfer = false; this.flushThenTransfer(); }
+        break;
       case 'response.function_call_arguments.done':
         this.onFunctionCall(ev);
         break;
@@ -250,6 +282,9 @@ class Call {
   }
 
   async onFunctionCall(ev) {
+    if (ev.name === 'check_address') return this.onCheckAddress(ev);
+    if (ev.name === 'transfer_to_human') return this.onTransferToHuman(ev);
+    // 預設：create_taxi_order
     let args = {};
     try { args = JSON.parse(ev.arguments || '{}'); } catch {}
     log(`🚕 建單 caller=${this.caller}`, args);
@@ -275,14 +310,65 @@ class Call {
       result = { ok: false, error: 'backend_unreachable' };
     }
     this.ordered = !!result?.orderId;
-    // 把結果餵回 AI，讓它口頭回覆客人
+    this.feedToolResult(ev.call_id, result);
+  }
+
+  // 驗證上車地址（只驗證、不建單）→ 結果餵回 AI，讓它只確認驗過的地址
+  async onCheckAddress(ev) {
+    let args = {};
+    try { args = JSON.parse(ev.arguments || '{}'); } catch {}
+    log(`🔎 check_address caller=${this.caller} addr=${args.address}`);
+    let result;
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/phone-calls/verify-address`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bridge-Secret': BRIDGE_SECRET },
+        body: JSON.stringify({ address: args.address }),
+        signal: AbortSignal.timeout(8000),
+      });
+      result = await r.json();
+    } catch (e) {
+      result = { found: false, error: 'backend_unreachable' };
+    }
+    this.feedToolResult(ev.call_id, result);
+  }
+
+  // 轉真人客服：記下轉接目標；等 AI 講完轉接語(response.done) 再關 socket → dialplan 撥客服
+  async onTransferToHuman(ev) {
+    let args = {};
+    try { args = JSON.parse(ev.arguments || '{}'); } catch {}
+    log(`📞➡️ 轉真人 caller=${this.caller} reason=${args.reason} → ${SERVICE_PHONE || '(未設SERVICE_PHONE)'}`);
+    const can = !!(SERVICE_PHONE && this.uuid);
+    if (can) {
+      transferByUuid.set(this.uuid, SERVICE_PHONE);
+      setTimeout(() => transferByUuid.delete(this.uuid), 60000);
+      this.pendingTransfer = true;
+    }
+    this.feedToolResult(ev.call_id, { ok: true, transferring: can });
+  }
+
+  feedToolResult(callId, result) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         type: 'conversation.item.create',
-        item: { type: 'function_call_output', call_id: ev.call_id, output: JSON.stringify(result) },
+        item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) },
       }));
       this.ws.send(JSON.stringify({ type: 'response.create' }));
     }
+  }
+
+  // 等 AI 的轉接語播完（outBuf 排空）再優雅關 socket → AudioSocket() return → dialplan 撥客服
+  flushThenTransfer() {
+    const closeNow = () => { try { this.sock.end(); } catch {} };
+    const t = setInterval(() => {
+      if (this.closed) { clearInterval(t); return; }
+      if (this.outBuf.length === 0) {
+        clearInterval(t);
+        log(`☎️ 轉接：socket 關閉，交給 dialplan 撥客服 ${SERVICE_PHONE}`);
+        closeNow();
+      }
+    }, 100);
+    setTimeout(() => { clearInterval(t); closeNow(); }, 8000); // 保險上限
   }
 
   cleanup(why) {
@@ -319,6 +405,12 @@ http.createServer((req, res) => {
       if (uuid) { callerByUuid.set(uuid, caller); setTimeout(() => callerByUuid.delete(uuid), 60000); }
       res.writeHead(200); res.end('ok');
     });
+  } else if (req.url?.startsWith('/transfer-target')) {
+    // dialplan 在 AudioSocket 結束後 CURL：回該 uuid 的轉接客服號（或空字串=不轉）
+    const uuid = new URL(req.url, 'http://x').searchParams.get('uuid') || '';
+    const target = transferByUuid.get(uuid) || '';
+    if (target) transferByUuid.delete(uuid);
+    res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end(target);
   } else if (req.url === '/health') {
     res.writeHead(200); res.end(JSON.stringify({ active: activeCalls, max: MAX_CALLS }));
   } else { res.writeHead(404); res.end(); }

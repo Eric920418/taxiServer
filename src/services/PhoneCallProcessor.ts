@@ -755,6 +755,40 @@ export class PhoneCallProcessor {
   }
 
   /**
+   * 只驗證上車地址（存在 + 在花蓮服務區），不建單、不派車。
+   * 電話 AI 在「跟客人確認上車點之前」呼叫，避免硬把地址猜成花蓮建錯單。
+   * 複用 geocodeAddress(isPickup=true)：上車點強制花蓮，解析到外縣市回 outOfServiceArea。
+   */
+  async verifyPickupAddress(address: string): Promise<{
+    found: boolean;
+    inHualien: boolean;
+    normalizedAddress?: string | null;
+    outOfServiceArea?: { county?: string };
+    forbiddenPickup?: any;
+  }> {
+    if (!address || !address.trim()) return { found: false, inHualien: false };
+    const r = await this.geocodeAddress(address, true);
+    if (!r) {
+      // 查不到有效花蓮結果（聽不清/不存在）→ 請客人再講一次或轉真人
+      return { found: false, inHualien: false, normalizedAddress: null };
+    }
+    if (r.outOfServiceArea) {
+      return {
+        found: true,
+        inHualien: false,
+        outOfServiceArea: r.outOfServiceArea,
+        normalizedAddress: r.formattedAddress || null,
+      };
+    }
+    return {
+      found: true,
+      inHualien: true,
+      normalizedAddress: r.formattedAddress || null,
+      ...(r.forbiddenPickup ? { forbiddenPickup: r.forbiddenPickup } : {}),
+    };
+  }
+
+  /**
    * 判斷座標是否為花蓮市中心預設值（Geocoding 失敗的假陽性）
    */
   private isDefaultCoords(lat: number, lng: number): boolean {
