@@ -4,6 +4,19 @@
 > 版本：v1.7.1-MVP
 > 更新日期：2026-06-26
 
+## 📝 最新修改（2026-06-27）- 背景接單修復：reconnect replay 不再排除 timed-out 司機
+
+### 解決的問題
+司機 App 切背景被 Doze 殺 socket → 訂單派來時收不到 WS `order:offer`（只剩 FCM 通知鈴聲）→ 15-20s 批次 timeout 把他標記 timed-out → 開回 App 重連時，`SmartDispatcherV2.replayActiveOffersForDriver` 因 `allTimedOutDriverIds` 過濾把他擋掉 → **只剩主畫面、沒卡片可接**。這把「最該被救的人」擋掉，剛好打死它自己要解的場景。
+
+### 改動（`src/services/SmartDispatcherV2.ts`，純後端一行邏輯）
+- `replayActiveOffersForDriver` 移除 `if (state.allTimedOutDriverIds.has(driverId)) continue;`。只要訂單仍 `DISPATCHING`、司機沒明確 reject、未被接走，重連（`driver:online`）就 replay `order:offer`，讓他 first-come 搶仍未被接走的單。
+- 安全性：`handleDriverAccept` 只看 `status==DISPATCHING`，不擋 timed-out 司機；`perDriverOffers` 永不刪除（payload 仍在）；多人搶同單由 first-come 收斂。
+- App 端 `order:offer → 跳卡片` 流程不變、不檢查 `responseDeadline`，故純後端即生效，**現役 App 不需發版**。
+
+### 仍存在的先天限制
+offer 視窗短（~15-30s）；若整張訂單已過 order-level timeout/被取消（不再 DISPATCHING），沒有東西可 replay。背景常連的根治（前景服務維持 WS / FCM data message 預載）為後續工作項目。
+
 ## 📝 最新修改（2026-06-26）- 司機「完成訂單後自動排班」開關 + 休息/離線退出排班守門
 
 ### Context
