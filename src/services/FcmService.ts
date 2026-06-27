@@ -57,13 +57,13 @@ export class FcmService {
     const title = '新訂單！';
     const body = `${order.passengerName} 在 ${order.pickup} 叫車`;
     try {
-      // 雙重 payload 確保 App 死掉時系統仍會跳通知：
-      //   - notification: OS 層級直接顯示通知欄、跳鈴聲，不需 App 活著
-      //   - data:        App 活著時自行處理（路由、振動、自訂 UI）
-      // 原本只用 data-only → Android 殺掉 App 後通知不顯示 → 司機看不到訂單
+      // Data-only（不含 notification field）：強制 App 端 onMessageReceived 在背景/被殺都會跑，
+      // 由 App 自己 post 高優先「全螢幕接單」通知（v1.6.5+ IncomingOrderActivity）。
+      //   - 若含 notification field：背景由系統渲染、onMessageReceived 不跑 → 全螢幕碼跑不到、且會雙通知
+      //   - data-only 在 force-stop / 兇 ROM 不喚醒時可能收不到 → 靠司機關省電限制緩解（release notes 已提醒）
+      // 舊版 App（≤1.6.4）的 onMessageReceived 仍會把 data 渲染成 heads-up，故向下相容不漏單。
       await this.app.messaging().send({
         token,
-        notification: { title, body },
         data: {
           type: 'new_order',
           title,
@@ -75,19 +75,11 @@ export class FcmService {
         },
         android: {
           priority: 'high' as const,
-          notification: {
-            channelId: 'orders',           // App 端對應建 channel + sound
-            sound: 'default',
-            priority: 'max' as const,      // heads-up 通知（懸浮顯示在頂部）
-            defaultVibrateTimings: true,
-            defaultSound: true,
-          },
         },
         apns: {
           headers: { 'apns-priority': '10' },
           payload: {
             aps: {
-              sound: 'default',
               contentAvailable: true,
             },
           },

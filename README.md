@@ -4,6 +4,10 @@
 > 版本：v1.7.1-MVP
 > 更新日期：2026-06-26
 
+## 📝 最新修改（2026-06-27）- FCM 新訂單改 data-only（配合 App v1.6.5 全螢幕接單）
+
+`FcmService.sendNewOrderToDriver` 去掉 `notification` field（含 `android.notification`）→ **data-only**（保留 `android.priority='high'`）。讓 App `onMessageReceived` 在**背景/被殺都會跑**，由 App 自己 post 高優先「全螢幕接單」通知（v1.6.5 `IncomingOrderActivity`）。含 notification field 時，背景由系統渲染、`onMessageReceived` 不跑 → 全螢幕碼觸發不到、且會「全螢幕＋系統 heads-up」雙通知。舊版 App（≤1.6.4）的 `onMessageReceived` 仍會把 data 渲染成 heads-up，**向下相容不漏單**。注意：force-stop / 兇 ROM 不喚醒進程時 data-only 可能收不到 → 請司機關閉省電限制。
+
 ## 📝 最新修改（2026-06-27）- 背景接單修復：reconnect replay 不再排除 timed-out 司機
 
 ### 解決的問題
