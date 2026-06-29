@@ -1226,6 +1226,7 @@ export function relocateRequestCard(
   orderId: string,
   pickupAddress: string,
   liffIdBooking: string,
+  meetupLandmark?: { name: string; address: string } | null,
 ): FlexMessage {
   const liffUrl = liffIdBooking
     ? `https://liff.line.me/${liffIdBooking}?orderId=${orderId}&mode=relocate`
@@ -1277,6 +1278,24 @@ export function relocateRequestCard(
             { type: 'text', text: pickupAddress, size: 'sm', color: '#333333', flex: 5, wrap: true },
           ],
         },
+        ...(meetupLandmark ? [
+          {
+            type: 'box' as const,
+            layout: 'vertical' as const,
+            margin: 'md' as const,
+            backgroundColor: '#FFF8E1',
+            cornerRadius: '8px',
+            paddingAll: '10px',
+            contents: [
+              { type: 'text' as const, text: '🚕 建議會合地點', size: 'xs' as const, color: '#FF8F00', weight: 'bold' as const },
+              { type: 'text' as const, text: meetupLandmark.name, size: 'md' as const, color: '#333333', weight: 'bold' as const, margin: 'xs' as const, wrap: true },
+              ...(meetupLandmark.address
+                ? [{ type: 'text' as const, text: meetupLandmark.address, size: 'xs' as const, color: '#999999', wrap: true }]
+                : []),
+              { type: 'text' as const, text: '若不方便分享位置，可步行至上述明顯地標，司機在此等您。', size: 'xs' as const, color: '#666666', margin: 'sm' as const, wrap: true },
+            ],
+          },
+        ] : []),
       ],
     },
     ...(liffUrl ? {

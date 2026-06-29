@@ -1299,7 +1299,7 @@ router.post('/:orderId/contact-passenger', async (req, res) => {
 
 router.post('/:orderId/request-relocation', async (req, res) => {
   const { orderId } = req.params;
-  const { driverId } = req.body;
+  const { driverId, suggestLandmark } = req.body;
 
   if (!driverId) {
     return res.status(400).json({ error: '缺少 driverId' });
@@ -1329,9 +1329,17 @@ router.post('/:orderId/request-relocation', async (req, res) => {
     if (!lineNotifier) {
       return res.status(503).json({ error: 'LINE 通知服務未啟用' });
     }
-    await lineNotifier.notifyRequestRelocation(orderId);
+    const { meetupLandmark } = await lineNotifier.notifyRequestRelocation(orderId, {
+      suggestLandmark: !!suggestLandmark,
+    });
 
-    return res.json({ success: true, message: '已通知客人重發上車位置' });
+    return res.json({
+      success: true,
+      message: meetupLandmark
+        ? `已通知客人，並建議於「${meetupLandmark.name}」會合`
+        : '已通知客人重發上車位置',
+      meetupLandmark,
+    });
   } catch (error: any) {
     console.error('[Request Relocation] 錯誤:', error);
     res.status(500).json({ error: error.message || 'INTERNAL_ERROR' });

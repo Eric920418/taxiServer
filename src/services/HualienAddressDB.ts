@@ -344,6 +344,31 @@ class HualienAddressDB {
   }
 
   /**
+   * 用座標查詢最近的「公共會合地標」（半徑單位：公尺）
+   * 用於司機找不到客人時，建議一個雙方都認得的明顯地點會合。
+   * 排除禁止上車地標（那裡不能停車），只回可停靠的公共地標。
+   */
+  findNearestLandmark(lat: number, lng: number, radiusMeters: number): LandmarkEntry | null {
+    const candidates = this.allLandmarks.filter(
+      l => !l.isForbiddenPickup && l.lat !== null && l.lng !== null
+    );
+    let nearest: LandmarkEntry | null = null;
+    let minDistSq = Number.MAX_VALUE;
+    const radiusDeg = radiusMeters / 111000; // 約略，足夠近似（< 0.5% 誤差於花蓮緯度）
+    const radiusSq = radiusDeg * radiusDeg;
+    for (const l of candidates) {
+      const dLat = (l.lat as number) - lat;
+      const dLng = (l.lng as number) - lng;
+      const distSq = dLat * dLat + dLng * dLng;
+      if (distSq < radiusSq && distSq < minDistSq) {
+        minDistSq = distSq;
+        nearest = l;
+      }
+    }
+    return nearest;
+  }
+
+  /**
    * 取得指定地標的「替代上車點」清單（供禁止上車區功能用）
    *
    * @param landmarkName 命中的禁止地標名稱（例如「花蓮火車站」）

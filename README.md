@@ -2,7 +2,20 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.1-MVP
-> 更新日期：2026-06-26
+> 更新日期：2026-06-29
+
+## 📝 最新修改（2026-06-29）- LINE 聯絡客人 phone-aware + 找不到客人會合地標 + order:offer 帶 waypoints
+
+### 解決的問題
+1. **LINE 客人聯絡**：LINE 訂單多半沒留真電話（`passengers.phone` 是 `LINE_<userId>` 佔位、`orders.customer_phone` 為 NULL），司機只能 LINE 推訊息、無法撥號。
+2. **找不到客人**：到了現場找不到人時，除了請客人重傳位置，沒有「導向一個雙方都認得的明顯地點會合」的機制。
+3. **Android 接單閃退（前日已修）**：WS `order:offer` payload 缺 `waypoints` → Android `gson.fromJson` 反序列化成 null → `.isEmpty()` NPE。
+
+### 改動
+- **`POST /api/orders/:orderId/contact-passenger`（phone-aware）**：LINE 分支先驗 `customer_phone` / `passengers.phone` 是否為真台灣手機（`^09\d{8}$`、非 `LINE_` 佔位）→ 有 → 回 `{channel:'TEL', passengerPhone: 遮罩號}` 讓 App 撥號；沒有 → 維持 LINE Bot 推文字訊息。TEL 回應 message 也用 `maskCounterpartPhone` 遮罩值（避免 `RELAY_MASK_ENABLED` 開啟時洩漏真號）。
+- **`POST /api/orders/:orderId/request-relocation`（找不到客人）**：body 加 `suggestLandmark`。`HualienAddressDB.findNearestLandmark(lat,lng,800)`（in-memory haversine、排除禁止上車地標）找最近公共地標；`LineNotifier.notifyRequestRelocation` 查 `pickup_lat/lng` 算地標，`LineFlexTemplates.relocateRequestCard` 新增「🚕 建議會合地點」區塊，端點回傳 `meetupLandmark` 給司機端同步顯示。
+- **`SmartDispatcherV2` / `OrderDispatcher` 的 `order:offer`**：payload 一律帶 `waypoints`（首發 `[]`、replay `tracking.order.waypoints ?? []`），防 Android null 閃退。
+- 無 DB migration（`customer_phone` 欄位已存在；地標索引在記憶體）。
 
 ## 📝 最新修改（2026-06-28）- 電話 AI：不亂猜地址（先驗證花蓮）+ 查不到/台語不清/問兩次轉真人
 

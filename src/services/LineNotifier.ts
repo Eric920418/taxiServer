@@ -8,6 +8,14 @@
 import { Pool } from 'pg';
 import { messagingApi } from '@line/bot-sdk';
 import * as templates from './LineFlexTemplates';
+import { hualienAddressDB } from './HualienAddressDB';
+
+export interface MeetupLandmark {
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+}
 
 export class LineNotifier {
   private pool: Pool;
@@ -213,19 +221,24 @@ export class LineNotifier {
   /**
    * 司機請客人重發上車位置 — 推黃色警示卡 + LIFF deep link
    * @param orderId 訂單 ID（用於 LIFF 連結 query 參數）
+   * @param opts.suggestLandmark true 時，依 pickup 座標找最近公共地標、卡片附「建議會合地點」
+   * @returns 所選會合地標（沒有或不需要時為 null），供端點回傳給司機端同步顯示
    */
-  async notifyRequestRelocation(orderId: string): Promise<void> {
+  async notifyRequestRelocation(
+    orderId: string,
+    opts?: { suggestLandmark?: boolean }
+  ): Promise<{ meetupLandmark: MeetupLandmark | null }> {
     try {
       const result = await this.pool.query(
-        'SELECT line_user_id, pickup_address FROM orders WHERE order_id = $1',
+        'SELECT line_user_id, pickup_address, pickup_lat, pickup_lng FROM orders WHERE order_id = $1',
         [orderId]
       );
-      if (result.rows.length === 0) return;
+      if (result.rows.length === 0) return { meetupLandmark: null };
 
-      const { line_user_id, pickup_address } = result.rows[0];
+      const { line_user_id, pickup_address, pickup_lat, pickup_lng } = result.rows[0];
       if (!line_user_id) {
         console.warn(`[LineNotifier] 訂單 ${orderId} 無 line_user_id，跳過 relocate 推播`);
-        return;
+        return { meetupLandmark: null };
       }
 
       const liffIdBooking = process.env.LIFF_ID_BOOKING || '';
@@ -233,11 +246,29 @@ export class LineNotifier {
         console.warn('[LineNotifier] LIFF_ID_BOOKING 未設定，relocate 連結將失效');
       }
 
+      // 找不到客人 → 依 pickup 座標找最近公共地標當會合點（步行可達 ~800m 內）
+      let meetupLandmark: MeetupLandmark | null = null;
+      if (opts?.suggestLandmark && pickup_lat != null && pickup_lng != null) {
+        const lm = hualienAddressDB.findNearestLandmark(Number(pickup_lat), Number(pickup_lng), 800);
+        if (lm && lm.lat != null && lm.lng != null) {
+          meetupLandmark = { name: lm.name, address: lm.address || '', lat: lm.lat, lng: lm.lng };
+          console.log(`[LineNotifier] 訂單 ${orderId} 建議會合地標：${lm.name}`);
+        } else {
+          console.log(`[LineNotifier] 訂單 ${orderId} 附近找不到可用會合地標`);
+        }
+      }
+
       await this.lineClient.pushMessage({
         to: line_user_id,
-        messages: [templates.relocateRequestCard(orderId, pickup_address || '未定位', liffIdBooking)],
+        messages: [templates.relocateRequestCard(
+          orderId,
+          pickup_address || '未定位',
+          liffIdBooking,
+          meetupLandmark ? { name: meetupLandmark.name, address: meetupLandmark.address } : null,
+        )],
       });
       console.log(`[LineNotifier] 已推播 relocate 請求給 ${line_user_id} (訂單 ${orderId})`);
+      return { meetupLandmark };
     } catch (error: any) {
       console.error(`[LineNotifier] relocate 推播失敗 (${orderId}):`, error.message || error);
       throw error; // 讓呼叫端能回 5xx 給司機
