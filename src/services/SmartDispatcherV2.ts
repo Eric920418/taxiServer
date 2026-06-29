@@ -640,6 +640,11 @@ export class SmartDispatcherV2 {
           petCarrier: state.order.petCarrier || 'UNKNOWN',
           customerPhone: maskCounterpartPhone(state.order.customerPhone),
           destinationConfirmed: false,
+          // 防禦縱深：新派單尚無停靠點，但一律帶空陣列、不可省略。
+          // Android 端 order:offer 走 gson.fromJson(json, Order::class.java)，會繞過
+          // Kotlin 的預設值；缺此欄位時 List<Waypoint> 反序列化成 null → .isEmpty() NPE
+          // （1.6.5 接單後全司機 crash loop 根因）。App 端 1.6.7 已防 null，此處為雙保險。
+          waypoints: [],
         };
 
         console.log(`[SmartDispatcherV2] ✅ 推送 order:offer 給司機 ${driver.driverId} (socket: ${socketId})`);

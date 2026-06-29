@@ -178,6 +178,8 @@ function dispatchToAvailableDrivers(orderId: string): string[] {
     // 組合完整的訂單資訊（含距離和預估時間）
     const orderWithInfo = {
       ...tracking.order,
+      // 防禦：waypoints 一律帶陣列（Android gson.fromJson 缺欄位會變 null → .isEmpty() NPE，1.6.5 閃退根因）
+      waypoints: (tracking.order as any).waypoints ?? [],
       // 新增：到上車點的資訊（因司機位置而異）
       distanceToPickup: orderInfo.distanceToPickup,     // 公里
       etaToPickup: orderInfo.etaToPickup,               // 分鐘
@@ -503,6 +505,8 @@ export function onDriverOnline(driverId: string) {
         // 組合完整的訂單資訊
         const orderWithInfo = {
           ...tracking.order,
+          // 防禦：waypoints 一律帶陣列（Android gson.fromJson 缺欄位會變 null → .isEmpty() NPE，1.6.5 閃退根因）
+          waypoints: (tracking.order as any).waypoints ?? [],
           distanceToPickup: orderInfo.distanceToPickup,
           etaToPickup: orderInfo.etaToPickup,
           tripDistance: orderInfo.tripDistance,
