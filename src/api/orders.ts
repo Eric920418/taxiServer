@@ -1199,8 +1199,11 @@ router.post('/:orderId/contact-passenger', async (req, res) => {
 
   try {
     const order = await queryOne(
-      `SELECT order_id, source, line_user_id, passenger_id, passenger_phone, driver_id, status
-       FROM orders WHERE order_id = $1`,
+      `SELECT o.order_id, o.source, o.line_user_id, o.passenger_id, o.passenger_phone,
+              o.customer_phone, o.driver_id, o.status, p.phone AS passenger_real_phone
+       FROM orders o
+       LEFT JOIN passengers p ON p.passenger_id = o.passenger_id
+       WHERE o.order_id = $1`,
       [orderId]
     );
     if (!order) return res.status(404).json({ success: false, error: '訂單不存在' });
@@ -1225,10 +1228,27 @@ router.post('/:orderId/contact-passenger', async (req, res) => {
       });
     }
 
-    // ===== LINE 客人：透過 LINE Bot 推文字訊息 =====
+    // ===== LINE 客人：有真電話就讓司機撥號，否則透過 LINE Bot 推文字訊息 =====
     if (source === 'LINE') {
+      // 「有電話就打」：customer_phone 或 passengers.phone 是真台灣手機（非 LINE_ 佔位）→ 回 TEL
+      const asTwMobile = (p?: string | null): string | null => {
+        const c = (p || '').replace(/\D/g, '');
+        return /^09\d{8}$/.test(c) ? c : null;
+      };
+      const realPhone = asTwMobile(order.customer_phone) || asTwMobile(order.passenger_real_phone);
+      if (realPhone) {
+        const masked = maskCounterpartPhone(realPhone);
+        return res.json({
+          success: true,
+          channel: 'TEL',
+          passengerPhone: masked,
+          message: `請撥打客人電話 ${masked}`,
+        });
+      }
+
+      // 「沒有就發 LINE」：推文字訊息
       if (!order.line_user_id) {
-        return res.status(422).json({ success: false, channel: 'LINE', error: '客人無 LINE userId、無法推訊息' });
+        return res.status(422).json({ success: false, channel: 'LINE', error: '客人無 LINE userId 也無電話、無法聯絡' });
       }
       const ln = getLineNotifier();
       if (!ln) {
