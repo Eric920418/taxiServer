@@ -2,7 +2,21 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.1-MVP
-> 更新日期：2026-06-29
+> 更新日期：2026-06-30
+
+## 📝 最新修改（2026-06-30）- 電話叫車地名匹配：路名對不上就拒收 + 同名路反問鄉鎮
+
+### 解決的問題
+電話 AI 把客人講的路名配到**錯鄉鎮甚至完全無關的路**。實際 log：`"台昌路" → 花蓮縣玉里鎮民國路一段`（客人要的是吉安「太昌路」，台/太同音被聽錯 → Google 模糊湊出毫不相干的玉里民國路 → 只驗縣界放行 → 成錯單）。前次「先驗證花蓮」只鎖**縣界**，從沒做**界內路名/鄉鎮**校驗。
+
+### 改動（無 DB migration）
+- **新 `src/utils/hualienGeo.ts`**：`roadStemMismatch`（結果路名與客人講的零共同字＝對不上）、`extractTownship`、`utteranceHasTownship`、`HUALIEN_TOWNSHIPS`（PhoneCallProcessor / LineMessageProcessor 共用）。
+- **`PhoneCallProcessor.geocodeAddress`**：Google 街道結果做路名校驗，對不上 → `lowConfidence/reason=ROAD_MISMATCH`（不快取）；並標 `townshipFromCaller`/`resolvedTownship`。
+- **`geocodeWithGeocodingAPI`**：移除「沒鄉鎮就盲補花蓮市」前綴（太昌路在吉安、補花蓮市反而湊錯），改只補「花蓮縣」+ bounds。
+- **`verifyPickupAddress`**：`lowConfidence` → 回 `found=false`（AI 當查不到、請客人重講）；浮出 `townshipFromCaller`/`resolvedTownship`/`reason`。
+- **`dispatchRealtimeOrder`**：建單前 `lowConfidence` → 拒絕建單回 `addressUnclear`。
+- **`realtime-bridge/bridge.mjs`**：prompt + check_address 描述 → 客人沒講鄉鎮時 AI **必須跟客人確認/反問鄉鎮**、念回把鄉鎮唸清楚；ROAD_MISMATCH 不硬湊成別條路。**（bridge 部署在 box，需 sync + 重啟）**
+
 
 ## 📝 最新修改（2026-06-29）- LINE 聯絡客人 phone-aware + 找不到客人會合地標 + order:offer 帶 waypoints
 

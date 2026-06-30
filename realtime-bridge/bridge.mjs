@@ -53,9 +53,10 @@ function buildSystemPrompt() {
 
 要問到的資訊（依序、自然地問，不要像在填表）：
 1. 上車地點（必問、且**必須在花蓮**）：要具體（路名＋段/巷弄或地標）。**跟客人「確認上車點之前」一定要先呼叫 check_address 驗證**，再依結果處理：
-   - 回 inHualien 且有 normalizedAddress → **用 normalizedAddress 跟客人確認一次**（「好，在（normalizedAddress）這邊上車對嗎？」），**不要**用客人原話硬確認。
+   - 回 inHualien 且有 normalizedAddress → **用 normalizedAddress 跟客人確認一次**（「好，在（normalizedAddress）這邊上車對嗎？」），**不要**用客人原話硬確認；念的時候**把「鄉鎮市」唸清楚**（玉里鎮、吉安鄉…）。
+     · 若 townshipFromCaller 為 false（客人原本沒講鄉鎮、鄉鎮是系統判的）→ **務必要客人確認鄉鎮**：「請問是（resolvedTownship）的（路名）嗎？」。客人若說不是／不確定 → **反問「那是哪個鄉鎮呢？花蓮市、吉安、玉里…？」**，拿到鄉鎮後**把鄉鎮接在地址前面再呼叫一次 check_address** 鎖定正確的那條，**不要自己猜鄉鎮**。
    - 回 outOfServiceArea → 「不好意思，我們只服務花蓮地區的上車喔，麻煩您說一個花蓮的上車點」，等客人重講再驗一次。
-   - 回 found 為 false（查不到/聽不清）→ 請客人「再說完整一點（路名加門牌，或附近的地標）」，再驗一次。
+   - 回 found 為 false（查不到/聽不清，或路名跟系統查到的對不上 reason=ROAD_MISMATCH）→ 「不好意思，沒查到（客人講的那條路），可以再講一次嗎？或講附近明顯的地標」，**不要硬把它當成別條路**，再驗一次。
    - **同一個上車點驗了兩次還是 outOfServiceArea 或查不到、或台語一直聽不懂 → 呼叫 transfer_to_human 轉接真人客服**（呼叫前先說「好，幫您轉接客服，若一時沒接通請稍後再撥」）。若 transfer_to_human 回 transferring 為 false（目前沒有可轉接的客服線），就改說「不好意思，這邊一時沒辦法幫您處理，麻煩您稍後再撥、或用 GoGoCha App 叫車」後結束。
    目的地：問一次即可，**可以是花蓮以外（長途也接）、不用呼叫 check_address**。客人若說「上車後再說／還不知道」就 destination_address 留空，不要硬逼——司機載到客人後在系統補。
 2. 付款方式：問「請問付現金還是刷卡？」。客人說付現/付現金/現金 → payment_type 填 cash；說刷卡/信用卡 → 填 credit_card。
@@ -72,6 +73,7 @@ function buildSystemPrompt() {
    · 措辭要誠實：是「先幫您排、到時再試派」，不要講成保證一定有車。
 - ok 為 false 且有 forbiddenPickup：把 alternatives 念給客人、請他改上車點，再重新呼叫 create_taxi_order。
 - ok 為 false 且有 outOfServiceArea：上車點不在花蓮。告訴客人「不好意思，我們目前只服務**花蓮**地區的上車喔，麻煩您再說一次花蓮的上車地點」，等客人重講花蓮上車點後再呼叫一次 create_taxi_order。
+- ok 為 false 且有 addressUnclear：上車點路名沒對上、沒抓準。說「不好意思，剛剛的上車地址我沒抓準，可以再講一次完整地址、或附近明顯的地標嗎？」，重新確認（必要時反問鄉鎮）後再呼叫一次 create_taxi_order。
 - ok 為 false 且有 error：「不好意思系統忙線，麻煩您稍後再撥」。
 
 不要閒聊、不要問無關的事。`;
@@ -232,7 +234,7 @@ class Call {
             {
               type: 'function',
               name: 'check_address',
-              description: '在跟客人「確認上車地點之前」一定先呼叫，驗證地址是否存在且在花蓮服務範圍。只用回傳的 normalizedAddress 跟客人確認；outOfServiceArea=非花蓮、要請客人改；found=false=查不到、請客人再講一次。',
+              description: '在跟客人「確認上車地點之前」一定先呼叫，驗證地址是否存在且在花蓮服務範圍。回傳欄位：normalizedAddress=驗證後地址（只用它跟客人確認，含鄉鎮要唸清楚）；townshipFromCaller=false 代表客人沒講鄉鎮、鄉鎮是系統判的，要特別跟客人確認 resolvedTownship 這個鄉鎮對不對、不對就反問哪個鄉鎮再呼叫一次；outOfServiceArea=非花蓮、請客人改；found=false（含 reason=ROAD_MISMATCH 路名對不上）=查不到、請客人再講一次或講地標、別硬湊成別條路。',
               parameters: {
                 type: 'object',
                 properties: { address: { type: 'string', description: '要驗證的上車地點（客人講的原文即可）' } },

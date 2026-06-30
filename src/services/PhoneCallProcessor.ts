@@ -16,6 +16,7 @@ import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } fro
 import { recordFailedQuery, attachGoogleResult, shouldLogFailure } from './AddressFailureLogger';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
 import { getNotificationService } from './NotificationService';
+import { roadStemMismatch, extractTownship, utteranceHasTownship } from '../utils/hualienGeo';
 
 // ========== 類型定義 ==========
 
@@ -37,6 +38,14 @@ interface GeocodingResult {
   lat: number;
   lng: number;
   formattedAddress: string;
+  /** 路名/結果校驗失敗：geocode 回的路名與客人講的對不上（台昌路→民國路），不可當有效上車點。 */
+  lowConfidence?: boolean;
+  /** lowConfidence 原因，例 'ROAD_MISMATCH'。 */
+  reason?: string;
+  /** 從 formattedAddress 抽出的鄉鎮（'玉里鎮'…），給 AI 念回/確認用。 */
+  resolvedTownship?: string;
+  /** 客人原話是否已含鄉鎮（false → 鄉鎮是系統猜的、AI 要跟客人確認）。 */
+  townshipFromCaller?: boolean;
   /**
    * 解析到的地址落在花蓮服務區外（外縣市）。
    * 上車點呼叫端應偵測此欄位、不建單，提醒客人服務範圍是花蓮、請重講；
@@ -334,6 +343,7 @@ export class PhoneCallProcessor {
     nearbyCount?: number;
     forbiddenPickup?: { matchedLandmark: string; alternatives: string[] };
     outOfServiceArea?: { county?: string }; // 上車點超出花蓮服務區（未建單）
+    addressUnclear?: boolean;               // 上車點路名對不上/聽不清（未建單，請客人重講）
     error?: string;
   }> {
     const paymentType = params.payment_type === 'credit_card' ? 'CREDIT_CARD' : 'CASH';
@@ -369,6 +379,10 @@ export class PhoneCallProcessor {
     if (pickupGeo?.outOfServiceArea) {
       console.log(`[Realtime] 上車點超出花蓮服務區 county=${pickupGeo.outOfServiceArea.county || '?'} → 請客人重講`);
       return { ok: false, outOfServiceArea: pickupGeo.outOfServiceArea };
+    }
+    if (pickupGeo?.lowConfidence) {
+      console.log(`[Realtime] 上車點低信心(${pickupGeo.reason}) → 拒絕建單、請客人重講`);
+      return { ok: false, addressUnclear: true };
     }
     // 目的地允許外縣市（長途）
     const destGeo: GeocodingResult | null = params.destination_address
@@ -675,6 +689,7 @@ export class PhoneCallProcessor {
     } catch { /* Redis 失敗不阻斷主流程 */ }
 
     let result: GeocodingResult | null = null;
+    let fromGoogle = false; // 結果是否來自 Google（街道/Places）→ 才做路名對不上校驗；DB 命中信任、不卡
     let cacheTtl = 3600; // 預設 1 小時
 
     // ① 本地 DB 查詢（含台語別名，O(1)）
@@ -717,6 +732,7 @@ export class PhoneCallProcessor {
             ...geocoded,
             formattedAddress: hualienAddressDB.cleanupDisplay(geocoded.formattedAddress),
           };
+          fromGoogle = true;
         } else {
           console.warn(`[PhoneCallProcessor] Geocoding 無效結果，改用 Places Search: ${addr}`);
         }
@@ -731,12 +747,27 @@ export class PhoneCallProcessor {
           ...placesResult,
           formattedAddress: hualienAddressDB.cleanupDisplay(placesResult.formattedAddress),
         };
+        fromGoogle = true;
       }
     }
 
-    // 寫入 Redis 快取（forbiddenPickup / outOfServiceArea 不快取，每次都要攔截）
+    // === 路名/鄉鎮校驗（只對上車點；目的地/外縣市/禁區不卡）===
+    if (result && isPickup && !result.outOfServiceArea && !result.forbiddenPickup) {
+      // (A) Google 街道結果路名與客人講的對不上（台昌路→民國路）→ 標低信心，呼叫端當查不到、請客人重講
+      if (fromGoogle && isStreetAddress && roadStemMismatch(addr, result.formattedAddress)) {
+        console.warn(`[PhoneCallProcessor] 路名對不上：輸入「${addr}」→ 結果「${result.formattedAddress}」，標記 ROAD_MISMATCH`);
+        result.lowConfidence = true;
+        result.reason = 'ROAD_MISMATCH';
+      }
+      // (B) 客人沒講鄉鎮、結果卻落某鄉鎮 → 標記，讓 AI 念回時跟客人確認鄉鎮（不自動猜）
+      result.townshipFromCaller = utteranceHasTownship(address);
+      const tw = extractTownship(result.formattedAddress);
+      if (tw) result.resolvedTownship = tw;
+    }
+
+    // 寫入 Redis 快取（forbiddenPickup / outOfServiceArea / lowConfidence 不快取，每次都要攔截/重判）
     if (result) {
-      if (!result.forbiddenPickup && !result.outOfServiceArea) {
+      if (!result.forbiddenPickup && !result.outOfServiceArea && !result.lowConfidence) {
         try {
           await cacheApiResponse(cacheKey, result, cacheTtl);
         } catch { /* Redis 失敗不阻斷 */ }
@@ -765,6 +796,9 @@ export class PhoneCallProcessor {
     normalizedAddress?: string | null;
     outOfServiceArea?: { county?: string };
     forbiddenPickup?: any;
+    reason?: string;
+    townshipFromCaller?: boolean;
+    resolvedTownship?: string;
   }> {
     if (!address || !address.trim()) return { found: false, inHualien: false };
     const r = await this.geocodeAddress(address, true);
@@ -780,10 +814,16 @@ export class PhoneCallProcessor {
         normalizedAddress: r.formattedAddress || null,
       };
     }
+    if (r.lowConfidence) {
+      // 路名對不上（聽錯/不存在，例 台昌路→民國路）→ 當查不到，讓 AI 請客人再講一次或講附近地標
+      return { found: false, inHualien: false, normalizedAddress: null, reason: r.reason };
+    }
     return {
       found: true,
       inHualien: true,
       normalizedAddress: r.formattedAddress || null,
+      townshipFromCaller: r.townshipFromCaller,
+      resolvedTownship: r.resolvedTownship,
       ...(r.forbiddenPickup ? { forbiddenPickup: r.forbiddenPickup } : {}),
     };
   }
@@ -810,11 +850,9 @@ export class PhoneCallProcessor {
    * Geocoding API - 專門處理街道門牌地址
    */
   private async geocodeWithGeocodingAPI(address: string, allowOutOfBounds = false): Promise<GeocodingResult | null> {
-    const HUALIEN_TOWNSHIPS = ['吉安', '新城', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
-    const hasTownship = HUALIEN_TOWNSHIPS.some(t => address.includes(t));
+    // 不再盲目補「花蓮市」：太昌路在吉安、硬補花蓮市反而湊錯。只補到縣級，鄉鎮交給後續校驗/AI 確認。
     const alreadyHasPrefix = address.startsWith('花蓮');
-    const prefix = hasTownship ? '花蓮縣' : '花蓮縣花蓮市';
-    const fullAddress = alreadyHasPrefix ? address : `${prefix}${address}`;
+    const fullAddress = alreadyHasPrefix ? address : `花蓮縣${address}`;
 
     try {
       const url = `https://maps.googleapis.com/maps/api/geocode/json`
