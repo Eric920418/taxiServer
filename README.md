@@ -4,7 +4,23 @@
 > 版本：v1.7.1-MVP
 > 更新日期：2026-06-30
 
-## 📝 最新修改（2026-06-30）- 電話叫車地名匹配：路名對不上就拒收 + 同名路反問鄉鎮
+## 📝 最新修改（2026-06-30）- 地名匹配「回饋迴路」：司機真實上車點揪出 AI 配錯 → 待辦一鍵轉地標
+
+### 目標（不打地鼠）
+前一筆「路名對不上拒收 + 反問鄉鎮」是砍掉一類，但底層仍是「語音×模糊 geocode」、近似錯會穿過去。本次讓系統用 **ground-truth 自己揪出下一個配錯**，進「待補齊地標」待辦、ops 一鍵以正確座標轉地標、`rebuildIndex` 即時生效 → 永久不再錯。
+
+### 設計（v1，純後端 + additive migration，重用現成後台）
+核心：**司機按「開始行程」(ON_TRIP) 當下的位置 ≈ 真正上車點**，和 AI 定位的 `pickup_lat/lng` 比距離。
+- **migration 033（additive）**：`orders.actual_pickup_lat/lng`、`address_lookup_failures.geocode_mismatch`+`sample_order_id`（皆 NULL/FALSE 預設、不碰既有資料/約束）。
+- **`orders.ts` updateOrderStatus**：ON_TRIP 時記司機實際位置到 `actual_pickup_*`；對 PHONE/LINE 單算 haversine，**> 500m（起手門檻）→ 進待辦**（fire-and-forget，無新鮮 GPS/未超門檻安全略過）。
+- **`AddressFailureLogger.recordGeocodeMismatch()`**：upsert `address_lookup_failures`，把**司機實際座標（正確答案）**寫進 `google_result`+`final_coords`、`geocode_mismatch=true`。**副效益**：覆蓋掉先前可能被塞的 Google 錯答案，修掉「ops 一鍵反而加錯」的現有地雷。
+- **重用現成後台**（零前端改動）：admin「待補齊地標」頁出現該地址、`google_result` 已是正確座標 → 「轉為地標」預填即對 → `rebuildIndex` 熱抽換即時生效。
+- 選配 v2：admin-panel 加「⚠️ AI 配錯」badge/篩選；納入 no-show GPS；配錯比率告警。
+
+### 部署
+v1 純後端（不需動 box、不需 build admin-panel）：`deploy-no-confirm.sh` + ssh `npx ts-node src/db/migrate.ts geocode-audit`（migration 全 additive）。
+
+## 📝 電話叫車地名匹配：路名對不上就拒收 + 同名路反問鄉鎮（2026-06-30）
 
 ### 解決的問題
 電話 AI 把客人講的路名配到**錯鄉鎮甚至完全無關的路**。實際 log：`"台昌路" → 花蓮縣玉里鎮民國路一段`（客人要的是吉安「太昌路」，台/太同音被聽錯 → Google 模糊湊出毫不相干的玉里民國路 → 只驗縣界放行 → 成錯單）。前次「先驗證花蓮」只鎖**縣界**，從沒做**界內路名/鄉鎮**校驗。

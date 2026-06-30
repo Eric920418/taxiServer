@@ -103,3 +103,47 @@ export async function attachGoogleResult(
     console.warn('[AddressFailureLogger] attachGoogleResult 失敗:', (err as Error).message);
   }
 }
+
+/**
+ * 記錄一筆「ground-truth 配錯」：司機真正上車的位置與 AI 定位差太遠。
+ * 進同一個「待補齊地標」佇列，但帶 geocode_mismatch=true，且把**正確座標**（司機實際位置）
+ * 寫進 google_result + final_coords，讓現有「轉為地標」直接預填對的座標。
+ * 副效益：若該地址先前被 recordFailedQuery 塞了 Google 錯答案，這裡用 ground-truth 覆蓋成正確的，
+ * 修掉「ops 一鍵反而加錯」的現有地雷。fire-and-forget、不阻斷行程。
+ */
+export async function recordGeocodeMismatch(
+  pickupAddress: string,
+  source: 'PHONE' | 'LINE',
+  correct: { lat: number; lng: number; formattedAddress?: string },
+  orderId: string
+): Promise<void> {
+  try {
+    if (!pickupAddress || !pickupAddress.trim()) return;
+    const normalized = normalizeKey(pickupAddress);
+    if (normalized.length > MAX_QUERY_LENGTH || normalized.length === 0) return;
+
+    const coords = JSON.stringify({
+      lat: correct.lat,
+      lng: correct.lng,
+      formattedAddress: correct.formattedAddress || pickupAddress.trim(),
+    });
+
+    await pool.query(
+      `INSERT INTO address_lookup_failures
+         (query, normalized, source, google_result, final_coords, geocode_mismatch, sample_order_id)
+       VALUES ($1, $2, $3, $4::jsonb, $4::jsonb, TRUE, $5)
+       ON CONFLICT (normalized, source) DO UPDATE SET
+         hit_count = address_lookup_failures.hit_count + 1,
+         last_seen_at = NOW(),
+         google_result = $4::jsonb,
+         final_coords = $4::jsonb,
+         geocode_mismatch = TRUE,
+         sample_order_id = $5
+       WHERE address_lookup_failures.resolved_landmark_id IS NULL
+         AND address_lookup_failures.dismissed_at IS NULL`,
+      [pickupAddress.trim(), normalized, source, coords, orderId]
+    );
+  } catch (err) {
+    console.warn('[AddressFailureLogger] recordGeocodeMismatch 失敗（不影響行程）:', (err as Error).message);
+  }
+}

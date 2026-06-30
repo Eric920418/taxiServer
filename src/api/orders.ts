@@ -5,6 +5,7 @@ import fs from 'fs';
 import { query, queryOne, queryMany } from '../db/connection';
 import { maskCounterpartPhone } from './relay';
 import { broadcastOrderToDrivers, notifyPassengerOrderUpdate, getSocketIO, driverSockets, driverLocations, passengerSockets } from '../socket';
+import { recordGeocodeMismatch } from '../services/AddressFailureLogger';
 import { getETAService } from '../services/ETAService';
 import {
   registerOrder,
@@ -913,6 +914,12 @@ router.patch('/:orderId/status', async (req, res) => {
     const updatedOrder = result.rows[0];
 
     console.log(`[Order] 訂單 ${orderId} 狀態更新為：${status}`);
+
+    // === geocode 回饋迴路：ON_TRIP（真正載到客人）→ 記司機實際位置、與 AI 定位比對揪出配錯 ===
+    if (status === 'ON_TRIP') {
+      captureActualPickupAndAudit(updatedOrder).catch(e =>
+        console.warn('[GeocodeAudit] 比對失敗（不影響行程）:', (e as Error).message));
+    }
 
     // Billing Snapshot：訂單完成寫對帳 snapshot（fire-and-forget，不卡訂單流程）
     if (status === 'DONE') {
@@ -1950,3 +1957,58 @@ router.post('/:orderId/fare', handleSubmitFare);
 router.patch('/:orderId/fare', handleSubmitFare);
 
 export default router;
+
+// ============================================================
+// geocode 回饋迴路 helper（揪出 AI 配錯的上車點）
+// ============================================================
+
+/** 兩座標間距（公尺），haversine。 */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
+ * ON_TRIP（真正載到客人）時：記司機實際位置到 orders.actual_pickup_lat/lng，
+ * 並對電話/LINE 單比對「AI 定位 vs 司機實際」，差太遠 → 進「待補齊地標」待辦（帶正確座標）。
+ * fire-and-forget；無新鮮 GPS / 非電話LINE / 距離未超門檻 → 安全略過、不誤報。
+ */
+async function captureActualPickupAndAudit(order: any): Promise<void> {
+  const driverId = order?.driver_id;
+  const loc = driverId ? driverLocations.get(driverId) : null;
+  if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') return; // 無新鮮 GPS → 略過
+
+  // 1) 記錄真正上車點（司機 ON_TRIP 當下位置）
+  await query(
+    'UPDATE orders SET actual_pickup_lat = $1, actual_pickup_lng = $2 WHERE order_id = $3',
+    [loc.lat, loc.lng, order.order_id]
+  );
+
+  // 2) 只稽核電話/LINE 單（App 單由乘客自選座標、不靠 geocode）
+  const source = String(order.source || 'APP').toUpperCase();
+  if (source !== 'PHONE' && source !== 'LINE') return;
+
+  const pLat = parseFloat(order.pickup_lat);
+  const pLng = parseFloat(order.pickup_lng);
+  if (!isFinite(pLat) || !isFinite(pLng)) return;
+
+  const distM = haversineMeters(pLat, pLng, loc.lat, loc.lng);
+  const THRESHOLD_M = 500; // 起手 500m；市內配錯多 ~0.5-2km、跨鄉鎮數十 km。依資料收緊
+  if (distM <= THRESHOLD_M) return;
+
+  console.warn(
+    `[GeocodeAudit] 訂單 ${order.order_id} 上車點配錯：AI 定位 vs 司機實際 ≈ ${Math.round(distM)}m（pickup="${order.pickup_address}"）→ 進待辦`
+  );
+  await recordGeocodeMismatch(
+    order.pickup_address || '',
+    source as 'PHONE' | 'LINE',
+    { lat: loc.lat, lng: loc.lng, formattedAddress: order.pickup_address || '' },
+    order.order_id
+  );
+}
