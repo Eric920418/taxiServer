@@ -13,6 +13,7 @@ import { hualienAddressDB, isAdministrativeAreaResult, pickBestPlaceResult } fro
 import { query, queryOne } from '../db/connection';
 import { recordFailedQuery, attachGoogleResult, shouldLogFailure } from './AddressFailureLogger';
 import { cacheApiResponse, getCachedApiResponse } from './cache';
+import { roadStemMismatch } from '../utils/hualienGeo';
 import { getScheduledOrderService } from './ScheduledOrderService';
 import * as templates from './LineFlexTemplates';
 
@@ -1417,11 +1418,9 @@ export class LineMessageProcessor {
         if (cached) return cached as GeocodingResult;
       } catch { /* Redis 失敗不阻斷 */ }
 
-      const HUALIEN_TOWNSHIPS = ['吉安', '新城', '壽豐', '光復', '豐濱', '瑞穗', '富里', '秀林', '萬榮', '卓溪', '玉里', '鳳林'];
-      const hasTownship = HUALIEN_TOWNSHIPS.some(t => addr.includes(t));
+      // 不再盲補「花蓮市」（太昌路在吉安、補花蓮市反而湊錯）；只補花蓮縣 + bounds 約束。
       const alreadyHasPrefix = addr.startsWith('花蓮');
-      const prefix = hasTownship ? '花蓮縣' : '花蓮縣花蓮市';
-      const fullAddress = alreadyHasPrefix ? addr : `${prefix}${addr}`;
+      const fullAddress = alreadyHasPrefix ? addr : `花蓮縣${addr}`;
 
       const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(fullAddress)}&language=zh-TW&region=tw&bounds=23.20,121.30|24.16,121.66&components=country:TW&key=${this.googleMapsApiKey}`;
       const response = await fetch(url);
@@ -1439,6 +1438,10 @@ export class LineMessageProcessor {
         // 驗證 2：拒絕行政區級結果（避免「台新銀行」被定位到花蓮市中心）
         else if (isAdministrativeAreaResult(result.types)) {
           console.warn(`[LINE] Geocoding 僅回傳行政區級別，fallback 到 Places Search: ${fullAddress} → types=${JSON.stringify(result.types)}`);
+        }
+        // 路名對不上（客人講的路 vs 結果路名零共同字，台昌路→民國路）→ 丟棄、改走 Places / 最終回 null
+        else if (isStreetAddress && roadStemMismatch(addr, hualienAddressDB.cleanupDisplay(result.formatted_address || fullAddress))) {
+          console.warn(`[LINE] 路名對不上：輸入「${addr}」→ 結果「${result.formatted_address}」，丟棄改走 Places`);
         }
         // 精確結果
         else {
@@ -1461,9 +1464,13 @@ export class LineMessageProcessor {
       // 3. Places Text Search fallback — 處理地標/POI（銀行、店家等）
       const placesResult = await this.geocodeWithPlacesSearch(addr);
       if (placesResult) {
-        try { await cacheApiResponse(cacheKey, placesResult, 3600); } catch { /* ignore */ }
-        attachGoogleResult(address, 'LINE', { lat: placesResult.lat, lng: placesResult.lng, formattedAddress: placesResult.formattedAddress }).catch(() => {});
-        return placesResult;
+        if (isStreetAddress && roadStemMismatch(addr, placesResult.formattedAddress)) {
+          console.warn(`[LINE] Places 路名對不上：輸入「${addr}」→ 結果「${placesResult.formattedAddress}」，丟棄`);
+        } else {
+          try { await cacheApiResponse(cacheKey, placesResult, 3600); } catch { /* ignore */ }
+          attachGoogleResult(address, 'LINE', { lat: placesResult.lat, lng: placesResult.lng, formattedAddress: placesResult.formattedAddress }).catch(() => {});
+          return placesResult;
+        }
       }
     } catch (error) {
       console.error('[LINE] Geocoding 失敗:', error);

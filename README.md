@@ -16,6 +16,7 @@
 - **`verifyPickupAddress`**：`lowConfidence` → 回 `found=false`（AI 當查不到、請客人重講）；浮出 `townshipFromCaller`/`resolvedTownship`/`reason`。
 - **`dispatchRealtimeOrder`**：建單前 `lowConfidence` → 拒絕建單回 `addressUnclear`。
 - **`realtime-bridge/bridge.mjs`**：prompt + check_address 描述 → 客人沒講鄉鎮時 AI **必須跟客人確認/反問鄉鎮**、念回把鄉鎮唸清楚；ROAD_MISMATCH 不硬湊成別條路。**（bridge 部署在 box，需 sync + 重啟）**
+- **`LineMessageProcessor.geocodeAddress`（LINE 文字叫車）**：同步移除盲補花蓮市 + Google/Places 結果路名校驗，對不上回 null（請使用者重講），避免 LINE 端重蹈覆轍。
 
 
 ## 📝 最新修改（2026-06-29）- LINE 聯絡客人 phone-aware + 找不到客人會合地標 + order:offer 帶 waypoints
