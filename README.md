@@ -2,7 +2,18 @@
 
 > **HualienTaxiServer** - 桌面自建後端系統
 > 版本：v1.7.1-MVP
-> 更新日期：2026-06-30
+> 更新日期：2026-07-01
+
+## 📝 最新修改（2026-07-01）- 電話 AI 對話提速 + 結尾自動掛斷（bridge.mjs）
+
+### 目標
+把叫車流程縮到 ~35-40 秒、更像真人、降低語音生成/Token/通話成本、提升同時接聽量。純 bridge（box）改動、不動 dialplan/後端。
+
+### 改動（`realtime-bridge/bridge.mjs`，已部署 box + commit）
+- **prompt 話術**：① 地址**確認一次就好**（客人回「對」即進下一步、不重複確認）；② **不要每句都用「好」開頭**；③ **目的地確認+付款合併同一句**（「好，目的地花蓮火車站，請問付現還是刷卡？」）；④ 結尾精簡成「已幫您叫車，最近車輛約 N 分鐘抵達，抵達時會再通知您，謝謝。」+ 客人已說謝謝就別長篇、別搶話。
+- **新增 `end_call` tool + 結尾自動掛斷**：AI 講完結尾道別後呼叫 `end_call` → bridge 等結尾音播完 → **2.5 秒 grace**（客人在此又開口 `speech_started` → 取消掛斷、繼續對話）→ 關 AudioSocket。dialplan `taxi-ai` 現成處理：`/transfer-target` 空 → `Hangup()`（**不需改 dialplan**）。複用 `flushThenTransfer` 的「等音排空再關 socket」範式。
+- 正確性不打折（township 反問、check_address、outOfServiceArea、ROAD_MISMATCH、forbidden、no-drivers、transfer 分支全保留）。
+- 部署：`node --check` OK → 經反向隧道換上 `/opt/taxi-ai-bridge/bridge.mjs` + `systemctl restart taxi-ai-bridge`（md5 30c09d0）。**待實撥活測**（計時、確認四點、結尾掛斷、grace 不誤掛）。
 
 ## 📝 最新修改（2026-06-30）- 地名匹配「回饋迴路」：司機真實上車點揪出 AI 配錯 → 待辦一鍵轉地標
 

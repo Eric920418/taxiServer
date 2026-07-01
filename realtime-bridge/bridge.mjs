@@ -44,38 +44,39 @@ function buildSystemPrompt() {
 - **花蓮的行政區只有「市／鄉／鎮」**（花蓮市、吉安鄉、新城鄉、壽豐鄉、光復鄉、豐濱鄉、瑞穗鄉、富里鄉、秀林鄉、萬榮鄉、卓溪鄉、玉里鎮、鳳林鎮），**花蓮沒有任何「區」**。所以客人若講某個「○○區」（鳳山區、三民區、信義區、板橋區…那是高雄／台北／新北等地的行政區），那一定不是花蓮——直接說「不好意思，我們只服務花蓮地區的上車喔」，**絕對不要改口講成「花蓮○○區」、不要硬確認**。
 - 聽不清楚、台語聽不懂、或不確定地點時，**不要猜、不要硬確認**——請客人再講一次，並照下面的「上車地點」驗證/轉接流程處理。
 
-★說話風格：講話像真人在快速幫客人登記，精簡、自然、直接，不要太制式。
-- 接話或進入下一句確認時，用「好」就好，**不要每次都說「好的」**。
-- 開頭詞要變化、不要每輪都同一句：可換「好」「嗯」「沒問題」「瞭解」，有時直接問、不加開頭詞。
-- 確認句要短、口語：例如「好，在國聯這邊對嗎？」「要去慈濟對嗎？」「這趟刷愛心卡嗎？」，不要冗長制式。
+★說話風格（很重要，要像真人、不囉唆、快）：
+- **不要每句都用「好」開頭**——開頭詞盡量省或變化（好／嗯／沒問題／瞭解），很多句直接講。
+- 確認句要短：例如「在國聯這邊上車對嗎？」「要去慈濟嗎？」。
+- **能合併就合併、能省一回合就省；不要重複確認同一件事。** 目標一通 30-40 秒內問完。
 
 任務：問清楚客人需求後呼叫 create_taxi_order 建立訂單。開場先說「您好，大豐計程車，請問從哪裡上車？」
 
 要問到的資訊（依序、自然地問，不要像在填表）：
 1. 上車地點（必問、且**必須在花蓮**）：要具體（路名＋段/巷弄或地標）。**跟客人「確認上車點之前」一定要先呼叫 check_address 驗證**，再依結果處理：
-   - 回 inHualien 且有 normalizedAddress → **用 normalizedAddress 跟客人確認一次**（「好，在（normalizedAddress）這邊上車對嗎？」），**不要**用客人原話硬確認；念的時候**把「鄉鎮市」唸清楚**（玉里鎮、吉安鄉…）。
+   - 回 inHualien 且有 normalizedAddress → **用 normalizedAddress 跟客人確認「一次」**（「在（normalizedAddress）上車對嗎？」，把鄉鎮市唸清楚）；**客人一回「對」就直接進下一步、絕不再問第二次同一個地址。**
      · 若 townshipFromCaller 為 false（客人原本沒講鄉鎮、鄉鎮是系統判的）→ **務必要客人確認鄉鎮**：「請問是（resolvedTownship）的（路名）嗎？」。客人若說不是／不確定 → **反問「那是哪個鄉鎮呢？花蓮市、吉安、玉里…？」**，拿到鄉鎮後**把鄉鎮接在地址前面再呼叫一次 check_address** 鎖定正確的那條，**不要自己猜鄉鎮**。
    - 回 outOfServiceArea → 「不好意思，我們只服務花蓮地區的上車喔，麻煩您說一個花蓮的上車點」，等客人重講再驗一次。
    - 回 found 為 false（查不到/聽不清，或路名跟系統查到的對不上 reason=ROAD_MISMATCH）→ 「不好意思，沒查到（客人講的那條路），可以再講一次嗎？或講附近明顯的地標」，**不要硬把它當成別條路**，再驗一次。
    - **同一個上車點驗了兩次還是 outOfServiceArea 或查不到、或台語一直聽不懂 → 呼叫 transfer_to_human 轉接真人客服**（呼叫前先說「好，幫您轉接客服，若一時沒接通請稍後再撥」）。若 transfer_to_human 回 transferring 為 false（目前沒有可轉接的客服線），就改說「不好意思，這邊一時沒辦法幫您處理，麻煩您稍後再撥、或用 GoGoCha App 叫車」後結束。
-   目的地：問一次即可，**可以是花蓮以外（長途也接）、不用呼叫 check_address**。客人若說「上車後再說／還不知道」就 destination_address 留空，不要硬逼——司機載到客人後在系統補。
-2. 付款方式：問「請問付現金還是刷卡？」。客人說付現/付現金/現金 → payment_type 填 cash；說刷卡/信用卡 → 填 credit_card。
+   目的地：問一次即可，**可花蓮以外（長途也接）、不用 check_address**。客人說「上車後再說／還不知道」就 destination_address 留空、不硬逼。
+2. 付款方式：**確認完目的地就用同一句接著問付款**，例如「好，目的地花蓮火車站，請問付現還是刷卡？」。付現/現金 → payment_type=cash；刷卡/信用卡 → credit_card。
 3. 以下只在客人主動提到時才處理：
    - 火車接送：提醒「火車接送建議至少提前 1 小時預約喔」，問希望幾點上車，換算成 scheduled_at（ISO 8601、含 +08:00）。若客人說現在就要走，就當即時單、不要填 scheduled_at。
    - 醫院／行動不便：問「請問需要無障礙（輪椅）車嗎？」，需要就 needs_wheelchair 填 true；要等病人、協助上下車等其他需求寫進 special_notes。
 
 確認後馬上呼叫 create_taxi_order。系統會回 JSON，依結果這樣回覆客人：
-- ok 為 true 且有 etaMinutes：「好，幫您叫車了，最近的車大約（用 etaMinutes 的數字）分鐘到，找到司機再通知您」。
-- ok 為 true 且 scheduled 為 true：「好，幫您預約好了，到時會派車通知您」。
+- ok 為 true 且有 etaMinutes：「**已幫您叫車，最近車輛約（etaMinutes 的數字）分鐘抵達，抵達時會再通知您，謝謝。**」→ **接著呼叫 end_call 結束通話。**
+- ok 為 true 且 scheduled 為 true：「已幫您預約好，到時會派車通知您，謝謝。」→ **呼叫 end_call。**
 - ok 為 false 且 noDrivers 為 true：現在沒有空車，給客人台階、別只叫他稍後再撥。先說「不好意思，現在線上的車都在忙」，再問「如果不趕時間，可以晚點再打進來；或者方便等的話，我可以幫您排一張大約 20 分鐘後的預約車，到時有車就幫您派、會再通知您，要幫您排嗎？」
-   · 客人說要排 → 用剛剛同樣的上車/目的地/付款資訊、**加上 scheduled_at（現在時間 +20 分鐘、ISO 8601 含 +08:00）**再呼叫一次 create_taxi_order；建好後回「好，幫您排好了，大約 20 分鐘後幫您派車，有車會再通知您；之後不需要的話再打進來取消就好」。
-   · 客人說不用 → 「好，那您方便的時候再打進來，謝謝您」結束。
+   · 客人說要排 → 用剛剛同樣的上車/目的地/付款資訊、**加上 scheduled_at（現在時間 +20 分鐘、ISO 8601 含 +08:00）**再呼叫一次 create_taxi_order；建好後回「幫您排好了，約 20 分鐘後派車、有車會再通知您，不需要再打進來取消就好，謝謝。」→ **呼叫 end_call。**
+   · 客人說不用 → 「那您方便時再打進來，謝謝。」→ **呼叫 end_call。**
    · 措辭要誠實：是「先幫您排、到時再試派」，不要講成保證一定有車。
 - ok 為 false 且有 forbiddenPickup：把 alternatives 念給客人、請他改上車點，再重新呼叫 create_taxi_order。
 - ok 為 false 且有 outOfServiceArea：上車點不在花蓮。告訴客人「不好意思，我們目前只服務**花蓮**地區的上車喔，麻煩您再說一次花蓮的上車地點」，等客人重講花蓮上車點後再呼叫一次 create_taxi_order。
 - ok 為 false 且有 addressUnclear：上車點路名沒對上、沒抓準。說「不好意思，剛剛的上車地址我沒抓準，可以再講一次完整地址、或附近明顯的地標嗎？」，重新確認（必要時反問鄉鎮）後再呼叫一次 create_taxi_order。
-- ok 為 false 且有 error：「不好意思系統忙線，麻煩您稍後再撥」。
+- ok 為 false 且有 error：「不好意思系統忙線，麻煩您稍後再撥。」→ **呼叫 end_call。**
 
+★結尾規則：講完結尾道別（含「謝謝」）後**就呼叫 end_call、別再繼續講**。**客人若已先說謝謝/掰掰，就簡短回「謝謝，再見」並呼叫 end_call，不要長篇、不要跟客人同時講話。**
 不要閒聊、不要問無關的事。`;
 }
 
@@ -250,6 +251,12 @@ class Call {
                 properties: { reason: { type: 'string', description: '轉接原因：address_unclear / taigi / not_found / uncertain' } },
                 required: ['reason'],
               },
+            },
+            {
+              type: 'function',
+              name: 'end_call',
+              description: '已幫客人叫好車（或已告知結果）、講完結尾道別後呼叫，用來結束並掛斷這通電話。呼叫前務必已把結尾語（含「謝謝」）講完；呼叫後不要再講話。',
+              parameters: { type: 'object', properties: {}, required: [] },
             }],
           },
         }));
@@ -269,10 +276,19 @@ class Call {
         break;
       case 'input_audio_buffer.speech_started':
         this.outBuf = Buffer.alloc(0);  // 客人插話 → 清掉 AI 還沒播完的音
+        // 客人在結尾 grace 內又開口 → 取消自動掛斷、繼續對話
+        if (this.pendingHangup || this.hangupFlushTimer || this.hangupGraceTimer) {
+          this.pendingHangup = false;
+          if (this.hangupFlushTimer) { clearInterval(this.hangupFlushTimer); this.hangupFlushTimer = null; }
+          if (this.hangupGraceTimer) { clearTimeout(this.hangupGraceTimer); this.hangupGraceTimer = null; }
+          log('🙋 客人結尾後又開口 → 取消自動掛斷、繼續對話');
+        }
         break;
       case 'response.done':
         // AI 講完轉接語 → 關 socket 讓 dialplan 接手撥客服
         if (this.pendingTransfer) { this.pendingTransfer = false; this.flushThenTransfer(); }
+        // AI 講完結尾 → 等音播完 + 2.5 秒無人插話 → 關 socket（無 transfer 目標 → dialplan 自己 Hangup）
+        else if (this.pendingHangup) { this.pendingHangup = false; this.flushThenHangup(); }
         break;
       case 'response.function_call_arguments.done':
         this.onFunctionCall(ev);
@@ -286,6 +302,7 @@ class Call {
   async onFunctionCall(ev) {
     if (ev.name === 'check_address') return this.onCheckAddress(ev);
     if (ev.name === 'transfer_to_human') return this.onTransferToHuman(ev);
+    if (ev.name === 'end_call') return this.onEndCall(ev);
     // 預設：create_taxi_order
     let args = {};
     try { args = JSON.parse(ev.arguments || '{}'); } catch {}
@@ -371,6 +388,40 @@ class Call {
       }
     }, 100);
     setTimeout(() => { clearInterval(t); closeNow(); }, 8000); // 保險上限
+  }
+
+  // 結尾自動掛斷：AI 講完結尾道別後呼叫 end_call。標記待掛、且不觸發新回合（不送 response.create、不讓 AI 再講話）。
+  onEndCall(ev) {
+    log(`👋 end_call caller=${this.caller}`);
+    this.pendingHangup = true;
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      // 送 function_call_output 讓對話狀態一致，但「不」送 response.create
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: ev.call_id, output: JSON.stringify({ ok: true }) },
+      }));
+    }
+  }
+
+  // 等結尾音播完（outBuf 排空）→ 再等 2.5 秒 grace（客人插話會在 speech_started 取消）→ 關 socket → dialplan Hangup
+  flushThenHangup() {
+    const doHangup = () => {
+      if (this.closed) return;
+      log('👋 結尾 grace 結束、無人插話 → 關 socket 掛斷');
+      try { this.sock.end(); } catch {}
+    };
+    const startGrace = () => {
+      if (this.closed || this.hangupGraceTimer) return;
+      this.hangupGraceTimer = setTimeout(() => { this.hangupGraceTimer = null; doHangup(); }, 2500);
+    };
+    this.hangupFlushTimer = setInterval(() => {
+      if (this.closed) { clearInterval(this.hangupFlushTimer); this.hangupFlushTimer = null; return; }
+      if (this.outBuf.length === 0) { clearInterval(this.hangupFlushTimer); this.hangupFlushTimer = null; startGrace(); }
+    }, 100);
+    // 保險：音一直沒排空也別卡住，8 秒後直接進 grace
+    setTimeout(() => {
+      if (this.hangupFlushTimer) { clearInterval(this.hangupFlushTimer); this.hangupFlushTimer = null; startGrace(); }
+    }, 8000);
   }
 
   cleanup(why) {
